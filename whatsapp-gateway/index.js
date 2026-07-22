@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestWaWebVersion } = require('@whiskeysockets/baileys');
 const qrcodeTerminal = require('qrcode-terminal');
 const qrcodeImage = require('qrcode');
 const axios = require('axios');
@@ -35,7 +35,7 @@ const server = http.createServer(async (req, res) => {
                 <html>
                     <head>
                         <title>Scan QR Code - NEURA AI</title>
-                        <meta http-equiv="refresh" content="15">
+                        <meta http-equiv="refresh" content="10">
                     </head>
                     <body style="font-family: sans-serif; text-align: center; padding-top: 40px; background-color: #0f172a; color: white;">
                         <h1>📱 Pair NEURA AI WhatsApp Gateway</h1>
@@ -44,7 +44,7 @@ const server = http.createServer(async (req, res) => {
                         <div style="background: white; display: inline-block; padding: 20px; border-radius: 12px; margin-top: 10px;">
                             <img src="${qrDataUrl}" width="300" height="300" />
                         </div>
-                        <p style="color: #94a3b8; font-size: 14px; margin-top: 15px;">Page auto-refreshes every 15 seconds</p>
+                        <p style="color: #94a3b8; font-size: 14px; margin-top: 15px;">Page auto-refreshes every 10 seconds</p>
                     </body>
                 </html>
             `);
@@ -58,7 +58,7 @@ const server = http.createServer(async (req, res) => {
     res.end(`
         <html>
             <body style="font-family: sans-serif; text-align: center; padding-top: 50px; background-color: #0f172a; color: white;">
-                <h2>⏳ Generating WhatsApp QR Code... Please refresh in a few seconds.</h2>
+                <h2>⏳ Generating WhatsApp QR Code... Please refresh in 5 seconds.</h2>
             </body>
         </html>
     `);
@@ -73,10 +73,21 @@ async function connectToWhatsApp() {
     
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
+    // Dynamically fetch the latest WhatsApp Web client version to fix 405 Connection Errors
+    let version = [2, 3000, 1015901307];
+    try {
+        const fetchedVersion = await fetchLatestWaWebVersion({});
+        version = fetchedVersion.version;
+        console.log(`Fetched latest WhatsApp Web version: v${version.join('.')}`);
+    } catch (err) {
+        console.log("Using fallback WhatsApp Web version...");
+    }
+
     const socket = makeWASocket({
+        version,
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: Browsers.ubuntu('Chrome'), // Fixes 405 Connection Failure on WhatsApp Web
+        browser: ['NEURA AI', 'Chrome', '1.0.0'],
         syncFullHistory: false
     });
 
@@ -88,7 +99,7 @@ async function connectToWhatsApp() {
         if (qr) {
             currentQR = qr;
             console.log("\n==================================================");
-            console.log("NEW QR CODE GENERATED! Open https://neura-whatsapp-gateway.onrender.com in browser to scan!");
+            console.log("NEW QR CODE GENERATED! Open https://neura-whatsapp-gateway.onrender.com to scan!");
             console.log("==================================================\n");
             qrcodeTerminal.generate(qr, { small: true });
         }
