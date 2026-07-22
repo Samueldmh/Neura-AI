@@ -1,5 +1,6 @@
 import os
 import json
+import traceback
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
@@ -18,7 +19,11 @@ COLLECTION_NAME = "neura_medical_knowledge"
 app = FastAPI(title="NEURA AI Backend", version="1.0.0")
 
 # Initialize FastEmbed & Qdrant Client
-print("Initializing FastEmbed & Qdrant Client...")
+print(f"Initializing FastEmbed & Qdrant Client...")
+print(f"QDRANT_URL: {QDRANT_URL}")
+print(f"QDRANT_API_KEY Present: {bool(QDRANT_API_KEY)}")
+print(f"OPENROUTER_API_KEY Present: {bool(OPENROUTER_API_KEY)}")
+
 embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
@@ -62,9 +67,12 @@ def classify_intent(message: str) -> str:
     return "MEDICAL"
 
 async def call_openrouter_llm(system_prompt: str, user_prompt: str) -> str:
+    if not OPENROUTER_API_KEY:
+        raise ValueError("OPENROUTER_API_KEY environment variable is not set on Render!")
+        
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://neura-ai.org",
         "X-Title": "NEURA AI Medical Assistant"
@@ -82,6 +90,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str) -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(url, headers=headers, json=payload)
         if response.status_code != 200:
+            print(f"OpenRouter Error Status {response.status_code}: {response.text}")
             raise HTTPException(status_code=500, detail=f"OpenRouter Error: {response.text}")
         data = response.json()
         return data["choices"][0]["message"]["content"]
@@ -91,44 +100,65 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str) -> str:
 # ==========================================
 @app.get("/")
 def root():
-    return {"status": "online", "system": "NEURA AI Medical Backend v1.0"}
+    return {
+        "status": "online",
+        "system": "NEURA AI Medical Backend v1.0",
+        "qdrant_configured": bool(QDRANT_API_KEY),
+        "openrouter_configured": bool(OPENROUTER_API_KEY)
+    }
 
 @app.post("/api/chat")
 async def chat_endpoint(req: QueryRequest):
-    user_msg = req.message.strip()
-    intent = classify_intent(user_msg)
-    
-    if intent == "GREETING":
+    try:
+        user_msg = req.message.strip()
+        intent = classify_intent(user_msg)
+        
+        if intent == "GREETING":
+            return {
+                "response": "Hello! 👋 I'm *NEURA AI*, your medical study assistant.\n\nI can answer medical questions directly from your textbooks (*Lippincott Pharmacology*, *Hoffbrand's Haematology*, etc.) with exact citations, or generate practice MCQs for your MBBS exams!\n\nWhat concept are we studying today?"
+            }
+        
+        # Search Qdrant DB
+        query_vector = [e.tolist() for e in embedder.embed([user_msg])][0]
+        
+        try:
+            search_res = qdrant.query_points(
+                collection_name=COLLECTION_NAME,
+                query=query_vector,
+                limit=4
+            ).points
+        except Exception as q_err:
+            print(f"Qdrant query_points failed, retrying search: {q_err}")
+            search_res = qdrant.search(
+                collection_name=COLLECTION_NAME,
+                query_vector=query_vector,
+                limit=4
+            )
+        
+        if not search_res:
+            return {
+                "response": "I couldn't find relevant textbook material for your question. Please try asking a specific medical topic!"
+            }
+        
+        context_blocks = []
+        for idx, point in enumerate(search_res, 1):
+            p = point.payload
+            block = f"[Context {idx} | Book: {p['book_title']}, Page {p['page_number']}]\n{p['text']}"
+            context_blocks.append(block)
+        
+        formatted_context = "\n\n".join(context_blocks)
+        user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{user_msg}"
+        
+        prompt_to_use = SYSTEM_QUIZ_PROMPT if intent == "QUIZ" else SYSTEM_MEDICAL_PROMPT
+        ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt)
+        
         return {
-            "response": "Hello! 👋 I'm **NEURA AI**, your medical study assistant.\n\nI can answer medical questions directly from your textbooks (*Lippincott Pharmacology*, *Hoffbrand's Haematology*, etc.) with exact citations, or generate practice MCQs for your MBBS exams!\n\nWhat concept are we studying today?"
+            "intent": intent,
+            "response": ai_answer
         }
-    
-    # Search Qdrant DB
-    query_vector = list(embedder.embed([user_msg]))[0].tolist()
-    search_res = qdrant.query_points(
-        collection_name=COLLECTION_NAME,
-        query=query_vector,
-        limit=4
-    ).points
-    
-    if not search_res:
+    except Exception as e:
+        print(f"ERROR in chat_endpoint: {str(e)}")
+        print(traceback.format_exc())
         return {
-            "response": "I couldn't find relevant textbook material for your question. Please try asking a specific medical topic!"
+            "response": f"NEURA AI encountered an error processing your query: {str(e)}. Please check backend API configuration!"
         }
-    
-    context_blocks = []
-    for idx, point in enumerate(search_res, 1):
-        p = point.payload
-        block = f"[Context {idx} | Book: {p['book_title']}, Page {p['page_number']}]\n{p['text']}"
-        context_blocks.append(block)
-    
-    formatted_context = "\n\n".join(context_blocks)
-    user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{user_msg}"
-    
-    prompt_to_use = SYSTEM_QUIZ_PROMPT if intent == "QUIZ" else SYSTEM_MEDICAL_PROMPT
-    ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt)
-    
-    return {
-        "intent": intent,
-        "response": ai_answer
-    }
