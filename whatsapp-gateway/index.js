@@ -1,5 +1,6 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode-terminal');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
+const qrcodeTerminal = require('qrcode-terminal');
+const qrcodeImage = require('qrcode');
 const axios = require('axios');
 const pino = require('pino');
 const http = require('http');
@@ -7,24 +8,76 @@ const http = require('http');
 const BACKEND_URL = process.env.BACKEND_URL || "https://neura-ai-df6q.onrender.com/api/chat";
 const PORT = process.env.PORT || 10000;
 
-// Simple health check server for cloud hosting (Render requires binding to $PORT)
-http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: "online", service: "NEURA AI WhatsApp Gateway" }));
-}).listen(PORT, () => {
-    console.log(`HTTP Health check server running on port ${PORT}`);
+let currentQR = "";
+let isConnected = false;
+
+// HTTP Web Server serving a visual QR Code webpage & Health Check
+const server = http.createServer(async (req, res) => {
+    if (isConnected) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(`
+            <html>
+                <head><title>NEURA AI WhatsApp Gateway</title></head>
+                <body style="font-family: sans-serif; text-align: center; padding-top: 50px; background-color: #0f172a; color: white;">
+                    <h1 style="color: #22c55e;">🎉 NEURA AI WhatsApp Gateway is Connected & Active!</h1>
+                    <p>Students can now message NEURA AI directly on WhatsApp.</p>
+                </body>
+            </html>
+        `);
+        return;
+    }
+
+    if (currentQR) {
+        try {
+            const qrDataUrl = await qrcodeImage.toDataURL(currentQR);
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end(`
+                <html>
+                    <head>
+                        <title>Scan QR Code - NEURA AI</title>
+                        <meta http-equiv="refresh" content="15">
+                    </head>
+                    <body style="font-family: sans-serif; text-align: center; padding-top: 40px; background-color: #0f172a; color: white;">
+                        <h1>📱 Pair NEURA AI WhatsApp Gateway</h1>
+                        <p>1. Open WhatsApp on your phone ➔ <b>Linked Devices</b> ➔ <b>Link a Device</b></p>
+                        <p>2. Scan the QR code below:</p>
+                        <div style="background: white; display: inline-block; padding: 20px; border-radius: 12px; margin-top: 10px;">
+                            <img src="${qrDataUrl}" width="300" height="300" />
+                        </div>
+                        <p style="color: #94a3b8; font-size: 14px; margin-top: 15px;">Page auto-refreshes every 15 seconds</p>
+                    </body>
+                </html>
+            `);
+            return;
+        } catch (e) {
+            console.error("Error generating QR web image:", e);
+        }
+    }
+
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`
+        <html>
+            <body style="font-family: sans-serif; text-align: center; padding-top: 50px; background-color: #0f172a; color: white;">
+                <h2>⏳ Generating WhatsApp QR Code... Please refresh in a few seconds.</h2>
+            </body>
+        </html>
+    `);
+});
+
+server.listen(PORT, () => {
+    console.log(`HTTP Web server running on port ${PORT}`);
 });
 
 async function connectToWhatsApp() {
     console.log("Starting NEURA AI WhatsApp Gateway...");
     
-    // Save authentication state in 'auth_info_baileys' directory
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
     const socket = makeWASocket({
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: true,
-        auth: state
+        auth: state,
+        browser: Browsers.ubuntu('Chrome'), // Fixes 405 Connection Failure on WhatsApp Web
+        syncFullHistory: false
     });
 
     socket.ev.on('creds.update', saveCreds);
@@ -33,32 +86,35 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
+            currentQR = qr;
             console.log("\n==================================================");
-            console.log("SCAN THIS QR CODE WITH YOUR WHATSAPP APP TO PAIR:");
+            console.log("NEW QR CODE GENERATED! Open https://neura-whatsapp-gateway.onrender.com in browser to scan!");
             console.log("==================================================\n");
-            qrcode.generate(qr, { small: true });
+            qrcodeTerminal.generate(qr, { small: true });
         }
 
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut);
-            console.log('Connection closed due to error:', lastDisconnect?.error, ', reconnecting:', shouldReconnect);
+            isConnected = false;
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            console.log(`Connection closed (Code ${statusCode}). Reconnecting: ${shouldReconnect}...`);
             if (shouldReconnect) {
-                setTimeout(connectToWhatsApp, 5000);
+                setTimeout(connectToWhatsApp, 3000);
             }
         } else if (connection === 'open') {
+            isConnected = true;
+            currentQR = "";
             console.log('\n🎉 SUCCESS: NEURA AI WhatsApp Gateway is Connected & Live on WhatsApp!\n');
         }
     });
 
-    // Listen for incoming WhatsApp messages
     socket.ev.on('messages.upsert', async (m) => {
         if (m.type !== 'notify') return;
 
         for (const msg of m.messages) {
-            if (!msg.message || msg.key.fromMe) continue; // Ignore messages sent by bot itself
+            if (!msg.message || msg.key.fromMe) continue;
 
             const senderJid = msg.key.remoteJid;
-            // Extract text message content
             const messageContent = msg.message.conversation || 
                                    msg.message.extendedTextMessage?.text || 
                                    msg.message.imageMessage?.caption || "";
@@ -68,21 +124,15 @@ async function connectToWhatsApp() {
             console.log(`📩 Received message from ${senderJid}: "${messageContent}"`);
 
             try {
-                // Indicate typing status in WhatsApp
                 await socket.sendPresenceUpdate('composing', senderJid);
 
-                // Send message to FastAPI Render Backend
                 const response = await axios.post(BACKEND_URL, {
                     user_id: senderJid,
                     message: messageContent
                 });
 
                 const aiReply = response.data.response;
-
-                // Stop typing status
                 await socket.sendPresenceUpdate('paused', senderJid);
-
-                // Reply to student on WhatsApp
                 await socket.sendMessage(senderJid, { text: aiReply }, { quoted: msg });
                 console.log(`✅ Sent reply to ${senderJid}`);
 
@@ -97,5 +147,4 @@ async function connectToWhatsApp() {
     });
 }
 
-// Start WhatsApp Gateway
 connectToWhatsApp();
