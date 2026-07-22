@@ -1,0 +1,16 @@
+{
+  "name": "neura-whatsapp-gateway",
+  "version": "1.0.0",
+  "description": "WhatsApp Baileys Gateway for NEURA AI Medical Assistant",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.8",
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "pino": "^9.2.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
