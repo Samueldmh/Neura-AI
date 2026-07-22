@@ -1,4 +1,6 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestWaWebVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, fetchLatestWaWebVersion } = require('@whiskeysockets/baileys');
+const { MongoClient } = require('mongodb');
+const { useMongoDBAuthState } = require('./mongoAuthState');
 const qrcodeTerminal = require('qrcode-terminal');
 const qrcodeImage = require('qrcode');
 const axios = require('axios');
@@ -7,6 +9,12 @@ const http = require('http');
 
 const BACKEND_URL = process.env.BACKEND_URL || "https://neura-ai-df6q.onrender.com/api/chat";
 const PORT = process.env.PORT || 10000;
+const MONGO_URI = process.env.MONGO_URI;
+
+if (!MONGO_URI) {
+    console.error("FATAL ERROR: MONGO_URI environment variable is missing!");
+    process.exit(1);
+}
 
 let currentQR = "";
 let isConnected = false;
@@ -71,7 +79,11 @@ server.listen(PORT, () => {
 async function connectToWhatsApp() {
     console.log("Starting NEURA AI WhatsApp Gateway...");
     
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    // Connect to MongoDB and set up the auth collection
+    const mongoClient = new MongoClient(MONGO_URI);
+    await mongoClient.connect();
+    const collection = mongoClient.db('neura_whatsapp').collection('auth_state');
+    const { state, saveCreds } = await useMongoDBAuthState(collection);
 
     // Dynamically fetch the latest WhatsApp Web client version to fix 405 Connection Errors
     let version = [2, 3000, 1015901307];
@@ -111,10 +123,10 @@ async function connectToWhatsApp() {
             console.log(`Connection closed (Code ${statusCode}). Reconnecting: ${shouldReconnect}...`);
             
             if (statusCode === 401) {
-                console.log("Credentials corrupted. Deleting auth folder to generate new QR...");
-                const fs = require('fs');
-                fs.rmSync('auth_info_baileys', { recursive: true, force: true });
-                setTimeout(connectToWhatsApp, 2000);
+                console.log("Credentials invalid or logged out. Clearing MongoDB auth state to generate new QR...");
+                collection.drop().catch(() => {}).finally(() => {
+                    setTimeout(connectToWhatsApp, 2000);
+                });
             } else if (shouldReconnect) {
                 setTimeout(connectToWhatsApp, 3000);
             }
