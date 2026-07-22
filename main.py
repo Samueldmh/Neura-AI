@@ -99,6 +99,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str) -> str:
 # 3. ENDPOINTS
 # ==========================================
 @app.get("/")
+@app.head("/")
 def root():
     return {
         "status": "online",
