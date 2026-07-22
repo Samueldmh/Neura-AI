@@ -155,6 +155,7 @@ async function connectToWhatsApp() {
             if (!messageContent.trim()) continue;
 
             console.log(`📩 Received message from ${senderJid}: "${messageContent}"`);
+            console.log(`[DEBUG] Full Message Key:`, JSON.stringify(msg.key));
 
             try {
                 // Send read receipt (blue ticks)
@@ -168,7 +169,9 @@ async function connectToWhatsApp() {
 
                 const aiReply = response.data.response;
                 await socket.sendPresenceUpdate('paused', senderJid);
-                await socket.sendMessage(senderJid, { text: aiReply }, { quoted: msg });
+                
+                // Temporarily removing quote to see if that is blocking @lid deliveries
+                await socket.sendMessage(senderJid, { text: aiReply });
                 console.log(`✅ Sent reply to ${senderJid}`);
 
             } catch (error) {
@@ -176,7 +179,7 @@ async function connectToWhatsApp() {
                 await socket.sendPresenceUpdate('paused', senderJid);
                 await socket.sendMessage(senderJid, {
                     text: "Sorry, NEURA AI experienced a temporary connection delay. Please try asking your medical question again!"
-                }, { quoted: msg });
+                });
             }
         }
     });
