@@ -109,7 +109,13 @@ async function connectToWhatsApp() {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             console.log(`Connection closed (Code ${statusCode}). Reconnecting: ${shouldReconnect}...`);
-            if (shouldReconnect) {
+            
+            if (statusCode === 401) {
+                console.log("Credentials corrupted. Deleting auth folder to generate new QR...");
+                const fs = require('fs');
+                fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                setTimeout(connectToWhatsApp, 2000);
+            } else if (shouldReconnect) {
                 setTimeout(connectToWhatsApp, 3000);
             }
         } else if (connection === 'open') {
