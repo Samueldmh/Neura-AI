@@ -143,7 +143,12 @@ async function connectToWhatsApp() {
         for (const msg of m.messages) {
             if (!msg.message || msg.key.fromMe) continue;
 
-            const senderJid = msg.key.remoteJid;
+            let senderJid = msg.key.remoteJid;
+            
+            // Fix for @lid dropping: Extract the real phone number if available
+            if (senderJid.includes('@lid') && msg.key.senderPn) {
+                senderJid = msg.key.senderPn;
+            }
             
             // Ignore status updates
             if (senderJid === 'status@broadcast') continue;
