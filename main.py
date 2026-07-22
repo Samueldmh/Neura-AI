@@ -79,7 +79,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str) -> str:
     }
     
     payload = {
-        "model": "google/gemini-2.0-flash-001",
+        "model": "openai/gpt-4o-mini",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
