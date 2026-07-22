@@ -144,6 +144,10 @@ async function connectToWhatsApp() {
             if (!msg.message || msg.key.fromMe) continue;
 
             const senderJid = msg.key.remoteJid;
+            
+            // Ignore status updates
+            if (senderJid === 'status@broadcast') continue;
+
             const messageContent = msg.message.conversation || 
                                    msg.message.extendedTextMessage?.text || 
                                    msg.message.imageMessage?.caption || "";
@@ -153,6 +157,8 @@ async function connectToWhatsApp() {
             console.log(`📩 Received message from ${senderJid}: "${messageContent}"`);
 
             try {
+                // Send read receipt (blue ticks)
+                await socket.readMessages([msg.key]);
                 await socket.sendPresenceUpdate('composing', senderJid);
 
                 const response = await axios.post(BACKEND_URL, {
