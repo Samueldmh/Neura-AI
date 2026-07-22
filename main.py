@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
+from motor.motor_asyncio import AsyncIOMotorClient
 
 # ==========================================
 # 1. CONFIGURATION & ENVIRONMENT VARIABLES
@@ -13,6 +14,7 @@ from qdrant_client import QdrantClient
 QDRANT_URL = os.getenv("QDRANT_URL", "https://76ce5d85-4701-4671-8c3f-02bcc741b078.us-west-1-0.aws.cloud.qdrant.io")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+MONGO_URI = os.getenv("MONGO_URI", "")
 
 COLLECTION_NAME = "neura_medical_knowledge"
 
@@ -27,6 +29,11 @@ print(f"OPENROUTER_API_KEY Present: {bool(OPENROUTER_API_KEY)}")
 embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
+print(f"MONGO_URI Present: {bool(MONGO_URI)}")
+mongo_client = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
+db = mongo_client.neura_db if mongo_client else None
+chat_history_col = db.chat_history if db is not None else None
+
 class QueryRequest(BaseModel):
     user_id: str
     message: str
@@ -35,18 +42,14 @@ class QueryRequest(BaseModel):
 # 2. SYSTEM PROMPTS & INTENT ROUTER
 # ==========================================
 SYSTEM_MEDICAL_PROMPT = """You are NEURA AI, an elite medical study assistant designed for Nigerian medical students.
-Your goal is to provide authoritative, textbook-grounded answers to medical queries.
+Your goal is to provide authoritative, textbook-grounded answers to medical queries, while being natural and conversational.
 
-STRICT RULES:
-1. Answer the student's question accurately using ONLY the provided Textbook Context below.
-2. Structure your answer using clear WhatsApp Markdown:
-   - 📌 **SUMMARY / HIGH-YIELD DEFINITION**: Clear 2-sentence direct answer.
-   - 💡 **KEY PATHOPHYSIOLOGY / CLINICAL PEARLS**: Clean bullet points with bold emphasis.
-   - 📚 **TEXTBOOK CITATION**: State the exact Textbook Title and Page Number provided in the context.
-   - 🎯 **STUDY HOOK**: Ask if they want 3 practice MCQs or clinical case questions on this topic.
-3. If the provided context does NOT contain enough information to answer the question, state:
-   "I could not find exact coverage of this topic in your indexed medical textbooks. Please check your spelling or ask another topic!"
-4. DO NOT make up or hallucinate medical facts outside the retrieved context.
+RULES:
+1. When answering medical facts, use ONLY the provided Textbook Context.
+2. If the user asks a very short keyword (like "antibiotics"), don't reject it! Give a broad summary of the keyword based on context, and ask them what specific aspect they want to know.
+3. Keep the conversation natural. You remember previous messages in the chat history.
+4. Structure detailed medical answers using WhatsApp Markdown (📌 SUMMARY, 💡 KEY CLINICAL PEARLS, 📚 CITATION, 🎯 STUDY HOOK).
+5. If they ask a highly specific medical question that is completely absent from context, politely say you don't have that in your current textbooks and ask them to clarify. DO NOT hallucinate.
 """
 
 SYSTEM_QUIZ_PROMPT = """You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate 3 high-yield MBBS exam-style Multiple Choice Questions (MCQs).
@@ -66,7 +69,7 @@ def classify_intent(message: str) -> str:
     
     return "MEDICAL"
 
-async def call_openrouter_llm(system_prompt: str, user_prompt: str) -> str:
+async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history: list = None) -> str:
     if not OPENROUTER_API_KEY:
         raise ValueError("OPENROUTER_API_KEY environment variable is not set on Render!")
         
@@ -78,12 +81,14 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str) -> str:
         "X-Title": "NEURA AI Medical Assistant"
     }
     
+    messages = [{"role": "system", "content": system_prompt}]
+    if chat_history:
+        messages.extend(chat_history)
+    messages.append({"role": "user", "content": user_prompt})
+    
     payload = {
         "model": "openai/gpt-4o-mini",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
+        "messages": messages,
         "temperature": 0.2
     }
     
@@ -151,7 +156,28 @@ async def chat_endpoint(req: QueryRequest):
         user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{user_msg}"
         
         prompt_to_use = SYSTEM_QUIZ_PROMPT if intent == "QUIZ" else SYSTEM_MEDICAL_PROMPT
-        ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt)
+        
+        # 1. Fetch Chat History from MongoDB
+        chat_history = []
+        if chat_history_col is not None:
+            user_doc = await chat_history_col.find_one({"user_id": req.user_id})
+            if user_doc and "messages" in user_doc:
+                chat_history = user_doc["messages"][-6:] # Keep last 6 messages
+        
+        # 2. Call LLM
+        ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
+        
+        # 3. Save to MongoDB
+        if chat_history_col is not None:
+            new_msgs = [
+                {"role": "user", "content": user_msg},
+                {"role": "assistant", "content": ai_answer}
+            ]
+            await chat_history_col.update_one(
+                {"user_id": req.user_id},
+                {"$push": {"messages": {"$each": new_msgs}}},
+                upsert=True
+            )
         
         return {
             "intent": intent,
