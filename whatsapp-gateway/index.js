@@ -100,7 +100,11 @@ async function connectToWhatsApp() {
         logger: pino({ level: 'silent' }),
         auth: state,
         browser: ['NEURA AI', 'Chrome', '1.0.0'],
-        syncFullHistory: false
+        syncFullHistory: false,
+        markOnlineOnConnect: true,
+        keepAliveIntervalMs: 30000,
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000
     });
 
     socket.ev.on('creds.update', saveCreds);
@@ -143,10 +147,15 @@ async function connectToWhatsApp() {
         for (const msg of m.messages) {
             if (!msg.message || msg.key.fromMe) continue;
 
-            const senderJid = msg.key.remoteJid;
+            let targetJid = msg.key.remoteJid;
             
+            // Fix for LID routing: If JID is @lid, resolve to real phone number senderPn if available
+            if (targetJid.includes('@lid') && msg.key.senderPn) {
+                targetJid = msg.key.senderPn;
+            }
+
             // Ignore status updates
-            if (senderJid === 'status@broadcast') continue;
+            if (targetJid === 'status@broadcast') continue;
 
             const messageContent = msg.message.conversation || 
                                    msg.message.extendedTextMessage?.text || 
@@ -154,25 +163,24 @@ async function connectToWhatsApp() {
 
             if (!messageContent.trim()) continue;
 
-            console.log(`📩 Received message from ${senderJid}: "${messageContent}"`);
+            console.log(`📩 Received message from ${targetJid}: "${messageContent}"`);
             console.log(`[DEBUG] Full Message Key:`, JSON.stringify(msg.key));
 
             try {
                 // Send read receipt (blue ticks)
                 await socket.readMessages([msg.key]);
-                await socket.sendPresenceUpdate('composing', senderJid);
+                await socket.sendPresenceUpdate('composing', targetJid);
 
                 const response = await axios.post(BACKEND_URL, {
-                    user_id: senderJid,
+                    user_id: targetJid,
                     message: messageContent
                 });
 
                 const aiReply = response.data.response;
-                await socket.sendPresenceUpdate('paused', senderJid);
+                await socket.sendPresenceUpdate('paused', targetJid);
                 
-                // Temporarily removing quote to see if that is blocking @lid deliveries
-                await socket.sendMessage(senderJid, { text: aiReply });
-                console.log(`✅ Sent reply to ${senderJid}`);
+                await socket.sendMessage(targetJid, { text: aiReply });
+                console.log(`✅ Sent reply to ${targetJid}`);
 
             } catch (error) {
                 console.error("Error communicating with Backend API:", error.message);
