@@ -252,6 +252,10 @@ async def handle_whatsapp_webhook(request: Request):
                         # Process in background task to respond to Meta immediately (prevents timeout)
                         task = BackgroundTask(process_whatsapp_message, sender_phone, text_body)
                         return Response(content=json.dumps({"status": "processing"}), media_type="application/json", background=task)
+                    else:
+                        print(f"⚠️ Received unsupported message type '{msg_type}' from {sender_phone}")
+                        task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "I only read text messages right now! Please type out your medical question. 🤖📚")
+                        return Response(content=json.dumps({"status": "unsupported_media"}), media_type="application/json", background=task)
 
         return Response(content=json.dumps({"status": "ignored"}), media_type="application/json")
     except Exception as e:
