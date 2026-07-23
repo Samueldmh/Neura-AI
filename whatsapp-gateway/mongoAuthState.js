@@ -2,15 +2,15 @@ const { proto, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 
 const useMongoDBAuthState = async (collection) => {
     const writeData = async (data, id) => {
-        const informationToStore = JSON.parse(JSON.stringify(data, BufferJSON.replacer));
-        await collection.updateOne({ _id: id }, { $set: { data: informationToStore } }, { upsert: true });
+        const value = JSON.stringify(data, BufferJSON.replacer);
+        await collection.updateOne({ _id: id }, { $set: { value } }, { upsert: true });
     };
 
     const readData = async (id) => {
         try {
             const result = await collection.findOne({ _id: id });
-            if (result && result.data) {
-                return JSON.parse(JSON.stringify(result.data), BufferJSON.reviver);
+            if (result && result.value) {
+                return JSON.parse(result.value, BufferJSON.reviver);
             }
         } catch (error) {
             console.error('Error reading data from MongoDB', error);

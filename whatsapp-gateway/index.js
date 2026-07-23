@@ -82,7 +82,7 @@ async function connectToWhatsApp() {
     // Connect to MongoDB and set up the auth collection
     const mongoClient = new MongoClient(MONGO_URI);
     await mongoClient.connect();
-    const collection = mongoClient.db('neura_db').collection('whatsapp_auth');
+    const collection = mongoClient.db('neura_db').collection('whatsapp_auth_v2');
     const { state, saveCreds } = await useMongoDBAuthState(collection);
 
     // Dynamically fetch the latest WhatsApp Web client version to fix 405 Connection Errors
