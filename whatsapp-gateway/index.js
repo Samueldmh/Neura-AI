@@ -19,6 +19,24 @@ if (!MONGO_URI) {
 let currentQR = "";
 let isConnected = false;
 
+// =======================================================================
+// CRITICAL FIX: In-memory message store for Signal Protocol retry handling.
+// Without this, WhatsApp asks for message re-encryption during LID session
+// negotiation, Baileys can't find the original message, and WhatsApp
+// forcefully disconnects with Code 401.
+// =======================================================================
+const msgRetryStore = new Map();
+
+// Evict old messages every 5 minutes to prevent memory leaks
+setInterval(() => {
+    const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+    for (const [id, entry] of msgRetryStore) {
+        if (entry.timestamp < fiveMinutesAgo) {
+            msgRetryStore.delete(id);
+        }
+    }
+}, 5 * 60 * 1000);
+
 // HTTP Web Server serving a visual QR Code webpage & Health Check
 const server = http.createServer(async (req, res) => {
     if (isConnected) {
@@ -76,10 +94,7 @@ server.listen(PORT, () => {
     console.log(`HTTP Web server running on port ${PORT}`);
 });
 
-// =====================================================================
-// FIX #2: Create ONE single persistent MongoDB client at the module
-// level. Never re-create it on reconnect to avoid connection leaks.
-// =====================================================================
+// Single persistent MongoDB client (never recreated on reconnect)
 const mongoClient = new MongoClient(MONGO_URI, {
     maxPoolSize: 5,
     serverSelectionTimeoutMS: 10000,
@@ -89,7 +104,7 @@ let collection = null;
 
 async function initMongo() {
     await mongoClient.connect();
-    collection = mongoClient.db('neura_db').collection('whatsapp_auth_v2');
+    collection = mongoClient.db('neura_db').collection('whatsapp_auth_v3');
     console.log("✅ MongoDB connected successfully.");
 }
 
@@ -112,12 +127,29 @@ async function connectToWhatsApp() {
         version,
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: ['NEURA AI', 'Chrome', '1.0.0'],
+        browser: ['Ubuntu', 'Chrome', '24.0.10'],
         syncFullHistory: false,
         markOnlineOnConnect: true,
         keepAliveIntervalMs: 15000,
         connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 0  // 0 = no timeout on socket queries
+        defaultQueryTimeoutMs: 0,
+        generateHighQualityLinkPreview: false,
+
+        // ===================================================================
+        // CRITICAL FIX: getMessage callback.
+        // When WhatsApp requests a message retry (prekey bundle renegotiation),
+        // Baileys calls this to retrieve the original message for re-encryption.
+        // Without this, retry fails → Code 401 → session destroyed.
+        // ===================================================================
+        getMessage: async (key) => {
+            const entry = msgRetryStore.get(key.id);
+            if (entry) {
+                console.log(`[RETRY] getMessage called for ${key.id} — found in store`);
+                return entry.message;
+            }
+            console.log(`[RETRY] getMessage called for ${key.id} — NOT found in store`);
+            return undefined;
+        }
     });
 
     socket.ev.on('creds.update', saveCreds);
@@ -141,7 +173,6 @@ async function connectToWhatsApp() {
 
             if (statusCode === 401) {
                 console.log("Credentials invalid or logged out. Clearing MongoDB auth state to generate new QR...");
-                // FIX #2: Use module-level collection — no new MongoClient created
                 collection.drop().catch(() => {}).finally(() => {
                     setTimeout(connectToWhatsApp, 2000);
                 });
@@ -155,7 +186,18 @@ async function connectToWhatsApp() {
         }
     });
 
+    // Store ALL incoming messages in the retry store (both sent and received)
     socket.ev.on('messages.upsert', async (m) => {
+        // Store every message for potential retry resolution
+        for (const msg of m.messages) {
+            if (msg.key?.id && msg.message) {
+                msgRetryStore.set(msg.key.id, {
+                    message: msg.message,
+                    timestamp: Date.now()
+                });
+            }
+        }
+
         if (m.type !== 'notify') return;
 
         for (const msg of m.messages) {
@@ -177,44 +219,62 @@ async function connectToWhatsApp() {
             console.log(`📩 Received from [${replyToJid}] user [${userId}]: "${messageContent}"`);
 
             try {
-                // Send read receipt (blue ticks)
-                await socket.readMessages([msg.key]);
+                // Send read receipt — wrapped in try-catch so failure doesn't block reply
+                try {
+                    await socket.readMessages([msg.key]);
+                } catch (readErr) {
+                    console.log(`[WARN] readMessages failed (non-fatal): ${readErr.message}`);
+                }
 
-                // FIX #3: sendPresenceUpdate after readMessages, not before axios
                 await socket.sendPresenceUpdate('composing', replyToJid);
 
-                // FIX #1: Set a 55-second timeout on Axios so the socket stays alive
+                // Axios with explicit timeout to prevent socket death during cold starts
                 const response = await axios.post(BACKEND_URL, {
                     user_id: userId,
                     message: messageContent
                 }, {
-                    timeout: 55000  // 55 seconds — just under Baileys' 60s socket timeout
+                    timeout: 55000
                 });
 
                 const aiReply = response.data.response;
 
                 await socket.sendPresenceUpdate('paused', replyToJid);
 
-                // FIX #3: Send WITHOUT quoted to avoid @lid device-list resolution failure.
-                // Plain sendMessage always succeeds regardless of JID type.
-                await socket.sendMessage(replyToJid, { text: aiReply });
-                console.log(`✅ Reply delivered to ${replyToJid}`);
+                // Send WITHOUT quoted to avoid LID device-list resolution issues
+                const sentMsg = await socket.sendMessage(replyToJid, { text: aiReply });
+
+                // Store the SENT message in retry store so retries can re-encrypt it
+                if (sentMsg?.key?.id && sentMsg?.message) {
+                    msgRetryStore.set(sentMsg.key.id, {
+                        message: sentMsg.message,
+                        timestamp: Date.now()
+                    });
+                }
+
+                console.log(`✅ Reply delivered to ${replyToJid} (msgId: ${sentMsg?.key?.id})`);
 
             } catch (error) {
                 console.error("Error processing message:", error.message);
-                await socket.sendPresenceUpdate('paused', replyToJid);
-                // FIX #3: Also send fallback WITHOUT quoted
-                await socket.sendMessage(replyToJid, {
-                    text: "Sorry, NEURA AI experienced a temporary connection delay. Please try asking your medical question again!"
-                });
+                try {
+                    await socket.sendPresenceUpdate('paused', replyToJid);
+                    const errMsg = await socket.sendMessage(replyToJid, {
+                        text: "Sorry, NEURA AI experienced a temporary connection delay. Please try asking your medical question again!"
+                    });
+                    if (errMsg?.key?.id && errMsg?.message) {
+                        msgRetryStore.set(errMsg.key.id, {
+                            message: errMsg.message,
+                            timestamp: Date.now()
+                        });
+                    }
+                } catch (sendErr) {
+                    console.error("Failed to send error message:", sendErr.message);
+                }
             }
         }
     });
 }
 
-// =====================================================================
 // Start: Connect MongoDB ONCE, then start WhatsApp
-// =====================================================================
 initMongo()
     .then(() => connectToWhatsApp())
     .catch(err => {
