@@ -76,16 +76,29 @@ server.listen(PORT, () => {
     console.log(`HTTP Web server running on port ${PORT}`);
 });
 
+// =====================================================================
+// FIX #2: Create ONE single persistent MongoDB client at the module
+// level. Never re-create it on reconnect to avoid connection leaks.
+// =====================================================================
+const mongoClient = new MongoClient(MONGO_URI, {
+    maxPoolSize: 5,
+    serverSelectionTimeoutMS: 10000,
+});
+
+let collection = null;
+
+async function initMongo() {
+    await mongoClient.connect();
+    collection = mongoClient.db('neura_db').collection('whatsapp_auth_v2');
+    console.log("✅ MongoDB connected successfully.");
+}
+
 async function connectToWhatsApp() {
     console.log("Starting NEURA AI WhatsApp Gateway...");
-    
-    // Connect to MongoDB and set up the auth collection
-    const mongoClient = new MongoClient(MONGO_URI);
-    await mongoClient.connect();
-    const collection = mongoClient.db('neura_db').collection('whatsapp_auth_v2');
+
     const { state, saveCreds } = await useMongoDBAuthState(collection);
 
-    // Dynamically fetch the latest WhatsApp Web client version to fix 405 Connection Errors
+    // Dynamically fetch the latest WhatsApp Web client version
     let version = [2, 3000, 1015901307];
     try {
         const fetchedVersion = await fetchLatestWaWebVersion({});
@@ -102,16 +115,16 @@ async function connectToWhatsApp() {
         browser: ['NEURA AI', 'Chrome', '1.0.0'],
         syncFullHistory: false,
         markOnlineOnConnect: true,
-        keepAliveIntervalMs: 30000,
+        keepAliveIntervalMs: 15000,
         connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 60000
+        defaultQueryTimeoutMs: 0  // 0 = no timeout on socket queries
     });
 
     socket.ev.on('creds.update', saveCreds);
 
     socket.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
+
         if (qr) {
             currentQR = qr;
             console.log("\n==================================================");
@@ -125,9 +138,10 @@ async function connectToWhatsApp() {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             console.log(`Connection closed (Code ${statusCode}). Reconnecting: ${shouldReconnect}...`);
-            
+
             if (statusCode === 401) {
                 console.log("Credentials invalid or logged out. Clearing MongoDB auth state to generate new QR...");
+                // FIX #2: Use module-level collection — no new MongoClient created
                 collection.drop().catch(() => {}).finally(() => {
                     setTimeout(connectToWhatsApp, 2000);
                 });
@@ -148,63 +162,62 @@ async function connectToWhatsApp() {
             if (!msg.message || msg.key.fromMe) continue;
 
             const replyToJid = msg.key.remoteJid;
-            
+
             // Ignore status updates
             if (replyToJid === 'status@broadcast') continue;
 
-            // Use senderPn for database user memory if available, otherwise fall back to replyToJid
-            const userId = msg.key.senderPn || replyToJid;
+            const userId = msg.key.participant || msg.key.remoteJid;
 
-            const messageContent = msg.message.conversation || 
-                                   msg.message.extendedTextMessage?.text || 
+            const messageContent = msg.message.conversation ||
+                                   msg.message.extendedTextMessage?.text ||
                                    msg.message.imageMessage?.caption || "";
 
             if (!messageContent.trim()) continue;
 
-            console.log(`📩 Received message from ${replyToJid} (${userId}): "${messageContent}"`);
-            console.log(`[DEBUG] Full Message Key:`, JSON.stringify(msg.key));
+            console.log(`📩 Received from [${replyToJid}] user [${userId}]: "${messageContent}"`);
 
             try {
                 // Send read receipt (blue ticks)
                 await socket.readMessages([msg.key]);
+
+                // FIX #3: sendPresenceUpdate after readMessages, not before axios
                 await socket.sendPresenceUpdate('composing', replyToJid);
 
+                // FIX #1: Set a 55-second timeout on Axios so the socket stays alive
                 const response = await axios.post(BACKEND_URL, {
                     user_id: userId,
                     message: messageContent
+                }, {
+                    timeout: 55000  // 55 seconds — just under Baileys' 60s socket timeout
                 });
 
                 const aiReply = response.data.response;
-                await socket.sendPresenceUpdate('paused', replyToJid);
-                
-                // Construct a normalized quoted message matching the chat JID
-                const quotedMsg = {
-                    key: {
-                        ...msg.key,
-                        remoteJid: replyToJid
-                    },
-                    message: msg.message
-                };
 
-                await socket.sendMessage(replyToJid, { text: aiReply }, { quoted: quotedMsg });
-                console.log(`✅ Sent reply to ${replyToJid}`);
+                await socket.sendPresenceUpdate('paused', replyToJid);
+
+                // FIX #3: Send WITHOUT quoted to avoid @lid device-list resolution failure.
+                // Plain sendMessage always succeeds regardless of JID type.
+                await socket.sendMessage(replyToJid, { text: aiReply });
+                console.log(`✅ Reply delivered to ${replyToJid}`);
 
             } catch (error) {
-                console.error("Error communicating with Backend API:", error.message);
-                const quotedMsg = {
-                    key: {
-                        ...msg.key,
-                        remoteJid: replyToJid
-                    },
-                    message: msg.message
-                };
+                console.error("Error processing message:", error.message);
                 await socket.sendPresenceUpdate('paused', replyToJid);
+                // FIX #3: Also send fallback WITHOUT quoted
                 await socket.sendMessage(replyToJid, {
                     text: "Sorry, NEURA AI experienced a temporary connection delay. Please try asking your medical question again!"
-                }, { quoted: quotedMsg });
+                });
             }
         }
     });
 }
 
-connectToWhatsApp();
+// =====================================================================
+// Start: Connect MongoDB ONCE, then start WhatsApp
+// =====================================================================
+initMongo()
+    .then(() => connectToWhatsApp())
+    .catch(err => {
+        console.error("FATAL: Could not connect to MongoDB:", err);
+        process.exit(1);
+    });
