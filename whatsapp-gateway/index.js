@@ -147,15 +147,13 @@ async function connectToWhatsApp() {
         for (const msg of m.messages) {
             if (!msg.message || msg.key.fromMe) continue;
 
-            let targetJid = msg.key.remoteJid;
+            const replyToJid = msg.key.remoteJid;
             
-            // Fix for LID routing: If JID is @lid, resolve to real phone number senderPn if available
-            if (targetJid.includes('@lid') && msg.key.senderPn) {
-                targetJid = msg.key.senderPn;
-            }
-
             // Ignore status updates
-            if (targetJid === 'status@broadcast') continue;
+            if (replyToJid === 'status@broadcast') continue;
+
+            // Use senderPn for database user memory if available, otherwise fall back to replyToJid
+            const userId = msg.key.senderPn || replyToJid;
 
             const messageContent = msg.message.conversation || 
                                    msg.message.extendedTextMessage?.text || 
@@ -163,45 +161,45 @@ async function connectToWhatsApp() {
 
             if (!messageContent.trim()) continue;
 
-            console.log(`📩 Received message from ${targetJid}: "${messageContent}"`);
+            console.log(`📩 Received message from ${replyToJid} (${userId}): "${messageContent}"`);
             console.log(`[DEBUG] Full Message Key:`, JSON.stringify(msg.key));
 
             try {
                 // Send read receipt (blue ticks)
                 await socket.readMessages([msg.key]);
-                await socket.sendPresenceUpdate('composing', targetJid);
+                await socket.sendPresenceUpdate('composing', replyToJid);
 
                 const response = await axios.post(BACKEND_URL, {
-                    user_id: targetJid,
+                    user_id: userId,
                     message: messageContent
                 });
 
                 const aiReply = response.data.response;
-                await socket.sendPresenceUpdate('paused', targetJid);
+                await socket.sendPresenceUpdate('paused', replyToJid);
                 
-                // Construct a normalized quoted message matching the phone JID
+                // Construct a normalized quoted message matching the chat JID
                 const quotedMsg = {
-                    ...msg,
                     key: {
                         ...msg.key,
-                        remoteJid: targetJid
-                    }
+                        remoteJid: replyToJid
+                    },
+                    message: msg.message
                 };
 
-                await socket.sendMessage(targetJid, { text: aiReply }, { quoted: quotedMsg });
-                console.log(`✅ Sent reply to ${targetJid}`);
+                await socket.sendMessage(replyToJid, { text: aiReply }, { quoted: quotedMsg });
+                console.log(`✅ Sent reply to ${replyToJid}`);
 
             } catch (error) {
                 console.error("Error communicating with Backend API:", error.message);
                 const quotedMsg = {
-                    ...msg,
                     key: {
                         ...msg.key,
-                        remoteJid: targetJid
-                    }
+                        remoteJid: replyToJid
+                    },
+                    message: msg.message
                 };
-                await socket.sendPresenceUpdate('paused', targetJid);
-                await socket.sendMessage(targetJid, {
+                await socket.sendPresenceUpdate('paused', replyToJid);
+                await socket.sendMessage(replyToJid, {
                     text: "Sorry, NEURA AI experienced a temporary connection delay. Please try asking your medical question again!"
                 }, { quoted: quotedMsg });
             }
