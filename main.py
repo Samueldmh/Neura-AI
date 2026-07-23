@@ -9,7 +9,7 @@ from qdrant_client import QdrantClient
 from motor.motor_asyncio import AsyncIOMotorClient
 
 # ==========================================
-# 1. CONFIGURATION & ENVIRONMENT VARIABLES
+# 1. CONFIGURATION & ENVIRONMENT VARIABLES (v2.0 Webhook)
 # ==========================================
 QDRANT_URL = os.getenv("QDRANT_URL", "https://76ce5d85-4701-4671-8c3f-02bcc741b078.us-west-1-0.aws.cloud.qdrant.io")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
