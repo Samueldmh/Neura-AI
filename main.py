@@ -2,7 +2,8 @@ import os
 import json
 import traceback
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTask
+from fastapi import FastAPI, HTTPException, Request, Response
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
