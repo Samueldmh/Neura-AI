@@ -20,10 +20,15 @@ let currentQR = "";
 let isConnected = false;
 
 // =======================================================================
-// CRITICAL FIX: In-memory message store for Signal Protocol retry handling.
-// Without this, WhatsApp asks for message re-encryption during LID session
-// negotiation, Baileys can't find the original message, and WhatsApp
-// forcefully disconnects with Code 401.
+// FIX 1: In-memory message store for Signal Protocol message retries.
+//
+// WHY MESSAGES WERE NEVER RECEIVED:
+// When the bot sends to a @lid JID, the recipient's device often can't
+// decrypt the message (new/stale Signal session). The device asks WhatsApp
+// to request a re-send. Baileys calls getMessage() to retrieve the
+// original message, re-encrypts it with fresh keys, and sends again.
+// Without this store, getMessage() returned undefined, the re-send failed,
+// and the message was silently lost. The user saw "typing..." but no reply.
 // =======================================================================
 const msgRetryStore = new Map();
 
@@ -36,6 +41,40 @@ setInterval(() => {
         }
     }
 }, 5 * 60 * 1000);
+
+// =======================================================================
+// FIX 2: Message retry counter cache.
+//
+// Baileys tracks how many times each message has been retried.
+// Without this cache, Baileys can't properly manage the retry flow,
+// leading to infinite retries or giving up too early.
+// =======================================================================
+class RetryCounterCache {
+    constructor() {
+        this.cache = new Map();
+    }
+    get(key) {
+        const entry = this.cache.get(key);
+        if (!entry) return undefined;
+        // Auto-expire after 10 minutes
+        if (Date.now() - entry.timestamp > 10 * 60 * 1000) {
+            this.cache.delete(key);
+            return undefined;
+        }
+        return entry.value;
+    }
+    set(key, value) {
+        this.cache.set(key, { value, timestamp: Date.now() });
+    }
+    del(key) {
+        this.cache.delete(key);
+    }
+    flushAll() {
+        this.cache.clear();
+    }
+}
+
+const msgRetryCounterCache = new RetryCounterCache();
 
 // HTTP Web Server serving a visual QR Code webpage & Health Check
 const server = http.createServer(async (req, res) => {
@@ -125,7 +164,7 @@ async function connectToWhatsApp() {
 
     const socket = makeWASocket({
         version,
-        logger: pino({ level: 'silent' }),
+        logger: pino({ level: 'warn' }),  // Changed from 'silent' to 'warn' to catch protocol errors
         auth: state,
         browser: ['Ubuntu', 'Chrome', '24.0.10'],
         syncFullHistory: false,
@@ -134,20 +173,22 @@ async function connectToWhatsApp() {
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 0,
         generateHighQualityLinkPreview: false,
+        retryRequestDelayMs: 200,  // Quick retry responses for prekey renegotiation
 
-        // ===================================================================
-        // CRITICAL FIX: getMessage callback.
-        // When WhatsApp requests a message retry (prekey bundle renegotiation),
-        // Baileys calls this to retrieve the original message for re-encryption.
-        // Without this, retry fails → Code 401 → session destroyed.
-        // ===================================================================
+        // FIX 2: Retry counter cache for tracking message retry attempts
+        msgRetryCounterCache,
+
+        // FIX 1: getMessage callback — THE critical fix for message delivery.
+        // When a recipient's device can't decrypt a message, it requests a re-send.
+        // Baileys calls this to get the original message for re-encryption.
+        // Without this, messages are silently lost even though logs say "delivered".
         getMessage: async (key) => {
             const entry = msgRetryStore.get(key.id);
             if (entry) {
-                console.log(`[RETRY] getMessage called for ${key.id} — found in store`);
+                console.log(`[RETRY] ✅ getMessage found message ${key.id} in store — re-encrypting for delivery`);
                 return entry.message;
             }
-            console.log(`[RETRY] getMessage called for ${key.id} — NOT found in store`);
+            console.log(`[RETRY] ❌ getMessage could NOT find message ${key.id} — delivery will fail`);
             return undefined;
         }
     });
@@ -186,6 +227,23 @@ async function connectToWhatsApp() {
         }
     });
 
+    // =======================================================================
+    // FIX 3: Track message delivery status updates.
+    // This tells us whether WhatsApp actually delivered the message to the
+    // user's device, vs just accepting the packet at the server level.
+    // =======================================================================
+    socket.ev.on('messages.update', (updates) => {
+        for (const update of updates) {
+            const status = update.update?.status;
+            if (status !== undefined) {
+                // Status codes: 1=pending, 2=server_ack, 3=delivery_ack, 4=read, 5=played
+                const statusNames = { 1: 'PENDING', 2: 'SERVER_ACK', 3: 'DELIVERED_TO_DEVICE', 4: 'READ', 5: 'PLAYED' };
+                const statusName = statusNames[status] || `UNKNOWN(${status})`;
+                console.log(`[STATUS] Message ${update.key?.id} to ${update.key?.remoteJid}: ${statusName}`);
+            }
+        }
+    });
+
     // Store ALL incoming messages in the retry store (both sent and received)
     socket.ev.on('messages.upsert', async (m) => {
         // Store every message for potential retry resolution
@@ -217,6 +275,7 @@ async function connectToWhatsApp() {
             if (!messageContent.trim()) continue;
 
             console.log(`📩 Received from [${replyToJid}] user [${userId}]: "${messageContent}"`);
+            console.log(`[DEBUG] Full msg.key: ${JSON.stringify(msg.key)}`);
 
             try {
                 // Send read receipt — wrapped in try-catch so failure doesn't block reply
@@ -251,7 +310,8 @@ async function connectToWhatsApp() {
                     });
                 }
 
-                console.log(`✅ Reply delivered to ${replyToJid} (msgId: ${sentMsg?.key?.id})`);
+                console.log(`✅ Reply sent to ${replyToJid} (msgId: ${sentMsg?.key?.id}, status: ${sentMsg?.status})`);
+                console.log(`[DEBUG] sentMsg.key: ${JSON.stringify(sentMsg?.key)}`);
 
             } catch (error) {
                 console.error("Error processing message:", error.message);
