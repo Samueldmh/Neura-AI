@@ -179,15 +179,15 @@ async function connectToWhatsApp() {
                 const aiReply = response.data.response;
                 await socket.sendPresenceUpdate('paused', targetJid);
                 
-                await socket.sendMessage(targetJid, { text: aiReply });
+                await socket.sendMessage(targetJid, { text: aiReply }, { quoted: msg });
                 console.log(`✅ Sent reply to ${targetJid}`);
 
             } catch (error) {
                 console.error("Error communicating with Backend API:", error.message);
-                await socket.sendPresenceUpdate('paused', senderJid);
-                await socket.sendMessage(senderJid, {
+                await socket.sendPresenceUpdate('paused', targetJid);
+                await socket.sendMessage(targetJid, {
                     text: "Sorry, NEURA AI experienced a temporary connection delay. Please try asking your medical question again!"
-                });
+                }, { quoted: msg });
             }
         }
     });
