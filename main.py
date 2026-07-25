@@ -642,6 +642,21 @@ def root():
         "openrouter_configured": bool(OPENROUTER_API_KEY)
     }
 
+@app.get("/api/books")
+def get_books():
+    """Debug endpoint to list all unique book_title payloads in Qdrant"""
+    try:
+        records, _ = qdrant.scroll(
+            collection_name=COLLECTION_NAME,
+            limit=250,
+            with_payload=True,
+            with_vectors=False
+        )
+        titles = list(set(r.payload.get("book_title") for r in records if r.payload and "book_title" in r.payload))
+        return {"books_found": len(titles), "titles": sorted(titles)}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     """Meta Webhook Verification Endpoint"""
