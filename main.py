@@ -8,6 +8,7 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
+from qdrant_client import models
 from motor.motor_asyncio import AsyncIOMotorClient
 
 # ==========================================
@@ -24,6 +25,21 @@ PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "1150180661520951")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "neura_ai_webhook_secret_2026")
 
 COLLECTION_NAME = "neura_medical_knowledge"
+
+CURRICULUM = {
+    "200L": ["Anatomy", "Physiology", "Biochemistry"],
+    "300L": ["Anatomy", "Physiology", "Biochemistry"],
+    "400L": ["Histopathology", "Chemical Pathology", "Haematology", "Microbiology", "Pharmacology"],
+    "500L": ["Obstetrics & Gynaecology"],
+    "600L": ["Medicine & Surgery"]
+}
+
+AVAILABLE_BOOKS = {
+    "Anatomy": ["Clinically Oriented Anatomy 8th Ed by Keith L Moore, Arthur F Dalley"],
+    "Histopathology": ["Robbins Basic Pathology 10th Edition 2017 (1)"],
+    "Haematology": ["Essentials of Haematology"],
+    "Pharmacology": ["Lippincott Illustrated Reviews: Pharmacology"]
+}
 
 app = FastAPI(title="NEURA AI Backend", version="2.0.0")
 
@@ -132,6 +148,47 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta Graph API Send Status {res.status_code}: {res.text}")
 
+async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_text: str, options: list):
+    """Sends an Interactive List Message (max 10 options)"""
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
+        "Content-Type": "application/json"
+    }
+    
+    # WhatsApp requires list items to be under 24 chars for ID and title (usually). We will truncate safely.
+    rows = []
+    for opt in options[:10]: # Max 10 options per list
+        rows.append({
+            "id": opt[:200], # ID can be long
+            "title": opt[:24] # Title max 24 chars
+        })
+        
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "body": {
+                "text": body_text
+            },
+            "action": {
+                "button": button_text[:20], # Max 20 chars
+                "sections": [
+                    {
+                        "title": "Available Options",
+                        "rows": rows
+                    }
+                ]
+            }
+        }
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        res = await client.post(url, headers=headers, json=payload)
+        print(f"Meta Graph API List Send Status {res.status_code}: {res.text}")
+
 # Filler words to strip for search (NOT removed from the AI prompt — only from Qdrant search)
 SEARCH_STOP_WORDS = {
     "explain", "what", "is", "are", "the", "of", "in", "simple", "words", "terms",
@@ -172,30 +229,44 @@ def extract_medical_terms(user_msg: str) -> list:
     print(f"🔍 Extracted search keywords: {terms} (from: '{user_msg}')")
     return terms
 
-def search_qdrant(query_text: str, limit: int = 4) -> list:
-    """Search Qdrant with a single query string, returns list of points"""
+def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None) -> list:
+    """Search Qdrant with a single query string, strictly filtering by preferred_books"""
     query_vector = [e.tolist() for e in embedder.embed([query_text])][0]
+    
+    query_filter = None
+    if preferred_books:
+        query_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="book_title",
+                    match=models.MatchAny(any=preferred_books)
+                )
+            ]
+        )
+        
     try:
         return qdrant.query_points(
             collection_name=COLLECTION_NAME,
             query=query_vector,
+            query_filter=query_filter,
             limit=limit
         ).points
     except Exception:
         return qdrant.search(
             collection_name=COLLECTION_NAME,
             query_vector=query_vector,
+            query_filter=query_filter,
             limit=limit
         )
 
-def multi_search_qdrant(search_terms: list) -> list:
+def multi_search_qdrant(search_terms: list, preferred_books: list = None) -> list:
     """Run separate Qdrant searches for each extracted medical keyword, then deduplicate"""
     seen_texts = set()
     all_results = []
     
     # Search for each extracted medical term individually
     for term in search_terms:
-        results = search_qdrant(term, limit=4)
+        results = search_qdrant(term, limit=4, preferred_books=preferred_books)
         for point in results:
             text_key = point.payload.get("text", "")[:100]
             if text_key not in seen_texts:
@@ -204,7 +275,7 @@ def multi_search_qdrant(search_terms: list) -> list:
     
     # Cap at 8 results max to avoid overwhelming the LLM context
     all_results = all_results[:8]
-    print(f"📚 Multi-search returned {len(all_results)} unique chunks from {len(search_terms)} keyword(s): {search_terms}")
+    print(f"📚 Multi-search returned {len(all_results)} unique chunks from {len(search_terms)} keyword(s) with filter {preferred_books}")
     return all_results
 
 async def extract_name_with_llm(user_msg: str) -> str:
@@ -224,29 +295,53 @@ Examples:
     except:
         return None
 
-def get_level_textbooks_message(level: str) -> str:
-    if level in ["200L", "300L"]:
-        return ("Great! Here are the subjects and textbooks currently available for 200L/300L:\n"
-                "🦴 *Anatomy*: Keith Moore\n"
-                "🫀 *Physiology*: (Uploading soon)\n"
-                "🧬 *Biochemistry*: (Uploading soon)\n\n"
-                "Reply with the names of the books you want to use, or type 'All' to use everything available.")
-    elif level == "400L":
-        return ("Great! Here are the subjects and textbooks currently available for 400L:\n"
-                "🔬 *Histopathology*: Robbins and Cotran\n"
-                "🩸 *Haematology*: Essentials of Haematology\n"
-                "🧪 *Chemical Pathology*: (Uploading soon)\n"
-                "🧫 *Microbiology*: (Uploading soon)\n\n"
-                "Reply with the names of the books you want to use, or type 'All'.")
-    elif level == "500L":
-        return ("Great! Here are the subjects for 500L:\n"
-                "👶 *Obstetrics & Gynaecology*: (Uploading soon)\n\n"
-                "*Note: We will notify you when these are uploaded. For now, you can still ask general questions!*")
-    elif level == "600L":
-        return ("Great! Here are the subjects for 600L:\n"
-                "🩺 *Medicine & Surgery*: (Uploading soon)\n\n"
-                "*Note: We will notify you when these are uploaded. For now, you can still ask general questions!*")
-    return None
+async def send_next_subject_menu(sender_phone: str, level: str, current_subject: str = None) -> bool:
+    """Finds the next subject for the level and sends the menu. Returns False if all done."""
+    subjects = CURRICULUM.get(level, [])
+    if not subjects:
+        return False
+        
+    next_subject = None
+    if current_subject is None:
+        next_subject = subjects[0]
+    else:
+        try:
+            idx = subjects.index(current_subject)
+            if idx + 1 < len(subjects):
+                next_subject = subjects[idx + 1]
+        except ValueError:
+            next_subject = subjects[0]
+            
+    if not next_subject:
+        return False # We finished all subjects
+        
+    # Send menu for next_subject
+    books = AVAILABLE_BOOKS.get(next_subject, [])
+    if not books:
+        books = ["Skip (None available yet)"]
+        
+    body_text = f"Please select your preferred textbook for *{next_subject}*:"
+    await send_whatsapp_interactive_list(sender_phone, body_text, "Select Textbook", books)
+    
+    # Update state
+    await users_col.update_one(
+        {"user_id": sender_phone}, 
+        {"$set": {"onboarding_step": f"ASK_BOOK_{next_subject}"}}
+    )
+    return True
+
+async def complete_onboarding(sender_phone: str):
+    user_doc = await users_col.find_one({"user_id": sender_phone})
+    name = user_doc.get("name", "Student")
+    level = user_doc.get("level", "")
+    await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "COMPLETED"}})
+    final_msg = (f"Awesome, {name}! Your profile is all set up for {level}. You can now start asking me medical questions! 📚\n\n"
+                 "⚙️ *Profile Commands:*\n"
+                 "• Type */profile* to view your profile\n"
+                 "• Type */update name* to change your name\n"
+                 "• Type */update level* to change your level\n"
+                 "• Type */update books* to change your textbooks")
+    await send_whatsapp_cloud_msg(sender_phone, final_msg)
 
 async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
     """Returns True if message was swallowed by onboarding, False if normal RAG should proceed."""
@@ -284,36 +379,51 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             return True
             
         await users_col.update_one({"user_id": sender_phone}, {"$set": {"name": extracted_name, "onboarding_step": "ASK_LEVEL"}})
-        await send_whatsapp_cloud_msg(sender_phone, f"Nice to meet you, {extracted_name}! What is your current medical class/level? (e.g., 200L, 300L, 400L, 500L, 600L)")
+        await send_whatsapp_interactive_list(
+            sender_phone, 
+            f"Nice to meet you, {extracted_name}! What is your current medical class/level?",
+            "Select Level",
+            ["200L", "300L", "400L", "500L", "600L"]
+        )
         return True
         
     # 3. Extract Level
     if step == "ASK_LEVEL":
-        import re
-        match = re.search(r'(200|300|400|500|600)', user_msg)
-        if not match:
-            await send_whatsapp_cloud_msg(sender_phone, "I don't recognize that level. Please type 200L, 300L, 400L, 500L, or 600L.")
+        if user_msg not in ["200L", "300L", "400L", "500L", "600L"]:
+            await send_whatsapp_cloud_msg(sender_phone, "Please use the menu button to select your level.")
             return True
             
-        new_level = f"{match.group(1)}L"
-        book_msg = get_level_textbooks_message(new_level)
+        new_level = user_msg
+        await users_col.update_one({"user_id": sender_phone}, {"$set": {"level": new_level, "preferred_books_list": []}})
         
-        await users_col.update_one({"user_id": sender_phone}, {"$set": {"level": new_level, "onboarding_step": "ASK_BOOKS"}})
-        await send_whatsapp_cloud_msg(sender_phone, book_msg)
+        # Start subject loop
+        has_subjects = await send_next_subject_menu(sender_phone, new_level)
+        if not has_subjects:
+            await complete_onboarding(sender_phone)
         return True
         
-    # 4. Extract Books
-    if step == "ASK_BOOKS":
-        books = user_msg.strip()
-        await users_col.update_one({"user_id": sender_phone}, {"$set": {"preferred_books": books, "onboarding_step": "COMPLETED"}})
+    # 4. Extract Books (Dynamic Subject Loop)
+    if step.startswith("ASK_BOOK_"):
+        current_subject = step.replace("ASK_BOOK_", "")
         
-        final_msg = (f"Awesome, {name}! Your profile is all set up for {level}. You can now start asking me medical questions! 📚\n\n"
-                     "⚙️ *Profile Commands:*\n"
-                     "• Type */profile* to view your profile\n"
-                     "• Type */update name* to change your name\n"
-                     "• Type */update level* to change your level\n"
-                     "• Type */update books* to change your textbooks")
-        await send_whatsapp_cloud_msg(sender_phone, final_msg)
+        valid_options = AVAILABLE_BOOKS.get(current_subject, [])
+        is_skip = (user_msg == "Skip (None available yet)")
+        
+        if not is_skip and user_msg not in valid_options:
+            await send_whatsapp_cloud_msg(sender_phone, "Please use the menu button to select a valid textbook, or tap Skip if none are available.")
+            return True
+            
+        # Save book if not skipped
+        if not is_skip:
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$push": {"preferred_books_list": user_msg}}
+            )
+            
+        # Move to next subject
+        has_more = await send_next_subject_menu(sender_phone, level, current_subject)
+        if not has_more:
+            await complete_onboarding(sender_phone)
         return True
         
     return False
@@ -321,6 +431,18 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
 async def process_whatsapp_message(sender_phone: str, user_msg: str):
     """Background task to run RAG & OpenRouter LLM and send WhatsApp reply"""
     try:
+        # Fetch user doc early to get preferences
+        user_doc = None
+        preferred_books_list = []
+        name = "Student"
+        level = "Unknown Level"
+        if users_col is not None:
+            user_doc = await users_col.find_one({"user_id": sender_phone})
+            if user_doc:
+                name = user_doc.get("name", "Student")
+                level = user_doc.get("level", "Unknown Level")
+                preferred_books_list = user_doc.get("preferred_books_list", [])
+
         # Check for profile commands first
         msg_lower = user_msg.strip().lower()
         if msg_lower.startswith("/") and users_col is not None:
@@ -331,12 +453,8 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                 await send_whatsapp_cloud_msg(sender_phone, "✅ Your profile and chat history have been completely wiped. You are now a new user. Send any message to start onboarding!")
                 return
             elif msg_lower == "/profile":
-                user_doc = await users_col.find_one({"user_id": sender_phone})
-                if user_doc:
-                    name = user_doc.get("name", "Student")
-                    level = user_doc.get("level", "Unknown")
-                    books = user_doc.get("preferred_books", "None")
-                    await send_whatsapp_cloud_msg(sender_phone, f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Books: {books}")
+                books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
+                await send_whatsapp_cloud_msg(sender_phone, f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Books:\n  - {books_str}")
                 return
             elif msg_lower == "/update name":
                 await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_NAME"}})
@@ -344,13 +462,18 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                 return
             elif msg_lower == "/update level":
                 await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_LEVEL"}})
-                await send_whatsapp_cloud_msg(sender_phone, "What is your new medical class/level? (e.g., 200L, 300L, 400L, 500L, 600L)")
+                await send_whatsapp_interactive_list(
+                    sender_phone, 
+                    "What is your new medical class/level?",
+                    "Select Level",
+                    ["200L", "300L", "400L", "500L", "600L"]
+                )
                 return
             elif msg_lower == "/update books":
-                user_doc = await users_col.find_one({"user_id": sender_phone})
-                level = user_doc.get("level", "400L") if user_doc else "400L"
-                await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_BOOKS"}})
-                await send_whatsapp_cloud_msg(sender_phone, get_level_textbooks_message(level))
+                await users_col.update_one({"user_id": sender_phone}, {"$set": {"preferred_books_list": []}})
+                has_subjects = await send_next_subject_menu(sender_phone, level)
+                if not has_subjects:
+                    await complete_onboarding(sender_phone)
                 return
 
         # Handle onboarding state machine
@@ -373,15 +496,15 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
         # Step 1: Extract medical terms from the user's message
         medical_terms = extract_medical_terms(user_msg)
         
-        # Step 2: Multi-search Qdrant with extracted terms + original query
+        # Step 2: Multi-search Qdrant with extracted terms + original query, filtered by preferred books
         if medical_terms:
-            search_res = multi_search_qdrant(medical_terms)
+            search_res = multi_search_qdrant(medical_terms, preferred_books=preferred_books_list)
         else:
             # No medical terms found — search with raw query as fallback
-            search_res = search_qdrant(user_msg, limit=4)
+            search_res = search_qdrant(user_msg, limit=4, preferred_books=preferred_books_list)
 
         if not search_res:
-            await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question. Please try asking a specific medical topic!")
+            await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question in your selected textbooks. Try rephrasing or updating your preferred books using /update books!")
             return
 
         context_blocks = []
@@ -394,14 +517,8 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
         user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{user_msg}"
         
         # Build dynamic user context
-        user_context_str = ""
-        if users_col is not None:
-            user_doc = await users_col.find_one({"user_id": sender_phone})
-            if user_doc:
-                name = user_doc.get("name", "Student")
-                level = user_doc.get("level", "Unknown Level")
-                books = user_doc.get("preferred_books", "Unknown")
-                user_context_str = f"The student asking this question is {name}, a {level} medical student. Their preferred textbooks are: {books}. Tailor your explanation to their level.\n\n"
+        books_str = ", ".join(preferred_books_list) if preferred_books_list else "None"
+        user_context_str = f"The student asking this question is {name}, a {level} medical student. Their preferred textbooks are: {books_str}. Tailor your explanation to their level.\n\n"
 
         prompt_to_use = SYSTEM_QUIZ_PROMPT if intent == "QUIZ" else SYSTEM_MEDICAL_PROMPT
         prompt_to_use = prompt_to_use.replace("{user_context}", user_context_str)
