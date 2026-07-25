@@ -281,22 +281,37 @@ def get_explicit_book_override(user_msg: str, preferred_books: list) -> list:
 def extract_medical_terms(user_msg: str) -> list:
     """Instantly extract medical keywords by stripping filler words and splitting on conjunctions.
     This is used ONLY for Qdrant search — the original message is still sent to the AI."""
-    # Split on conjunctions to handle multi-topic queries ("TRALI and TRACO")
-    parts = re.split(r'\b(?:and|or|vs|versus|,)\b', user_msg, flags=re.IGNORECASE)
+    """Instantly extract medical keywords by stripping filler words and splitting on conjunctions. Preserves capitalization."""
+    # We strip punctuation but keep case
+    msg = re.sub(r'[^\w\s]', ' ', user_msg)
+    words = msg.split()
     
-    terms = []
-    for part in parts:
-        # Remove punctuation except hyphens (for terms like "beta-blocker")
-        cleaned = re.sub(r'[^\w\s-]', '', part)
-        words = cleaned.strip().split()
-        # Keep only non-stop words
-        medical_words = [w for w in words if w.lower() not in SEARCH_STOP_WORDS]
-        if medical_words:
-            term = " ".join(medical_words)
-            terms.append(term)
+    # Check lower case for stop words, but preserve original case
+    meaningful_words = [w for w in words if w.lower() not in SEARCH_STOP_WORDS and len(w) > 2]
     
-    print(f"🔍 Extracted search keywords: {terms} (from: '{user_msg}')")
-    return terms
+    if not meaningful_words:
+        return [user_msg]
+        
+    phrases = []
+    current_phrase = []
+    
+    for w in meaningful_words:
+        if w.lower() in ["and", "or", "vs", "versus"]:
+            if current_phrase:
+                phrases.append(" ".join(current_phrase))
+                current_phrase = []
+        else:
+            current_phrase.append(w)
+            
+    if current_phrase:
+        phrases.append(" ".join(current_phrase))
+    
+    # Add the raw message as a whole phrase to ensure context is kept
+    if user_msg not in phrases:
+        phrases.append(user_msg)
+        
+    print(f"🔍 Extracted search keywords: {phrases} (from: '{user_msg}')")
+    return phrases
 
 def extract_book_keywords(preferred_books: list) -> list:
     """Extract core textbook keywords for matching (e.g., 'lippincott', 'robbins', 'moore', 'hoffbrand')"""
@@ -319,57 +334,48 @@ def extract_book_keywords(preferred_books: list) -> list:
             keywords.extend(words)
     return keywords
 
-def search_qdrant(query_text: str, limit: int = 12, preferred_books: list = None) -> list:
-    """Search Qdrant with Python-side partial keyword filtering for maximum reliability"""
+def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None) -> list:
+    """Search Qdrant securely per textbook to guarantee every selected book gets equal representation."""
     try:
         query_vector = [e.tolist() for e in embedder.embed([query_text])][0]
         
-        # Retrieve top 150 chunks from Qdrant to ensure we don't miss preferred books
-        raw_points = qdrant.query_points(
-            collection_name=COLLECTION_NAME,
-            query=query_vector,
-            limit=150
-        ).points
+        all_points = []
         
-        keywords = extract_book_keywords(preferred_books)
-        if keywords:
-            # Filter points in Python based on whether book_title contains any keyword
-            grouped_points = {}
-            for pt in raw_points:
-                title = pt.payload.get("book_title", "")
-                title_lower = title.lower()
-                if any(kw in title_lower for kw in keywords):
-                    if title not in grouped_points:
-                        grouped_points[title] = []
-                    grouped_points[title].append(pt)
+        # If no preferred books are selected, fall back to a generic global search
+        if not preferred_books:
+            return qdrant.query_points(
+                collection_name=COLLECTION_NAME,
+                query=query_vector,
+                limit=limit
+            ).points
             
-            if grouped_points:
-                # Return top chunks evenly distributed among the matched books
-                chunks_per_book = max(1, limit // len(grouped_points))
-                filtered_points = []
-                for title, pts in grouped_points.items():
-                    filtered_points.extend(pts[:chunks_per_book])
+        # Guarantee equal representation by querying Qdrant for EACH book
+        for book in preferred_books:
+            if not book or book.startswith("Skip"):
+                continue
                 
-                # If we still need more to reach the limit, add the next best ones
-                if len(filtered_points) < limit:
-                    all_matched = []
-                    for pts in grouped_points.values():
-                        all_matched.extend(pts)
-                    all_matched.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
-                    seen_ids = {pt.id for pt in filtered_points}
-                    for pt in all_matched:
-                        if len(filtered_points) >= limit:
-                            break
-                        if pt.id not in seen_ids:
-                            filtered_points.append(pt)
-                            seen_ids.add(pt.id)
-                            
-                print(f"🎯 Python-side book filter grouped {len(filtered_points)} chunk(s) across {len(grouped_points)} book(s)")
-                return filtered_points[:limit]
-            else:
-                print(f"⚠️ Preferred book keywords {keywords} not found in retrieved chunks. Returning top chunks.")
+            try:
+                hits = qdrant.query_points(
+                    collection_name=COLLECTION_NAME,
+                    query=query_vector,
+                    query_filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="book_title",
+                                match=models.MatchValue(value=book)
+                            )
+                        ]
+                    ),
+                    limit=limit
+                ).points
+                all_points.extend(hits)
+            except Exception as e:
+                print(f"⚠️ Failed to filter Qdrant for book '{book}': {e}")
                 
-        return raw_points[:limit]
+        # Sort the combined hits from all books by score
+        all_points.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
+        return all_points
+
     except Exception as outer_e:
         print(f"❌ Error in search_qdrant: {outer_e}")
         return []
@@ -634,6 +640,9 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
         
         # Step 2: Multi-search Qdrant with extracted terms + original query, filtered by active books
         if medical_terms:
+            # Add the original raw phrase to guarantee contextual matching (e.g. TRALI and TRACO)
+            if user_msg not in medical_terms:
+                medical_terms.append(user_msg)
             search_res = multi_search_qdrant(medical_terms, preferred_books=active_books)
         else:
             # No medical terms found — search with raw query as fallback
