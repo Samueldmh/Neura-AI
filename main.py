@@ -598,10 +598,19 @@ async def handle_whatsapp_webhook(request: Request):
                     sender_phone = msg.get("from")
                     msg_type = msg.get("type")
                     
+                    text_body = ""
                     if msg_type == "text":
                         text_body = msg.get("text", {}).get("body", "")
-                        print(f"📩 Received text from {sender_phone}: '{text_body}'")
-                        
+                    elif msg_type == "interactive":
+                        interactive_obj = msg.get("interactive", {})
+                        interactive_type = interactive_obj.get("type")
+                        if interactive_type == "list_reply":
+                            text_body = interactive_obj.get("list_reply", {}).get("id") or interactive_obj.get("list_reply", {}).get("title", "")
+                        elif interactive_type == "button_reply":
+                            text_body = interactive_obj.get("button_reply", {}).get("id") or interactive_obj.get("button_reply", {}).get("title", "")
+
+                    if text_body:
+                        print(f"📩 Received msg ({msg_type}) from {sender_phone}: '{text_body}'")
                         # Process in background task to respond to Meta immediately (prevents timeout)
                         task = BackgroundTask(process_whatsapp_message, sender_phone, text_body)
                         return Response(content=json.dumps({"status": "processing"}), media_type="application/json", background=task)
