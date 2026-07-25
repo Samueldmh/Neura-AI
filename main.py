@@ -56,7 +56,7 @@ RULES:
 2. If the user asks a very short keyword (like "antibiotics"), provide a detailed overview of the topic based on the context, covering key mechanisms, clinical uses, or classifications, and ask what specific aspect they want to focus on.
 3. Keep the conversation natural and engaging. You remember previous messages in the chat history.
 4. Structure your detailed medical answers using clear WhatsApp Markdown. Use sections like 📖 IN-DEPTH EXPLANATION, 💡 KEY CLINICAL PEARLS, 📚 CITATION, and 🎯 STUDY HOOK to make it comprehensive yet readable. (If just simplifying a previous answer, you can skip the rigid structure and just be conversational).
-5. If they ask a NEW specific medical question that is completely absent from context, politely say you don't have that in your current textbooks. DO NOT hallucinate.
+5. If they ask a NEW specific medical question that is completely absent from context, politely say you don't have that in your current textbooks and suggest they rephrase or try a related keyword. NEVER make up answers from "general medical knowledge". You ONLY know what is in the provided Textbook Context and chat history. DO NOT hallucinate under any circumstances.
 6. If the user asks general questions about your capabilities (e.g., "what can you do", "who are you", "help"), gracefully introduce yourself. Explain that you can answer medical questions based on textbooks, generate practice MCQs, and simplify complex concepts. Ignore the retrieved textbook context for these meta-questions.
 """
 
@@ -172,31 +172,23 @@ def search_qdrant(query_text: str, limit: int = 4) -> list:
             limit=limit
         )
 
-def multi_search_qdrant(search_terms: list, original_query: str) -> list:
-    """Run separate Qdrant searches for each medical term + original query, then deduplicate"""
+def multi_search_qdrant(search_terms: list) -> list:
+    """Run separate Qdrant searches for each extracted medical keyword, then deduplicate"""
     seen_texts = set()
     all_results = []
     
-    # Search for each extracted medical term
+    # Search for each extracted medical term individually
     for term in search_terms:
-        results = search_qdrant(term, limit=3)
+        results = search_qdrant(term, limit=4)
         for point in results:
             text_key = point.payload.get("text", "")[:100]
             if text_key not in seen_texts:
                 seen_texts.add(text_key)
                 all_results.append(point)
     
-    # Also search with the original full query as fallback
-    fallback_results = search_qdrant(original_query, limit=3)
-    for point in fallback_results:
-        text_key = point.payload.get("text", "")[:100]
-        if text_key not in seen_texts:
-            seen_texts.add(text_key)
-            all_results.append(point)
-    
     # Cap at 8 results max to avoid overwhelming the LLM context
     all_results = all_results[:8]
-    print(f"📚 Multi-search returned {len(all_results)} unique chunks")
+    print(f"📚 Multi-search returned {len(all_results)} unique chunks from {len(search_terms)} keyword(s): {search_terms}")
     return all_results
 
 async def process_whatsapp_message(sender_phone: str, user_msg: str):
@@ -219,7 +211,7 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
         
         # Step 2: Multi-search Qdrant with extracted terms + original query
         if medical_terms:
-            search_res = multi_search_qdrant(medical_terms, user_msg)
+            search_res = multi_search_qdrant(medical_terms)
         else:
             # No medical terms found — search with raw query as fallback
             search_res = search_qdrant(user_msg, limit=4)
@@ -345,7 +337,7 @@ async def chat_endpoint(req: QueryRequest):
         
         # Step 2: Multi-search Qdrant with extracted terms + original query
         if medical_terms:
-            search_res = multi_search_qdrant(medical_terms, user_msg)
+            search_res = multi_search_qdrant(medical_terms)
         else:
             search_res = search_qdrant(user_msg, limit=4)
         
