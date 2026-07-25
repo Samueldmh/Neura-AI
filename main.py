@@ -84,10 +84,10 @@ RULES:
 1. When answering NEW medical questions, use ONLY the provided Textbook Context. However, if the user asks a follow-up question (like "explain it simpler" or "what are its side effects"), you MUST use the facts already established in the chat history.
 2. If the user asks a very short keyword (like "antibiotics"), provide a detailed overview of the topic based on the context, covering key mechanisms, clinical uses, or classifications, and ask what specific aspect they want to focus on.
 3. Keep the conversation natural and engaging. You remember previous messages in the chat history.
-4. Structure your detailed medical answers using clear WhatsApp Markdown. Use sections like 📖 IN-DEPTH EXPLANATION, 💡 KEY CLINICAL PEARLS, 📚 CITATION, and 🎯 STUDY HOOK to make it comprehensive yet readable. (If just simplifying a previous answer, you can skip the rigid structure and just be conversational).
-5. If they ask a NEW specific medical question that is completely absent from context, politely say you don't have that in your current textbooks and suggest they rephrase or try a related keyword. NEVER make up answers from "general medical knowledge". You ONLY know what is in the provided Textbook Context and chat history. DO NOT hallucinate under any circumstances.
-6. If the user's preferred textbooks are not in your retrieved context, just answer using the textbooks that ARE available in the context gracefully without complaining.
-7. If the user asks general questions about your capabilities (e.g., "what can you do", "who are you", "help"), gracefully introduce yourself. Explain that you can answer medical questions based on textbooks, generate practice MCQs, and simplify complex concepts. Ignore the retrieved textbook context for these meta-questions.
+4. Structure your detailed medical answers using clear WhatsApp Markdown. If the retrieved context comes from multiple textbooks, structure your answer to separate the information by subject perspective (e.g. ### Pathology Perspective (Robbins), ### Pharmacology Perspective (Lippincott)). If a textbook has no relevant information for the question, skip that perspective. DO NOT mix the perspectives together into a single explanation.
+5. Include 📖 IN-DEPTH EXPLANATION, 💡 KEY CLINICAL PEARLS, 📚 CITATION, and 🎯 STUDY HOOK to make it comprehensive yet readable.
+6. If they ask a NEW specific medical question that is completely absent from context, politely say you don't have that in your current textbooks. NEVER make up answers from "general medical knowledge". DO NOT hallucinate.
+7. If the user's preferred textbooks are not in your retrieved context, just answer using the textbooks that ARE available gracefully without complaining.
 """
 
 SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate 3 high-yield MBBS exam-style Multiple Choice Questions (MCQs).
@@ -334,14 +334,37 @@ def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None)
         keywords = extract_book_keywords(preferred_books)
         if keywords:
             # Filter points in Python based on whether book_title contains any keyword
-            filtered_points = []
+            grouped_points = {}
             for pt in raw_points:
-                title = pt.payload.get("book_title", "").lower()
-                if any(kw in title for kw in keywords):
-                    filtered_points.append(pt)
+                title = pt.payload.get("book_title", "")
+                title_lower = title.lower()
+                if any(kw in title_lower for kw in keywords):
+                    if title not in grouped_points:
+                        grouped_points[title] = []
+                    grouped_points[title].append(pt)
             
-            if filtered_points:
-                print(f"🎯 Python-side book filter matched {len(filtered_points)} chunk(s) for keywords {keywords}")
+            if grouped_points:
+                # Return top chunks evenly distributed among the matched books
+                chunks_per_book = max(1, limit // len(grouped_points))
+                filtered_points = []
+                for title, pts in grouped_points.items():
+                    filtered_points.extend(pts[:chunks_per_book])
+                
+                # If we still need more to reach the limit, add the next best ones
+                if len(filtered_points) < limit:
+                    all_matched = []
+                    for pts in grouped_points.values():
+                        all_matched.extend(pts)
+                    all_matched.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
+                    seen_ids = {pt.id for pt in filtered_points}
+                    for pt in all_matched:
+                        if len(filtered_points) >= limit:
+                            break
+                        if pt.id not in seen_ids:
+                            filtered_points.append(pt)
+                            seen_ids.add(pt.id)
+                            
+                print(f"🎯 Python-side book filter grouped {len(filtered_points)} chunk(s) across {len(grouped_points)} book(s)")
                 return filtered_points[:limit]
             else:
                 print(f"⚠️ Preferred book keywords {keywords} not found in retrieved chunks. Returning top chunks.")
