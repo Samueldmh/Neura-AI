@@ -172,7 +172,7 @@ async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_
     for opt in options[:10]: # Max 10 options per list
         rows.append({
             "id": opt[:200], # ID can be long
-            "title": opt[:24] # Title max 24 chars
+            "title": opt[:24].strip() # Title max 24 chars and remove trailing spaces
         })
         
     payload = {
