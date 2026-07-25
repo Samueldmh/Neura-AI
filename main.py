@@ -41,6 +41,7 @@ print(f"MONGO_URI Present: {bool(MONGO_URI)}")
 mongo_client = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
 db = mongo_client.neura_db if mongo_client else None
 chat_history_col = db.chat_history if db is not None else None
+users_col = db.users if db is not None else None
 
 class QueryRequest(BaseModel):
     user_id: str
@@ -49,7 +50,7 @@ class QueryRequest(BaseModel):
 # ==========================================
 # 2. SYSTEM PROMPTS & INTENT ROUTER
 # ==========================================
-SYSTEM_MEDICAL_PROMPT = """You are NEURA AI, an elite medical study assistant designed for Nigerian medical students.
+SYSTEM_MEDICAL_PROMPT = """{user_context}You are NEURA AI, an elite medical study assistant designed for Nigerian medical students.
 Your goal is to provide authoritative, textbook-grounded answers to medical queries, while being natural, conversational, and highly detailed.
 
 RULES:
@@ -61,7 +62,7 @@ RULES:
 6. If the user asks general questions about your capabilities (e.g., "what can you do", "who are you", "help"), gracefully introduce yourself. Explain that you can answer medical questions based on textbooks, generate practice MCQs, and simplify complex concepts. Ignore the retrieved textbook context for these meta-questions.
 """
 
-SYSTEM_QUIZ_PROMPT = """You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate 3 high-yield MBBS exam-style Multiple Choice Questions (MCQs).
+SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate 3 high-yield MBBS exam-style Multiple Choice Questions (MCQs).
 Format clearly for WhatsApp:
 - Provide 4 options (A, B, C, D) for each question.
 - Include a hidden/spoiler or separate Answer Key at the bottom with step-by-step rationale citing the textbook title and page number.
@@ -205,9 +206,145 @@ def multi_search_qdrant(search_terms: list) -> list:
     print(f"📚 Multi-search returned {len(all_results)} unique chunks from {len(search_terms)} keyword(s): {search_terms}")
     return all_results
 
+async def extract_name_with_llm(user_msg: str) -> str:
+    prompt = """Extract the person's first name from this message. 
+If they just say a greeting, or "why do you need it", or there is clearly no name, return NONE.
+Return ONLY the name, nothing else.
+Examples:
+- "I am Samuel" -> Samuel
+- "Samuel" -> Samuel
+- "Hi my name is John" -> John
+- "Why do you want to know?" -> NONE
+- "Hello" -> NONE"""
+    try:
+        res = await call_openrouter_llm(prompt, user_msg)
+        return res.strip() if res.strip().upper() != "NONE" else None
+    except:
+        return None
+
+def get_level_textbooks_message(level: str) -> str:
+    if level in ["200L", "300L"]:
+        return ("Great! Here are the subjects and textbooks currently available for 200L/300L:\n"
+                "🦴 *Anatomy*: Keith Moore\n"
+                "🫀 *Physiology*: (Uploading soon)\n"
+                "🧬 *Biochemistry*: (Uploading soon)\n\n"
+                "Reply with the names of the books you want to use, or type 'All' to use everything available.")
+    elif level == "400L":
+        return ("Great! Here are the subjects and textbooks currently available for 400L:\n"
+                "🔬 *Histopathology*: Robbins and Cotran\n"
+                "🩸 *Haematology*: Essentials of Haematology\n"
+                "🧪 *Chemical Pathology*: (Uploading soon)\n"
+                "🧫 *Microbiology*: (Uploading soon)\n\n"
+                "Reply with the names of the books you want to use, or type 'All'.")
+    elif level == "500L":
+        return ("Great! Here are the subjects for 500L:\n"
+                "👶 *Obstetrics & Gynaecology*: (Uploading soon)\n\n"
+                "*Note: We will notify you when these are uploaded. For now, you can still ask general questions!*")
+    elif level == "600L":
+        return ("Great! Here are the subjects for 600L:\n"
+                "🩺 *Medicine & Surgery*: (Uploading soon)\n\n"
+                "*Note: We will notify you when these are uploaded. For now, you can still ask general questions!*")
+    return None
+
+async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
+    """Returns True if message was swallowed by onboarding, False if normal RAG should proceed."""
+    if users_col is None:
+        return False
+        
+    user_doc = await users_col.find_one({"user_id": sender_phone})
+    
+    # 1. New user
+    if not user_doc:
+        await users_col.insert_one({
+            "user_id": sender_phone,
+            "onboarding_step": "ASK_NAME"
+        })
+        await send_whatsapp_cloud_msg(sender_phone, "Welcome to NEURA AI! 🧠 To give you the best study experience, what is your name?")
+        return True
+        
+    step = user_doc.get("onboarding_step")
+    name = user_doc.get("name", "Student")
+    level = user_doc.get("level", "")
+    
+    if step == "COMPLETED":
+        return False
+        
+    # 2. Extract Name
+    if step == "ASK_NAME":
+        extracted_name = await extract_name_with_llm(user_msg)
+        if not extracted_name:
+            await send_whatsapp_cloud_msg(sender_phone, "I didn't quite catch that! Please just type your first name so I know what to call you. 😊")
+            return True
+            
+        await users_col.update_one({"user_id": sender_phone}, {"$set": {"name": extracted_name, "onboarding_step": "ASK_LEVEL"}})
+        await send_whatsapp_cloud_msg(sender_phone, f"Nice to meet you, {extracted_name}! What is your current medical class/level? (e.g., 200L, 300L, 400L, 500L, 600L)")
+        return True
+        
+    # 3. Extract Level
+    if step == "ASK_LEVEL":
+        import re
+        match = re.search(r'(200|300|400|500|600)', user_msg)
+        if not match:
+            await send_whatsapp_cloud_msg(sender_phone, "I don't recognize that level. Please type 200L, 300L, 400L, 500L, or 600L.")
+            return True
+            
+        new_level = f"{match.group(1)}L"
+        book_msg = get_level_textbooks_message(new_level)
+        
+        await users_col.update_one({"user_id": sender_phone}, {"$set": {"level": new_level, "onboarding_step": "ASK_BOOKS"}})
+        await send_whatsapp_cloud_msg(sender_phone, book_msg)
+        return True
+        
+    # 4. Extract Books
+    if step == "ASK_BOOKS":
+        books = user_msg.strip()
+        await users_col.update_one({"user_id": sender_phone}, {"$set": {"preferred_books": books, "onboarding_step": "COMPLETED"}})
+        
+        final_msg = (f"Awesome, {name}! Your profile is all set up for {level}. You can now start asking me medical questions! 📚\n\n"
+                     "⚙️ *Profile Commands:*\n"
+                     "• Type */profile* to view your profile\n"
+                     "• Type */update name* to change your name\n"
+                     "• Type */update level* to change your level\n"
+                     "• Type */update books* to change your textbooks")
+        await send_whatsapp_cloud_msg(sender_phone, final_msg)
+        return True
+        
+    return False
+
 async def process_whatsapp_message(sender_phone: str, user_msg: str):
     """Background task to run RAG & OpenRouter LLM and send WhatsApp reply"""
     try:
+        # Check for profile commands first
+        msg_lower = user_msg.strip().lower()
+        if msg_lower.startswith("/") and users_col is not None:
+            if msg_lower == "/profile":
+                user_doc = await users_col.find_one({"user_id": sender_phone})
+                if user_doc:
+                    name = user_doc.get("name", "Student")
+                    level = user_doc.get("level", "Unknown")
+                    books = user_doc.get("preferred_books", "None")
+                    await send_whatsapp_cloud_msg(sender_phone, f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Books: {books}")
+                return
+            elif msg_lower == "/update name":
+                await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_NAME"}})
+                await send_whatsapp_cloud_msg(sender_phone, "What would you like to change your name to?")
+                return
+            elif msg_lower == "/update level":
+                await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_LEVEL"}})
+                await send_whatsapp_cloud_msg(sender_phone, "What is your new medical class/level? (e.g., 200L, 300L, 400L, 500L, 600L)")
+                return
+            elif msg_lower == "/update books":
+                user_doc = await users_col.find_one({"user_id": sender_phone})
+                level = user_doc.get("level", "400L") if user_doc else "400L"
+                await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_BOOKS"}})
+                await send_whatsapp_cloud_msg(sender_phone, get_level_textbooks_message(level))
+                return
+
+        # Handle onboarding state machine
+        is_onboarding = await handle_onboarding(sender_phone, user_msg)
+        if is_onboarding:
+            return
+
         intent = classify_intent(user_msg)
         
         if intent == "GREETING":
@@ -242,7 +379,19 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
 
         formatted_context = "\n\n".join(context_blocks)
         user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{user_msg}"
+        
+        # Build dynamic user context
+        user_context_str = ""
+        if users_col is not None:
+            user_doc = await users_col.find_one({"user_id": sender_phone})
+            if user_doc:
+                name = user_doc.get("name", "Student")
+                level = user_doc.get("level", "Unknown Level")
+                books = user_doc.get("preferred_books", "Unknown")
+                user_context_str = f"The student asking this question is {name}, a {level} medical student. Their preferred textbooks are: {books}. Tailor your explanation to their level.\n\n"
+
         prompt_to_use = SYSTEM_QUIZ_PROMPT if intent == "QUIZ" else SYSTEM_MEDICAL_PROMPT
+        prompt_to_use = prompt_to_use.replace("{user_context}", user_context_str)
 
         # Chat memory
         chat_history = []
@@ -368,7 +517,19 @@ async def chat_endpoint(req: QueryRequest):
         
         formatted_context = "\n\n".join(context_blocks)
         user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{user_msg}"
+        
+        # Build dynamic user context
+        user_context_str = ""
+        if users_col is not None:
+            user_doc = await users_col.find_one({"user_id": req.user_id})
+            if user_doc:
+                name = user_doc.get("name", "Student")
+                level = user_doc.get("level", "Unknown Level")
+                books = user_doc.get("preferred_books", "Unknown")
+                user_context_str = f"The student asking this question is {name}, a {level} medical student. Their preferred textbooks are: {books}. Tailor your explanation to their level.\n\n"
+
         prompt_to_use = SYSTEM_QUIZ_PROMPT if intent == "QUIZ" else SYSTEM_MEDICAL_PROMPT
+        prompt_to_use = prompt_to_use.replace("{user_context}", user_context_str)
         
         chat_history = []
         if chat_history_col is not None:
