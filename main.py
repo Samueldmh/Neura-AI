@@ -53,6 +53,17 @@ print(f"PHONE_NUMBER_ID: {PHONE_NUMBER_ID}")
 embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
+# Ensure payload index exists for book_title filtering
+try:
+    qdrant.create_payload_index(
+        collection_name=COLLECTION_NAME,
+        field_name="book_title",
+        field_schema=models.PayloadSchemaType.KEYWORD
+    )
+    print("✅ Created/verified Qdrant payload index for 'book_title'")
+except Exception as idx_err:
+    print(f"ℹ️ Payload index info: {idx_err}")
+
 print(f"MONGO_URI Present: {bool(MONGO_URI)}")
 mongo_client = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
 db = mongo_client.neura_db if mongo_client else None
@@ -297,33 +308,14 @@ def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None)
                     return res
             except Exception as e:
                 print(f"⚠️ Filtered query_points failed: {e}")
-                
-            try:
-                res = qdrant.search(
-                    collection_name=COLLECTION_NAME,
-                    query_vector=query_vector,
-                    query_filter=query_filter,
-                    limit=limit
-                )
-                if res:
-                    return res
-            except Exception as e:
-                print(f"⚠️ Filtered search failed: {e}")
 
         # 2. Fallback to unfiltered search if filtered search returned empty or failed
         print("⚠️ Filtered search returned no results or filter failed. Falling back to unfiltered search...")
-        try:
-            return qdrant.query_points(
-                collection_name=COLLECTION_NAME,
-                query=query_vector,
-                limit=limit
-            ).points
-        except Exception:
-            return qdrant.search(
-                collection_name=COLLECTION_NAME,
-                query_vector=query_vector,
-                limit=limit
-            )
+        return qdrant.query_points(
+            collection_name=COLLECTION_NAME,
+            query=query_vector,
+            limit=limit
+        ).points
     except Exception as outer_e:
         print(f"❌ Error in search_qdrant: {outer_e}")
         return []
