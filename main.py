@@ -59,7 +59,8 @@ RULES:
 3. Keep the conversation natural and engaging. You remember previous messages in the chat history.
 4. Structure your detailed medical answers using clear WhatsApp Markdown. Use sections like 📖 IN-DEPTH EXPLANATION, 💡 KEY CLINICAL PEARLS, 📚 CITATION, and 🎯 STUDY HOOK to make it comprehensive yet readable. (If just simplifying a previous answer, you can skip the rigid structure and just be conversational).
 5. If they ask a NEW specific medical question that is completely absent from context, politely say you don't have that in your current textbooks and suggest they rephrase or try a related keyword. NEVER make up answers from "general medical knowledge". You ONLY know what is in the provided Textbook Context and chat history. DO NOT hallucinate under any circumstances.
-6. If the user asks general questions about your capabilities (e.g., "what can you do", "who are you", "help"), gracefully introduce yourself. Explain that you can answer medical questions based on textbooks, generate practice MCQs, and simplify complex concepts. Ignore the retrieved textbook context for these meta-questions.
+6. If the user's preferred textbooks are not in your retrieved context, just answer using the textbooks that ARE available in the context gracefully without complaining.
+7. If the user asks general questions about your capabilities (e.g., "what can you do", "who are you", "help"), gracefully introduce yourself. Explain that you can answer medical questions based on textbooks, generate practice MCQs, and simplify complex concepts. Ignore the retrieved textbook context for these meta-questions.
 """
 
 SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate 3 high-yield MBBS exam-style Multiple Choice Questions (MCQs).
@@ -208,14 +209,15 @@ def multi_search_qdrant(search_terms: list) -> list:
 
 async def extract_name_with_llm(user_msg: str) -> str:
     prompt = """Extract the person's first name from this message. 
-If they just say a greeting, or "why do you need it", or there is clearly no name, return NONE.
+If they just say a greeting, or "why do you need it", or if it is random gibberish (e.g., "asdfgh"), or if there is clearly no name, return NONE.
 Return ONLY the name, nothing else.
 Examples:
 - "I am Samuel" -> Samuel
 - "Samuel" -> Samuel
 - "Hi my name is John" -> John
 - "Why do you want to know?" -> NONE
-- "Hello" -> NONE"""
+- "Hello" -> NONE
+- "dhjdsf" -> NONE"""
     try:
         res = await call_openrouter_llm(prompt, user_msg)
         return res.strip() if res.strip().upper() != "NONE" else None
@@ -259,7 +261,12 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             "user_id": sender_phone,
             "onboarding_step": "ASK_NAME"
         })
-        await send_whatsapp_cloud_msg(sender_phone, "Welcome to NEURA AI! 🧠 To give you the best study experience, what is your name?")
+        welcome_msg = (
+            "Hello! 👋 I'm *NEURA AI*, your elite medical study assistant.\n\n"
+            "I can answer medical questions directly from your textbooks with exact citations, or generate practice MCQs for your MBBS exams!\n\n"
+            "To give you the best personalized study experience, what is your first name?"
+        )
+        await send_whatsapp_cloud_msg(sender_phone, welcome_msg)
         return True
         
     step = user_doc.get("onboarding_step")
@@ -273,7 +280,7 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
     if step == "ASK_NAME":
         extracted_name = await extract_name_with_llm(user_msg)
         if not extracted_name:
-            await send_whatsapp_cloud_msg(sender_phone, "I didn't quite catch that! Please just type your first name so I know what to call you. 😊")
+            await send_whatsapp_cloud_msg(sender_phone, "I didn't quite catch that, or it didn't look like a real name! Please type your real first name so I know what to call you. 😊")
             return True
             
         await users_col.update_one({"user_id": sender_phone}, {"$set": {"name": extracted_name, "onboarding_step": "ASK_LEVEL"}})
@@ -317,7 +324,13 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
         # Check for profile commands first
         msg_lower = user_msg.strip().lower()
         if msg_lower.startswith("/") and users_col is not None:
-            if msg_lower == "/profile":
+            if msg_lower == "/reset":
+                await users_col.delete_one({"user_id": sender_phone})
+                if chat_history_col is not None:
+                    await chat_history_col.delete_one({"user_id": sender_phone})
+                await send_whatsapp_cloud_msg(sender_phone, "✅ Your profile and chat history have been completely wiped. You are now a new user. Send any message to start onboarding!")
+                return
+            elif msg_lower == "/profile":
                 user_doc = await users_col.find_one({"user_id": sender_phone})
                 if user_doc:
                     name = user_doc.get("name", "Student")
