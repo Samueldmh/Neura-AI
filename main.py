@@ -430,6 +430,20 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
     level = user_doc.get("level", "")
     
     if step == "COMPLETED":
+        # Block users from reusing old menu selections or level buttons after completing setup
+        all_book_options = [b for books in AVAILABLE_BOOKS.values() for b in books] + ["Skip (None available yet)"]
+        is_menu_tap = user_msg in ["200L", "300L", "400L", "500L", "600L"] or user_msg in all_book_options or user_msg in ["START_ONBOARDING", "🚀 Start Setup"]
+        
+        if is_menu_tap:
+            await send_whatsapp_cloud_msg(
+                sender_phone,
+                "⚠️ Your profile is already completed!\n\n"
+                "To change your level or textbooks, please use the profile commands:\n"
+                "• Type */update level* to change your level\n"
+                "• Type */update books* to change your textbooks\n"
+                "• Type */reset* to start over"
+            )
+            return True # Swallow message so RAG doesn't search for "400L"
         return False
         
     # 2. Extract Name
