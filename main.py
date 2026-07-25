@@ -254,8 +254,29 @@ SEARCH_STOP_WORDS = {
     "meaning", "meant", "using", "used", "work", "works", "working", "way",
     "thing", "things", "something", "anything", "everything", "nothing",
     "talk", "talking", "teach", "show", "break", "down", "breakdown",
-    "hey", "hi", "hello", "okay", "ok", "sure", "yes", "no", "thanks", "thank",
 }
+
+def get_explicit_book_override(user_msg: str, preferred_books: list) -> list:
+    """If the user explicitly mentions a subject or book name in their prompt, restrict the search to that book."""
+    msg_lower = user_msg.lower()
+    override_books = []
+    for b in preferred_books or []:
+        if not b or b.startswith("Skip"): continue
+        b_lower = b.lower()
+        if "pharmacology" in msg_lower and "pharmacology" in b_lower:
+            override_books.append(b)
+        elif "pathology" in msg_lower and ("pathology" in b_lower or "robbins" in b_lower):
+            override_books.append(b)
+        elif "anatomy" in msg_lower and "anatomy" in b_lower:
+            override_books.append(b)
+        elif "haematology" in msg_lower and ("haematology" in b_lower or "hoffbrand" in b_lower):
+            override_books.append(b)
+        elif "lippincott" in msg_lower and "lippincott" in b_lower:
+            override_books.append(b)
+        elif "robbins" in msg_lower and "robbins" in b_lower:
+            override_books.append(b)
+            
+    return override_books if override_books else preferred_books
 
 def extract_medical_terms(user_msg: str) -> list:
     """Instantly extract medical keywords by stripping filler words and splitting on conjunctions.
@@ -585,12 +606,15 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
         # Step 1: Extract medical terms from the user's message
         medical_terms = extract_medical_terms(user_msg)
         
-        # Step 2: Multi-search Qdrant with extracted terms + original query, filtered by preferred books
+        # Step 1.5: Check for explicit book overrides (e.g. if user says "Use pharmacology")
+        active_books = get_explicit_book_override(user_msg, preferred_books_list)
+        
+        # Step 2: Multi-search Qdrant with extracted terms + original query, filtered by active books
         if medical_terms:
-            search_res = multi_search_qdrant(medical_terms, preferred_books=preferred_books_list)
+            search_res = multi_search_qdrant(medical_terms, preferred_books=active_books)
         else:
             # No medical terms found — search with raw query as fallback
-            search_res = search_qdrant(user_msg, limit=4, preferred_books=preferred_books_list)
+            search_res = search_qdrant(user_msg, limit=4, preferred_books=active_books)
 
         if not search_res:
             await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question in your selected textbooks. Try rephrasing or updating your preferred books using /update books!")
