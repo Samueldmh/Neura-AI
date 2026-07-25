@@ -86,7 +86,7 @@ RULES:
 3. Keep the conversation natural and engaging. You remember previous messages in the chat history.
 4. Structure your detailed medical answers using clear WhatsApp Markdown. If the retrieved context comes from multiple textbooks, structure your answer to separate the information by subject perspective (e.g. ### Pathology Perspective (Robbins), ### Pharmacology Perspective (Lippincott)). If a textbook has no relevant information for the question, skip that perspective. DO NOT mix the perspectives together into a single explanation.
 5. Include 📖 IN-DEPTH EXPLANATION, 💡 KEY CLINICAL PEARLS, 📚 CITATION, and 🎯 STUDY HOOK to make it comprehensive yet readable.
-6. If they ask a NEW specific medical question that is completely absent from context, politely say you don't have that in your current textbooks. NEVER make up answers from "general medical knowledge". DO NOT hallucinate.
+6. If the retrieved context does not contain the answer to their question, you MUST say "I'm sorry, but this information is not covered in your selected textbooks." You are strictly forbidden from using outside general medical knowledge to answer questions. DO NOT hallucinate.
 7. If the user's preferred textbooks are not in your retrieved context, just answer using the textbooks that ARE available gracefully without complaining.
 """
 
@@ -319,7 +319,7 @@ def extract_book_keywords(preferred_books: list) -> list:
             keywords.extend(words)
     return keywords
 
-def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None) -> list:
+def search_qdrant(query_text: str, limit: int = 12, preferred_books: list = None) -> list:
     """Search Qdrant with Python-side partial keyword filtering for maximum reliability"""
     try:
         query_vector = [e.tolist() for e in embedder.embed([query_text])][0]
@@ -381,15 +381,15 @@ def multi_search_qdrant(search_terms: list, preferred_books: list = None) -> lis
     
     # Search for each extracted medical term individually
     for term in search_terms:
-        results = search_qdrant(term, limit=4, preferred_books=preferred_books)
+        results = search_qdrant(term, limit=12, preferred_books=preferred_books)
         for point in results:
             text_key = point.payload.get("text", "")[:100]
             if text_key not in seen_texts:
                 seen_texts.add(text_key)
                 all_results.append(point)
     
-    # Cap at 8 results max to avoid overwhelming the LLM context
-    all_results = all_results[:8]
+    # Cap at 24 results max to avoid overwhelming the LLM context
+    all_results = all_results[:24]
     print(f"📚 Multi-search returned {len(all_results)} unique chunks from {len(search_terms)} keyword(s) with filter {preferred_books}")
     return all_results
 
@@ -637,7 +637,7 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
             search_res = multi_search_qdrant(medical_terms, preferred_books=active_books)
         else:
             # No medical terms found — search with raw query as fallback
-            search_res = search_qdrant(user_msg, limit=4, preferred_books=active_books)
+            search_res = search_qdrant(user_msg, limit=12, preferred_books=active_books)
 
         if not search_res:
             await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question in your selected textbooks. Try rephrasing or updating your preferred books using /update books!")
