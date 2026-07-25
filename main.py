@@ -189,6 +189,43 @@ async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta Graph API List Send Status {res.status_code}: {res.text}")
 
+async def send_whatsapp_interactive_button(to_number: str, body_text: str, buttons: list):
+    """Sends an Interactive Button Message (max 3 buttons)"""
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
+        "Content-Type": "application/json"
+    }
+    
+    action_buttons = []
+    for btn in buttons[:3]:
+        action_buttons.append({
+            "type": "reply",
+            "reply": {
+                "id": btn.get("id", btn.get("title"))[:256],
+                "title": btn.get("title")[:20]
+            }
+        })
+        
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {
+                "text": body_text
+            },
+            "action": {
+                "buttons": action_buttons
+            }
+        }
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        res = await client.post(url, headers=headers, json=payload)
+        print(f"Meta Graph API Button Send Status {res.status_code}: {res.text}")
+
 # Filler words to strip for search (NOT removed from the AI prompt — only from Qdrant search)
 SEARCH_STOP_WORDS = {
     "explain", "what", "is", "are", "the", "of", "in", "simple", "words", "terms",
@@ -230,34 +267,66 @@ def extract_medical_terms(user_msg: str) -> list:
     return terms
 
 def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None) -> list:
-    """Search Qdrant with a single query string, strictly filtering by preferred_books"""
-    query_vector = [e.tolist() for e in embedder.embed([query_text])][0]
-    
-    query_filter = None
-    if preferred_books:
-        query_filter = models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="book_title",
-                    match=models.MatchAny(any=preferred_books)
-                )
-            ]
-        )
-        
+    """Search Qdrant with a single query string, strictly filtering by preferred_books with fallback"""
     try:
-        return qdrant.query_points(
-            collection_name=COLLECTION_NAME,
-            query=query_vector,
-            query_filter=query_filter,
-            limit=limit
-        ).points
-    except Exception:
-        return qdrant.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=query_vector,
-            query_filter=query_filter,
-            limit=limit
-        )
+        query_vector = [e.tolist() for e in embedder.embed([query_text])][0]
+        
+        valid_books = [b for b in (preferred_books or []) if b and isinstance(b, str) and not b.startswith("Skip")]
+        
+        query_filter = None
+        if valid_books:
+            if len(valid_books) == 1:
+                query_filter = models.Filter(
+                    must=[models.FieldCondition(key="book_title", match=models.MatchValue(value=valid_books[0]))]
+                )
+            else:
+                query_filter = models.Filter(
+                    must=[models.FieldCondition(key="book_title", match=models.MatchAny(any=valid_books))]
+                )
+
+        # 1. Try filtered search first
+        if query_filter:
+            try:
+                res = qdrant.query_points(
+                    collection_name=COLLECTION_NAME,
+                    query=query_vector,
+                    query_filter=query_filter,
+                    limit=limit
+                ).points
+                if res:
+                    return res
+            except Exception as e:
+                print(f"⚠️ Filtered query_points failed: {e}")
+                
+            try:
+                res = qdrant.search(
+                    collection_name=COLLECTION_NAME,
+                    query_vector=query_vector,
+                    query_filter=query_filter,
+                    limit=limit
+                )
+                if res:
+                    return res
+            except Exception as e:
+                print(f"⚠️ Filtered search failed: {e}")
+
+        # 2. Fallback to unfiltered search if filtered search returned empty or failed
+        print("⚠️ Filtered search returned no results or filter failed. Falling back to unfiltered search...")
+        try:
+            return qdrant.query_points(
+                collection_name=COLLECTION_NAME,
+                query=query_vector,
+                limit=limit
+            ).points
+        except Exception:
+            return qdrant.search(
+                collection_name=COLLECTION_NAME,
+                query_vector=query_vector,
+                limit=limit
+            )
+    except Exception as outer_e:
+        print(f"❌ Error in search_qdrant: {outer_e}")
+        return []
 
 def multi_search_qdrant(search_terms: list, preferred_books: list = None) -> list:
     """Run separate Qdrant searches for each extracted medical keyword, then deduplicate"""
@@ -450,9 +519,11 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                 await users_col.delete_one({"user_id": sender_phone})
                 if chat_history_col is not None:
                     await chat_history_col.delete_one({"user_id": sender_phone})
-                await send_whatsapp_cloud_msg(sender_phone, "✅ Your profile and chat history have been completely wiped.")
-                # Immediately trigger the first onboarding step!
-                await handle_onboarding(sender_phone, "")
+                await send_whatsapp_interactive_button(
+                    sender_phone,
+                    "✅ Your profile and chat history have been completely reset!\n\nTap the button below to set up your profile:",
+                    [{"id": "START_ONBOARDING", "title": "🚀 Start Setup"}]
+                )
                 return
             elif msg_lower == "/profile":
                 books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
