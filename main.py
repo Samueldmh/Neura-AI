@@ -277,45 +277,55 @@ def extract_medical_terms(user_msg: str) -> list:
     print(f"🔍 Extracted search keywords: {terms} (from: '{user_msg}')")
     return terms
 
+def extract_book_keywords(preferred_books: list) -> list:
+    """Extract core textbook keywords for matching (e.g., 'lippincott', 'robbins', 'moore', 'hoffbrand')"""
+    keywords = []
+    for b in preferred_books or []:
+        if not b or not isinstance(b, str) or b.startswith("Skip"):
+            continue
+        b_lower = b.lower()
+        if "lippincott" in b_lower:
+            keywords.append("lippincott")
+        elif "robbins" in b_lower:
+            keywords.append("robbins")
+        elif "moore" in b_lower:
+            keywords.append("moore")
+        elif "hoffbrand" in b_lower or "haematology" in b_lower:
+            keywords.append("hoffbrand")
+            keywords.append("haematology")
+        else:
+            words = [w.lower() for w in re.sub(r'[^\w\s]', '', b).split() if len(w) > 3]
+            keywords.extend(words)
+    return keywords
+
 def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None) -> list:
-    """Search Qdrant with a single query string, strictly filtering by preferred_books with fallback"""
+    """Search Qdrant with Python-side partial keyword filtering for maximum reliability"""
     try:
         query_vector = [e.tolist() for e in embedder.embed([query_text])][0]
         
-        valid_books = [b for b in (preferred_books or []) if b and isinstance(b, str) and not b.startswith("Skip")]
-        
-        query_filter = None
-        if valid_books:
-            if len(valid_books) == 1:
-                query_filter = models.Filter(
-                    must=[models.FieldCondition(key="book_title", match=models.MatchValue(value=valid_books[0]))]
-                )
-            else:
-                query_filter = models.Filter(
-                    must=[models.FieldCondition(key="book_title", match=models.MatchAny(any=valid_books))]
-                )
-
-        # 1. Try filtered search first
-        if query_filter:
-            try:
-                res = qdrant.query_points(
-                    collection_name=COLLECTION_NAME,
-                    query=query_vector,
-                    query_filter=query_filter,
-                    limit=limit
-                ).points
-                if res:
-                    return res
-            except Exception as e:
-                print(f"⚠️ Filtered query_points failed: {e}")
-
-        # 2. Fallback to unfiltered search if filtered search returned empty or failed
-        print("⚠️ Filtered search returned no results or filter failed. Falling back to unfiltered search...")
-        return qdrant.query_points(
+        # Retrieve top 12 chunks from Qdrant
+        raw_points = qdrant.query_points(
             collection_name=COLLECTION_NAME,
             query=query_vector,
-            limit=limit
+            limit=12
         ).points
+        
+        keywords = extract_book_keywords(preferred_books)
+        if keywords:
+            # Filter points in Python based on whether book_title contains any keyword
+            filtered_points = []
+            for pt in raw_points:
+                title = pt.payload.get("book_title", "").lower()
+                if any(kw in title for kw in keywords):
+                    filtered_points.append(pt)
+            
+            if filtered_points:
+                print(f"🎯 Python-side book filter matched {len(filtered_points)} chunk(s) for keywords {keywords}")
+                return filtered_points[:limit]
+            else:
+                print(f"⚠️ Preferred book keywords {keywords} not found in retrieved chunks. Returning top chunks.")
+                
+        return raw_points[:limit]
     except Exception as outer_e:
         print(f"❌ Error in search_qdrant: {outer_e}")
         return []
