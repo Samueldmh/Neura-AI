@@ -450,7 +450,9 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                 await users_col.delete_one({"user_id": sender_phone})
                 if chat_history_col is not None:
                     await chat_history_col.delete_one({"user_id": sender_phone})
-                await send_whatsapp_cloud_msg(sender_phone, "✅ Your profile and chat history have been completely wiped. You are now a new user. Send any message to start onboarding!")
+                await send_whatsapp_cloud_msg(sender_phone, "✅ Your profile and chat history have been completely wiped.")
+                # Immediately trigger the first onboarding step!
+                await handle_onboarding(sender_phone, "")
                 return
             elif msg_lower == "/profile":
                 books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
