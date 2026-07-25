@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import traceback
 import httpx
@@ -129,32 +130,45 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta Graph API Send Status {res.status_code}: {res.text}")
 
-async def extract_medical_terms(user_msg: str) -> list:
-    """Use LLM to extract core medical terms from a conversational query"""
-    extraction_prompt = """Extract the core medical terms, conditions, drugs, or concepts from this student's question.
-Return ONLY the medical terms, one per line. No explanations, no numbering.
-If the message contains NO medical terms (e.g. greetings, general questions), return the word NONE.
+# Filler words to strip for search (NOT removed from the AI prompt — only from Qdrant search)
+SEARCH_STOP_WORDS = {
+    "explain", "what", "is", "are", "the", "of", "in", "simple", "words", "terms",
+    "tell", "me", "about", "can", "you", "how", "does", "do", "like", "a", "baby",
+    "use", "analogies", "give", "an", "example", "simplify", "this", "that", "for",
+    "with", "to", "it", "please", "help", "understand", "very", "briefly", "detail",
+    "detailed", "describe", "define", "compare", "contrast", "difference", "between",
+    "why", "when", "where", "which", "who", "whom", "would", "could", "should",
+    "i", "my", "we", "our", "they", "their", "its", "has", "have", "had", "was",
+    "were", "be", "been", "being", "am", "will", "shall", "may", "might", "must",
+    "need", "want", "know", "think", "say", "said", "get", "got", "make", "made",
+    "go", "going", "come", "take", "see", "look", "also", "just", "more", "some",
+    "any", "all", "each", "every", "both", "few", "many", "much", "no", "not",
+    "only", "own", "same", "so", "than", "too", "very", "really", "mean", "means",
+    "meaning", "meant", "using", "used", "work", "works", "working", "way",
+    "thing", "things", "something", "anything", "everything", "nothing",
+    "talk", "talking", "teach", "show", "break", "down", "breakdown",
+    "hey", "hi", "hello", "okay", "ok", "sure", "yes", "no", "thanks", "thank",
+}
 
-Examples:
-- "Explain TRALI and TRACO in simple words" → TRALI\nTRACO
-- "What is Evans syndrome" → Evans syndrome
-- "Tell me about the side effects of haloperidol" → haloperidol side effects
-- "What can you do" → NONE
-- "Simplify that for me" → NONE"""
+def extract_medical_terms(user_msg: str) -> list:
+    """Instantly extract medical keywords by stripping filler words and splitting on conjunctions.
+    This is used ONLY for Qdrant search — the original message is still sent to the AI."""
+    # Split on conjunctions to handle multi-topic queries ("TRALI and TRACO")
+    parts = re.split(r'\b(?:and|or|vs|versus|,)\b', user_msg, flags=re.IGNORECASE)
     
-    try:
-        result = await call_openrouter_llm(extraction_prompt, user_msg)
-        result = result.strip()
-        
-        if result.upper() == "NONE" or not result:
-            return []
-        
-        terms = [t.strip() for t in result.split("\n") if t.strip()]
-        print(f"🔍 Extracted medical terms: {terms}")
-        return terms
-    except Exception as e:
-        print(f"⚠️ Term extraction failed, falling back to raw query: {e}")
-        return [user_msg]
+    terms = []
+    for part in parts:
+        # Remove punctuation except hyphens (for terms like "beta-blocker")
+        cleaned = re.sub(r'[^\w\s-]', '', part)
+        words = cleaned.strip().split()
+        # Keep only non-stop words
+        medical_words = [w for w in words if w.lower() not in SEARCH_STOP_WORDS]
+        if medical_words:
+            term = " ".join(medical_words)
+            terms.append(term)
+    
+    print(f"🔍 Extracted search keywords: {terms} (from: '{user_msg}')")
+    return terms
 
 def search_qdrant(query_text: str, limit: int = 4) -> list:
     """Search Qdrant with a single query string, returns list of points"""
@@ -207,7 +221,7 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
             return
 
         # Step 1: Extract medical terms from the user's message
-        medical_terms = await extract_medical_terms(user_msg)
+        medical_terms = extract_medical_terms(user_msg)
         
         # Step 2: Multi-search Qdrant with extracted terms + original query
         if medical_terms:
@@ -333,7 +347,7 @@ async def chat_endpoint(req: QueryRequest):
             }
         
         # Step 1: Extract medical terms from the user's message
-        medical_terms = await extract_medical_terms(user_msg)
+        medical_terms = extract_medical_terms(user_msg)
         
         # Step 2: Multi-search Qdrant with extracted terms + original query
         if medical_terms:
