@@ -129,6 +129,76 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta Graph API Send Status {res.status_code}: {res.text}")
 
+async def extract_medical_terms(user_msg: str) -> list:
+    """Use LLM to extract core medical terms from a conversational query"""
+    extraction_prompt = """Extract the core medical terms, conditions, drugs, or concepts from this student's question.
+Return ONLY the medical terms, one per line. No explanations, no numbering.
+If the message contains NO medical terms (e.g. greetings, general questions), return the word NONE.
+
+Examples:
+- "Explain TRALI and TRACO in simple words" → TRALI\nTRACO
+- "What is Evans syndrome" → Evans syndrome
+- "Tell me about the side effects of haloperidol" → haloperidol side effects
+- "What can you do" → NONE
+- "Simplify that for me" → NONE"""
+    
+    try:
+        result = await call_openrouter_llm(extraction_prompt, user_msg)
+        result = result.strip()
+        
+        if result.upper() == "NONE" or not result:
+            return []
+        
+        terms = [t.strip() for t in result.split("\n") if t.strip()]
+        print(f"🔍 Extracted medical terms: {terms}")
+        return terms
+    except Exception as e:
+        print(f"⚠️ Term extraction failed, falling back to raw query: {e}")
+        return [user_msg]
+
+def search_qdrant(query_text: str, limit: int = 4) -> list:
+    """Search Qdrant with a single query string, returns list of points"""
+    query_vector = [e.tolist() for e in embedder.embed([query_text])][0]
+    try:
+        return qdrant.query_points(
+            collection_name=COLLECTION_NAME,
+            query=query_vector,
+            limit=limit
+        ).points
+    except Exception:
+        return qdrant.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_vector,
+            limit=limit
+        )
+
+def multi_search_qdrant(search_terms: list, original_query: str) -> list:
+    """Run separate Qdrant searches for each medical term + original query, then deduplicate"""
+    seen_texts = set()
+    all_results = []
+    
+    # Search for each extracted medical term
+    for term in search_terms:
+        results = search_qdrant(term, limit=3)
+        for point in results:
+            text_key = point.payload.get("text", "")[:100]
+            if text_key not in seen_texts:
+                seen_texts.add(text_key)
+                all_results.append(point)
+    
+    # Also search with the original full query as fallback
+    fallback_results = search_qdrant(original_query, limit=3)
+    for point in fallback_results:
+        text_key = point.payload.get("text", "")[:100]
+        if text_key not in seen_texts:
+            seen_texts.add(text_key)
+            all_results.append(point)
+    
+    # Cap at 8 results max to avoid overwhelming the LLM context
+    all_results = all_results[:8]
+    print(f"📚 Multi-search returned {len(all_results)} unique chunks")
+    return all_results
+
 async def process_whatsapp_message(sender_phone: str, user_msg: str):
     """Background task to run RAG & OpenRouter LLM and send WhatsApp reply"""
     try:
@@ -144,20 +214,15 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
             await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
             return
 
-        # Embed & query Qdrant
-        query_vector = [e.tolist() for e in embedder.embed([user_msg])][0]
-        try:
-            search_res = qdrant.query_points(
-                collection_name=COLLECTION_NAME,
-                query=query_vector,
-                limit=4
-            ).points
-        except Exception:
-            search_res = qdrant.search(
-                collection_name=COLLECTION_NAME,
-                query_vector=query_vector,
-                limit=4
-            )
+        # Step 1: Extract medical terms from the user's message
+        medical_terms = await extract_medical_terms(user_msg)
+        
+        # Step 2: Multi-search Qdrant with extracted terms + original query
+        if medical_terms:
+            search_res = multi_search_qdrant(medical_terms, user_msg)
+        else:
+            # No medical terms found — search with raw query as fallback
+            search_res = search_qdrant(user_msg, limit=4)
 
         if not search_res:
             await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question. Please try asking a specific medical topic!")
@@ -275,19 +340,14 @@ async def chat_endpoint(req: QueryRequest):
                 "response": "Hello! 👋 I'm *NEURA AI*, your medical study assistant.\n\nI can answer medical questions directly from your textbooks (*Lippincott Pharmacology*, *Hoffbrand's Haematology*, etc.) with exact citations, or generate practice MCQs for your MBBS exams!\n\nWhat concept are we studying today?"
             }
         
-        query_vector = [e.tolist() for e in embedder.embed([user_msg])][0]
-        try:
-            search_res = qdrant.query_points(
-                collection_name=COLLECTION_NAME,
-                query=query_vector,
-                limit=4
-            ).points
-        except Exception:
-            search_res = qdrant.search(
-                collection_name=COLLECTION_NAME,
-                query_vector=query_vector,
-                limit=4
-            )
+        # Step 1: Extract medical terms from the user's message
+        medical_terms = await extract_medical_terms(user_msg)
+        
+        # Step 2: Multi-search Qdrant with extracted terms + original query
+        if medical_terms:
+            search_res = multi_search_qdrant(medical_terms, user_msg)
+        else:
+            search_res = search_qdrant(user_msg, limit=4)
         
         if not search_res:
             return {
