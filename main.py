@@ -303,11 +303,11 @@ def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None)
     try:
         query_vector = [e.tolist() for e in embedder.embed([query_text])][0]
         
-        # Retrieve top 12 chunks from Qdrant
+        # Retrieve top 150 chunks from Qdrant to ensure we don't miss preferred books
         raw_points = qdrant.query_points(
             collection_name=COLLECTION_NAME,
             query=query_vector,
-            limit=12
+            limit=150
         ).points
         
         keywords = extract_book_keywords(preferred_books)
