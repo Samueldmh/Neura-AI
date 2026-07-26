@@ -655,7 +655,10 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
         context_blocks = []
         for idx, point in enumerate(search_res, 1):
             p = point.payload
-            block = f"[Context {idx} | Book: {p['book_title']}, Page {p['page_number']}]\n{p['text']}"
+            page_str = p.get('page_number') or p.get('chunk_index', 'N/A')
+            book_str = p.get('book_title', 'Textbook')
+            text_str = p.get('text', '')
+            block = f"[Context {idx} | Book: {book_str}, Page/Chunk: {page_str}]\n{text_str}"
             context_blocks.append(block)
 
         formatted_context = "\n\n".join(context_blocks)
