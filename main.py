@@ -691,8 +691,17 @@ async def send_quiz_question(sender_phone: str, quiz_state: dict):
 
 async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: dict):
     """Processes the student's selected option (A, B, C, or D), provides textbook rationale, and advances to next question"""
-    active_quiz = user_doc.get("active_quiz")
+    q_match = re.search(r'Q(\d+)_([A-D])', selected_option.upper())
+    active_quiz = user_doc.get("active_quiz") if user_doc else None
+
+    # If student taps an MCQ option dropdown after the quiz is finished/cleared
     if not active_quiz:
+        if q_match:
+            await send_whatsapp_cloud_msg(
+                sender_phone,
+                "⚠️ This quiz session has already ended! To start a new practice quiz, tap '📝 Generate MCQs' under any medical answer!"
+            )
+            return True
         return False
 
     questions = active_quiz.get("questions", [])
@@ -700,9 +709,14 @@ async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: 
     score = active_quiz.get("score", 0)
 
     if idx >= len(questions):
+        if q_match:
+            await send_whatsapp_cloud_msg(
+                sender_phone,
+                "⚠️ This quiz session has already ended! To start a new practice quiz, tap '📝 Generate MCQs' under any medical answer!"
+            )
+            return True
         return False
 
-    q_match = re.search(r'Q(\d+)_([A-D])', selected_option.upper())
     if q_match:
         tapped_q_num = int(q_match.group(1))
         choice = q_match.group(2)
