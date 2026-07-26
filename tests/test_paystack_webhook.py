@@ -37,8 +37,14 @@ class MockUsersCol:
                 uid = doc["user_id"]
         
         if not uid:
-            return
-            
+            return type("UpdateResult", (), {"matched_count": 0, "modified_count": 0, "upserted_id": None})()
+
+        ne_ref = query.get("transaction_history.reference", {}).get("$ne")
+        if uid in self.data and ne_ref:
+            tx_list = self.data[uid].get("transaction_history", [])
+            if any(tx.get("reference") == ne_ref or tx.get("details", {}).get("reference") == ne_ref for tx in tx_list):
+                return type("UpdateResult", (), {"matched_count": 0, "modified_count": 0, "upserted_id": None})()
+
         if uid not in self.data:
             if upsert:
                 self.data[uid] = {
@@ -47,8 +53,11 @@ class MockUsersCol:
                     "total_spent_ngn": 0.0,
                     "transaction_history": []
                 }
+                upserted = True
             else:
-                return
+                return type("UpdateResult", (), {"matched_count": 0, "modified_count": 0, "upserted_id": None})()
+        else:
+            upserted = False
 
         doc = self.data[uid]
         
@@ -69,6 +78,10 @@ class MockUsersCol:
         if "$unset" in update_cmd:
             for k in update_cmd["$unset"]:
                 doc.pop(k, None)
+
+        if upserted:
+            return type("UpdateResult", (), {"matched_count": 0, "modified_count": 1, "upserted_id": uid})()
+        return type("UpdateResult", (), {"matched_count": 1, "modified_count": 1, "upserted_id": None})()
 
     async def delete_one(self, query):
         uid = query.get("user_id")
@@ -309,11 +322,14 @@ class TestPaystackIntegrationAndWebhook(unittest.IsolatedAsyncioTestCase):
         self.assertIn("To complete your deposit of *₦7,500.00*", msg)
         self.assertIn("paystack", msg.lower())
 
-        # Test interactive button selection TOPUP_5000 -> returns Paystack payment link
+        # Test interactive button selection TOPUP_5000 -> returns Paystack payment link without pre-crediting wallet
         await main.process_whatsapp_message(user_id, "TOPUP_5000")
         to_num, msg = self.sent_cloud_msgs[-1]
         self.assertIn("To complete your deposit of *₦5,000.00*", msg)
         self.assertIn("paystack", msg.lower())
+        # Verify wallet was NOT pre-credited upon button click (balance remains 5000.0)
+        bal_after_button = await main.get_user_wallet_balance(user_id)
+        self.assertEqual(bal_after_button, 5000.0)
 
 if __name__ == "__main__":
     unittest.main()

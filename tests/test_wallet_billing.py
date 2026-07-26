@@ -13,7 +13,7 @@ class MockUsersCol:
     async def insert_one(self, doc):
         self.data[doc["user_id"]] = doc.copy()
         
-    async def update_one(self, query, update_cmd):
+    async def update_one(self, query, update_cmd, upsert=False):
         uid = query["user_id"]
         if uid not in self.data:
             self.data[uid] = {
@@ -223,11 +223,13 @@ class TestWalletBillingEngine(unittest.IsolatedAsyncioTestCase):
             "transaction_history": []
         }
 
-        # Select top-up option (returns Paystack checkout link)
+        # Select top-up option (returns Paystack checkout link without pre-crediting wallet)
         await main.process_whatsapp_message(user_id, "TOPUP_5000")
         to, msg = self.sent_cloud_msgs[-1]
         self.assertIn("Paystack", msg)
         self.assertIn("₦5,000.00", msg)
+        # Balance must remain 5.0 (uncredited) until Paystack webhook fires
+        self.assertEqual(await main.get_user_wallet_balance(user_id), 5.0)
 
         # Simulate Paystack webhook payment credit
         await main.credit_user_wallet(user_id, 5000.0, "Paystack Deposit (ref_test)")

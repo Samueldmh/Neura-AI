@@ -13,7 +13,7 @@ class MockUsersCol:
     async def insert_one(self, doc):
         self.data[doc["user_id"]] = doc.copy()
         
-    async def update_one(self, query, update_cmd):
+    async def update_one(self, query, update_cmd, upsert=False):
         uid = query["user_id"]
         if uid not in self.data:
             self.data[uid] = {
