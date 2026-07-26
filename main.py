@@ -197,10 +197,19 @@ async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_
     # WhatsApp requires list items to be under 24 chars for ID and title (usually). We will truncate safely.
     rows = []
     for opt in options[:10]: # Max 10 options per list
-        rows.append({
-            "id": opt[:200], # ID can be long
-            "title": opt[:24].strip() # Title max 24 chars and remove trailing spaces
-        })
+        if isinstance(opt, dict):
+            row_item = {
+                "id": str(opt.get("id", ""))[:200],
+                "title": str(opt.get("title", ""))[:24].strip()
+            }
+            if opt.get("description"):
+                row_item["description"] = str(opt.get("description"))[:72].strip()
+            rows.append(row_item)
+        else:
+            rows.append({
+                "id": str(opt)[:200],
+                "title": str(opt)[:24].strip()
+            })
         
     payload = {
         "messaging_product": "whatsapp",
@@ -676,10 +685,26 @@ async def send_quiz_question(sender_phone: str, quiz_state: dict):
     )
 
     options_list = [
-        f"Q{q_num}_A: {q.get('option_a')[:20]}",
-        f"Q{q_num}_B: {q.get('option_b')[:20]}",
-        f"Q{q_num}_C: {q.get('option_c')[:20]}",
-        f"Q{q_num}_D: {q.get('option_d')[:20]}"
+        {
+            "id": f"Q{q_num}_A",
+            "title": "Option A",
+            "description": q.get('option_a', '')[:72]
+        },
+        {
+            "id": f"Q{q_num}_B",
+            "title": "Option B",
+            "description": q.get('option_b', '')[:72]
+        },
+        {
+            "id": f"Q{q_num}_C",
+            "title": "Option C",
+            "description": q.get('option_c', '')[:72]
+        },
+        {
+            "id": f"Q{q_num}_D",
+            "title": "Option D",
+            "description": q.get('option_d', '')[:72]
+        }
     ]
 
     await send_whatsapp_interactive_list(
