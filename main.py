@@ -676,10 +676,10 @@ async def send_quiz_question(sender_phone: str, quiz_state: dict):
     )
 
     options_list = [
-        f"A: {q.get('option_a')[:20]}",
-        f"B: {q.get('option_b')[:20]}",
-        f"C: {q.get('option_c')[:20]}",
-        f"D: {q.get('option_d')[:20]}"
+        f"Q{q_num}_A: {q.get('option_a')[:20]}",
+        f"Q{q_num}_B: {q.get('option_b')[:20]}",
+        f"Q{q_num}_C: {q.get('option_c')[:20]}",
+        f"Q{q_num}_D: {q.get('option_d')[:20]}"
     ]
 
     await send_whatsapp_interactive_list(
@@ -695,18 +695,30 @@ async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: 
     if not active_quiz:
         return False
 
-    match = re.search(r'\b([A-D])\b', selected_option.upper())
-    if not match:
-        return False
-        
-    choice = match.group(1)
-
     questions = active_quiz.get("questions", [])
     idx = active_quiz.get("current_idx", 0)
     score = active_quiz.get("score", 0)
 
     if idx >= len(questions):
         return False
+
+    q_match = re.search(r'Q(\d+)_([A-D])', selected_option.upper())
+    if q_match:
+        tapped_q_num = int(q_match.group(1))
+        choice = q_match.group(2)
+        current_q_num = idx + 1
+        
+        if tapped_q_num != current_q_num:
+            await send_whatsapp_cloud_msg(
+                sender_phone,
+                f"⚠️ You have already answered Question {tapped_q_num}! Please select your answer for Question {current_q_num} below."
+            )
+            return True
+    else:
+        match = re.search(r'\b([A-D])\b', selected_option.upper())
+        if not match:
+            return False
+        choice = match.group(1)
 
     q = questions[idx]
     correct = q.get("correct_option", "A").upper().strip()
@@ -810,11 +822,12 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
             intent = classify_intent(user_msg)
         
         if intent == "GREETING":
+            books_formatted = "\n• ".join(preferred_books_list) if preferred_books_list else "Your selected medical textbooks"
             greeting_msg = (
-                "Hello! 👋 I'm *NEURA AI*, your medical study assistant.\n\n"
-                "I can answer medical questions directly from your textbooks (*Lippincott Pharmacology*, *Hoffbrand's Haematology*, etc.) "
-                "with exact citations, or generate practice MCQs for your MBBS exams!\n\n"
-                "What concept are we studying today?"
+                f"Welcome to *NEURA AI* — Your Personal Medical Co-Pilot! 🧠⚡\n\n"
+                f"I am engineered to transform your medical textbooks into high-yield exam insights, clinical breakdowns, and interactive MBBS practice quizzes!\n\n"
+                f"📚 *Your Active Study Library:*\n• {books_formatted}\n\n"
+                f"What medical topic, clinical case, or concept are we mastering today?"
             )
             await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
             return
