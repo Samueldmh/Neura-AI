@@ -103,6 +103,26 @@ RULES FOR MCQs:
    - For every answer, explain why the correct option is right AND why the key distractor options are wrong, citing the specific textbook title.
 """
 
+SYSTEM_INTERACTIVE_QUIZ_PROMPT = """You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate 5 rigorous, medical-school standard (MBBS / USMLE style) Multiple Choice Questions.
+
+CRITICAL INSTRUCTION: You MUST output ONLY valid JSON without any markdown formatting, code block backticks (no ```json), or outside conversational text.
+
+Output JSON structure:
+[
+  {
+    "q_num": 1,
+    "vignette": "A 55-year-old male with hypertension and BPH is prescribed prazosin...",
+    "option_a": "Alpha-1 adrenergic receptor antagonist",
+    "option_b": "Beta-1 adrenergic receptor antagonist",
+    "option_c": "ACE inhibitor",
+    "option_d": "Calcium channel blocker",
+    "correct_option": "A",
+    "explanation": "Prazosin selectively blocks alpha-1 receptors on vascular smooth muscle...",
+    "book_source": "Lippincott Illustrated Reviews: Pharmacology"
+  }
+]
+"""
+
 def classify_intent(message: str) -> str:
     msg_lower = message.strip().lower()
     
@@ -574,7 +594,149 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             await complete_onboarding(sender_phone)
         return True
         
-    return False
+async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list):
+    """Generates 5 structured MCQs as JSON and starts the 1-by-1 interactive quiz flow"""
+    context_blocks = []
+    for idx, point in enumerate(search_res[:10], 1):
+        p = point.payload
+        book_str = p.get('book_title', 'Textbook')
+        text_str = p.get('text', '')
+        context_blocks.append(f"[Chunk {idx} | Book: {book_str}]\n{text_str}")
+
+    formatted_context = "\n\n".join(context_blocks)
+    user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nTOPIC TO TEST: {topic}"
+
+    try:
+        json_raw = await call_openrouter_llm(SYSTEM_INTERACTIVE_QUIZ_PROMPT, user_prompt)
+        cleaned_json = re.sub(r'```json\s*', '', json_raw)
+        cleaned_json = re.sub(r'```\s*$', '', cleaned_json).strip()
+        
+        quiz_questions = json.loads(cleaned_json)
+        
+        if not isinstance(quiz_questions, list) or len(quiz_questions) == 0:
+            raise ValueError("LLM did not return a valid list of questions")
+
+        quiz_state = {
+            "topic": topic,
+            "questions": quiz_questions,
+            "current_idx": 0,
+            "score": 0
+        }
+        await users_col.update_one(
+            {"user_id": sender_phone},
+            {"$set": {"active_quiz": quiz_state}}
+        )
+
+        await send_quiz_question(sender_phone, quiz_state)
+
+    except Exception as e:
+        print(f"❌ Error starting interactive quiz: {e}")
+        await send_whatsapp_cloud_msg(sender_phone, "Sorry, I had trouble creating the interactive quiz questions. Please try tapping Generate MCQs again!")
+
+async def send_quiz_question(sender_phone: str, quiz_state: dict):
+    """Sends the current question with a WhatsApp Interactive List dropdown for options A, B, C, D"""
+    questions = quiz_state.get("questions", [])
+    idx = quiz_state.get("current_idx", 0)
+    total = len(questions)
+    
+    if idx >= total:
+        score = quiz_state.get("score", 0)
+        topic = quiz_state.get("topic", "Medical Quiz")
+        percentage = int((score / total) * 100) if total > 0 else 0
+        
+        result_msg = (
+            f"🎉 *QUIZ COMPLETE!*\n\n"
+            f"📌 *Topic:* {topic}\n"
+            f"📊 *Final Score:* {score}/{total} ({percentage}%)\n\n"
+        )
+        if percentage >= 80:
+            result_msg += "🌟 Outstanding performance! You have mastered this concept."
+        elif percentage >= 60:
+            result_msg += "👍 Good effort! Review the citations to sharpen your knowledge."
+        else:
+            result_msg += "📖 Keep practicing! Ask NEURA AI to explain the topic again to strengthen your core concepts."
+
+        await send_whatsapp_cloud_msg(sender_phone, result_msg)
+        await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
+        return
+
+    q = questions[idx]
+    q_num = idx + 1
+    book_source = q.get("book_source", "Textbook")
+    vignette = q.get("vignette", "")
+
+    question_text = (
+        f"🏥 *NEURA AI MBBS Exam Quiz* (Q{q_num}/{total})\n"
+        f"📚 *Source:* {book_source}\n\n"
+        f"{vignette}\n\n"
+        f"A) {q.get('option_a')}\n"
+        f"B) {q.get('option_b')}\n"
+        f"C) {q.get('option_c')}\n"
+        f"D) {q.get('option_d')}"
+    )
+
+    options_list = [
+        f"A: {q.get('option_a')[:20]}",
+        f"B: {q.get('option_b')[:20]}",
+        f"C: {q.get('option_c')[:20]}",
+        f"D: {q.get('option_d')[:20]}"
+    ]
+
+    await send_whatsapp_interactive_list(
+        sender_phone,
+        question_text,
+        "Select Option",
+        options_list
+    )
+
+async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: dict):
+    """Processes the student's selected option (A, B, C, or D), provides textbook rationale, and advances to next question"""
+    active_quiz = user_doc.get("active_quiz")
+    if not active_quiz:
+        return False
+
+    match = re.search(r'\b([A-D])\b', selected_option.upper())
+    if not match:
+        return False
+        
+    choice = match.group(1)
+
+    questions = active_quiz.get("questions", [])
+    idx = active_quiz.get("current_idx", 0)
+    score = active_quiz.get("score", 0)
+
+    if idx >= len(questions):
+        return False
+
+    q = questions[idx]
+    correct = q.get("correct_option", "A").upper().strip()
+    explanation = q.get("explanation", "")
+    book_source = q.get("book_source", "Textbook")
+
+    is_correct = (choice == correct)
+    if is_correct:
+        score += 1
+        feedback_header = f"✅ *CORRECT!* (Option {correct})"
+    else:
+        feedback_header = f"❌ *INCORRECT!* (Your Choice: {choice} | Correct Answer: Option {correct})"
+
+    feedback_msg = (
+        f"{feedback_header}\n\n"
+        f"📖 *Textbook Rationale ({book_source}):*\n{explanation}"
+    )
+
+    await send_whatsapp_cloud_msg(sender_phone, feedback_msg)
+
+    active_quiz["current_idx"] = idx + 1
+    active_quiz["score"] = score
+
+    await users_col.update_one(
+        {"user_id": sender_phone},
+        {"$set": {"active_quiz": active_quiz}}
+    )
+
+    await send_quiz_question(sender_phone, active_quiz)
+    return True
 
 async def process_whatsapp_message(sender_phone: str, user_msg: str):
     """Background task to run RAG & OpenRouter LLM and send WhatsApp reply"""
@@ -628,13 +790,20 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                     await complete_onboarding(sender_phone)
                 return
 
+        # Handle active interactive quiz answer if student is answering an MCQ
+        if user_doc and "active_quiz" in user_doc:
+            handled = await handle_quiz_answer(sender_phone, user_msg, user_doc)
+            if handled:
+                return
+
         # Handle onboarding state machine
         is_onboarding = await handle_onboarding(sender_phone, user_msg)
         if is_onboarding:
             return
 
         query_to_search = user_msg
-        if user_msg.startswith("GENERATE_QUIZ:"):
+        is_button_quiz = user_msg.startswith("GENERATE_QUIZ:")
+        if is_button_quiz:
             query_to_search = user_msg.replace("GENERATE_QUIZ:", "").strip()
             intent = "QUIZ"
         else:
@@ -658,16 +827,19 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
         
         # Step 2: Multi-search Qdrant with extracted terms + original query, filtered by active books
         if medical_terms:
-            # Add the original raw phrase to guarantee contextual matching
             if query_to_search not in medical_terms:
                 medical_terms.append(query_to_search)
             search_res = multi_search_qdrant(medical_terms, preferred_books=active_books)
         else:
-            # No medical terms found — search with raw query as fallback
             search_res = search_qdrant(query_to_search, limit=12, preferred_books=active_books)
 
         if not search_res:
             await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question in your selected textbooks. Try rephrasing or updating your preferred books using /update books!")
+            return
+
+        # If button click [ 📝 Generate MCQs ] was tapped, launch the 1-by-1 interactive quiz!
+        if is_button_quiz:
+            await start_interactive_quiz(sender_phone, query_to_search, search_res)
             return
 
         context_blocks = []
