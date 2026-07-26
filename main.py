@@ -104,7 +104,7 @@ def classify_intent(message: str) -> str:
     if msg_lower in ["hi", "hello", "hey", "good morning", "good afternoon", "good evening", "who are you", "what is neura ai"]:
         return "GREETING"
     
-    if any(k in msg_lower for k in ["mcq", "quiz", "practice question", "test me", "exam question", "questions on"]):
+    if any(k in msg_lower for k in ["mcq", "quiz", "practice question", "test me", "exam question", "questions on", "generate_quiz"]):
         return "QUIZ"
     
     return "MEDICAL"
@@ -628,7 +628,12 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
         if is_onboarding:
             return
 
-        intent = classify_intent(user_msg)
+        query_to_search = user_msg
+        if user_msg.startswith("GENERATE_QUIZ:"):
+            query_to_search = user_msg.replace("GENERATE_QUIZ:", "").strip()
+            intent = "QUIZ"
+        else:
+            intent = classify_intent(user_msg)
         
         if intent == "GREETING":
             greeting_msg = (
@@ -640,21 +645,21 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
             await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
             return
 
-        # Step 1: Extract medical terms from the user's message
-        medical_terms = extract_medical_terms(user_msg)
+        # Step 1: Extract medical terms from the query_to_search
+        medical_terms = extract_medical_terms(query_to_search)
         
         # Step 1.5: Check for explicit book overrides (e.g. if user says "Use pharmacology")
-        active_books = get_explicit_book_override(user_msg, preferred_books_list)
+        active_books = get_explicit_book_override(query_to_search, preferred_books_list)
         
         # Step 2: Multi-search Qdrant with extracted terms + original query, filtered by active books
         if medical_terms:
-            # Add the original raw phrase to guarantee contextual matching (e.g. TRALI and TRACO)
-            if user_msg not in medical_terms:
-                medical_terms.append(user_msg)
+            # Add the original raw phrase to guarantee contextual matching
+            if query_to_search not in medical_terms:
+                medical_terms.append(query_to_search)
             search_res = multi_search_qdrant(medical_terms, preferred_books=active_books)
         else:
             # No medical terms found — search with raw query as fallback
-            search_res = search_qdrant(user_msg, limit=12, preferred_books=active_books)
+            search_res = search_qdrant(query_to_search, limit=12, preferred_books=active_books)
 
         if not search_res:
             await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question in your selected textbooks. Try rephrasing or updating your preferred books using /update books!")
@@ -670,7 +675,7 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
             context_blocks.append(block)
 
         formatted_context = "\n\n".join(context_blocks)
-        user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{user_msg}"
+        user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{query_to_search}"
         
         # Build dynamic user context
         books_str = ", ".join(preferred_books_list) if preferred_books_list else "None"
@@ -690,7 +695,7 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
 
         if chat_history_col is not None:
             new_msgs = [
-                {"role": "user", "content": user_msg},
+                {"role": "user", "content": query_to_search},
                 {"role": "assistant", "content": ai_answer}
             ]
             await chat_history_col.update_one(
@@ -699,7 +704,22 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                 upsert=True
             )
 
+        # Send the detailed answer
         await send_whatsapp_cloud_msg(sender_phone, ai_answer)
+
+        # Attach interactive follow-up button for quick MCQ generation if it was a medical question
+        if intent != "QUIZ" and not user_msg.startswith("GENERATE_QUIZ"):
+            try:
+                topic_snippet = query_to_search[:50]
+                await send_whatsapp_interactive_button(
+                    sender_phone,
+                    "💡 Want to test your MBBS exam knowledge on this topic?",
+                    [
+                        {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Generate MCQs"}
+                    ]
+                )
+            except Exception as btn_err:
+                print(f"⚠️ Non-critical error sending interactive button: {btn_err}")
 
     except Exception as e:
         print(f"ERROR in process_whatsapp_message: {str(e)}")
