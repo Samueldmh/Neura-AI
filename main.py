@@ -499,11 +499,13 @@ async def complete_onboarding(sender_phone: str):
     level = user_doc.get("level", "")
     await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "COMPLETED"}})
     final_msg = (f"Awesome, {name}! Your profile is all set up for {level}. You can now start asking me medical questions! 📚\n\n"
-                 "⚙️ *Profile Commands:*\n"
+                 "⚙️ *Quick Commands:*\n"
+                 "• Type */feedback* to share quick feedback\n"
                  "• Type */profile* to view your profile\n"
                  "• Type */update name* to change your name\n"
                  "• Type */update level* to change your level\n"
-                 "• Type */update books* to change your textbooks")
+                 "• Type */update books* to change your textbooks\n\n"
+                 "💬 _Help us improve! Share 2-min anonymous beta feedback anytime: https://forms.gle/dNr7SV5EUiqiFySx5_")
     await send_whatsapp_cloud_msg(sender_phone, final_msg)
 
 async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
@@ -665,6 +667,8 @@ async def send_quiz_question(sender_phone: str, quiz_state: dict):
         else:
             result_msg += "📖 Keep practicing! Ask NEURA AI to explain the topic again to strengthen your core concepts."
 
+        result_msg += "\n\n💬 _Help us improve NEURA AI! Share quick anonymous feedback: https://forms.gle/dNr7SV5EUiqiFySx5_"
+
         await send_whatsapp_cloud_msg(sender_phone, result_msg)
         await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
         return
@@ -819,7 +823,21 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                 return
             elif msg_lower == "/profile":
                 books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
-                await send_whatsapp_cloud_msg(sender_phone, f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Books:\n  - {books_str}")
+                await send_whatsapp_cloud_msg(
+                    sender_phone, 
+                    f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Books:\n  - {books_str}\n\n"
+                    f"📝 *Feedback Survey:* https://forms.gle/dNr7SV5EUiqiFySx5"
+                )
+                return
+            elif msg_lower == "/feedback":
+                feedback_msg = (
+                    "📝 *NEURA AI Beta Feedback Survey*\n\n"
+                    "Your feedback helps us make NEURA AI 10x better for medical students!\n\n"
+                    "This survey is 100% anonymous (takes under 2 minutes):\n"
+                    "👉 https://forms.gle/dNr7SV5EUiqiFySx5\n\n"
+                    "Thank you for beta testing NEURA AI! 🧠⚡"
+                )
+                await send_whatsapp_cloud_msg(sender_phone, feedback_msg)
                 return
             elif msg_lower == "/update name":
                 await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_NAME"}})
