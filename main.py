@@ -92,10 +92,15 @@ RULES:
 7. If the user's preferred textbooks are not in your retrieved context, just answer using the textbooks that ARE available gracefully without complaining.
 """
 
-SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate 3 high-yield MBBS exam-style Multiple Choice Questions (MCQs).
-Format clearly for WhatsApp:
-- Provide 4 options (A, B, C, D) for each question.
-- Include a hidden/spoiler or separate Answer Key at the bottom with step-by-step rationale citing the textbook title and page number.
+SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate exactly 7 rigorous, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions (MCQs).
+
+RULES FOR MCQs:
+1. Each question must present a realistic clinical vignette, physiological mechanism, or pharmacological scenario appropriate for medical students.
+2. Provide 4 distinct options (A, B, C, D) for each of the 7 questions.
+3. Structure your response clearly using WhatsApp Markdown:
+   - List Question 1 through 7 with their options (A, B, C, D).
+   - Provide a separate 🔑 **ANSWER KEY & DETAILED EXPLANATIONS** section at the bottom.
+   - For every answer, explain why the correct option is right AND why the key distractor options are wrong, citing the specific textbook title.
 """
 
 def classify_intent(message: str) -> str:
