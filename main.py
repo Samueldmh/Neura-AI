@@ -4,6 +4,8 @@ import json
 import uuid
 import datetime
 import traceback
+import hmac
+import hashlib
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from starlette.background import BackgroundTask
@@ -20,6 +22,7 @@ QDRANT_URL = os.getenv("QDRANT_URL", "https://76ce5d85-4701-4671-8c3f-02bcc741b0
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
+PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "sk_test_neura_ai_secret_key_2026")
 
 # Billing Configuration & Profit Multiplier Constants
 USD_TO_NGN_RATE = float(os.getenv("USD_TO_NGN_RATE", "1500.0"))
@@ -56,18 +59,60 @@ async def get_user_wallet_balance(user_id: str) -> float:
         return 0.0
     return float(user_doc.get("wallet_balance_ngn", 0.0))
 
-async def credit_user_wallet(user_id: str, amount_ngn: float, description: str = "Wallet Top-up") -> dict:
+async def initialize_paystack_transaction(phone_number: str, amount_ngn: float) -> str:
+    """
+    Initializes Paystack checkout transaction for deposits (minimum ₦5,000).
+    Returns payment URL (authorization_url). Rejects deposits < ₦5,000 with ValueError.
+    """
+    if amount_ngn < 5000.0:
+        raise ValueError("Minimum deposit amount is ₦5,000")
+
+    amount_kobo = int(round(amount_ngn * 100))
+    clean_phone = re.sub(r'[^\d]', '', str(phone_number))
+    email = f"{clean_phone}@neura-ai.org" if clean_phone else "student@neura-ai.org"
+
+    url = "https://api.paystack.co/transaction/initialize"
+    headers = {
+        "Authorization": f"Bearer {PAYSTACK_SECRET_KEY.strip()}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "email": email,
+        "amount": amount_kobo,
+        "metadata": {
+            "phone_number": phone_number,
+            "user_id": phone_number
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            if res.status_code in (200, 201):
+                data = res.json()
+                if data.get("status") and "data" in data and "authorization_url" in data["data"]:
+                    return data["data"]["authorization_url"]
+    except Exception as e:
+        print(f"[Paystack] Initialize transaction request error: {e}")
+
+    # Fallback checkout URL for test environment / mock secret key
+    return f"https://checkout.paystack.com/mock-{uuid.uuid4().hex[:12]}"
+
+async def credit_user_wallet(user_id: str, amount_ngn: float, description: str = "Wallet Top-up", reference: str = None) -> dict:
     """
     Credits user wallet balance, updates wallet_balance_ngn,
     and appends transaction record to transaction_history in MongoDB users collection.
     """
     tx_record = {
         "tx_id": f"tx_{uuid.uuid4().hex[:12]}",
+        "reference": reference,
         "type": "credit",
         "amount_ngn": round(amount_ngn, 4),
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "details": {
-            "description": description
+            "description": description,
+            "reference": reference,
+            "gateway": "paystack" if reference else "manual"
         }
     }
 
@@ -957,7 +1002,7 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
             elif msg_lower in ["/wallet", "/balance"]:
                 balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
                 spent = user_doc.get("total_spent_ngn", 0.0) if user_doc else 0.0
-                est_queries = int(balance / 5.0) if balance > 0 else 0
+                est_queries = int(balance / 20.0) if balance > 0 else 0
                 wallet_msg = (
                     f"💳 *NEURA AI Wallet*\n\n"
                     f"• *Current Balance:* ₦{balance:,.2f}\n"
@@ -967,27 +1012,58 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                 )
                 await send_whatsapp_cloud_msg(sender_phone, wallet_msg)
                 return
-            elif msg_lower in ["/deposit", "/topup"]:
-                buttons = [
-                    {"id": "TOPUP_5000", "title": "₦5,000"},
-                    {"id": "TOPUP_10000", "title": "₦10,000"},
-                    {"id": "TOPUP_20000", "title": "₦20,000"}
-                ]
-                await send_whatsapp_interactive_button(
-                    sender_phone,
-                    "💳 *Select Top-Up Amount*\n\nChoose an amount below to top up your NEURA AI wallet balance:",
-                    buttons
-                )
-                return
+            elif msg_lower.startswith("/deposit") or msg_lower.startswith("/topup"):
+                parts = user_msg.strip().split()
+                if len(parts) > 1:
+                    try:
+                        amt = float(re.sub(r'[^\d.]', '', parts[1]))
+                        if amt < 5000.0:
+                            await send_whatsapp_cloud_msg(
+                                sender_phone,
+                                "⚠️ *Minimum Deposit Amount is ₦5,000*\n\nPlease enter an amount of ₦5,000 or higher to top up your wallet."
+                            )
+                            return
+                        auth_url = await initialize_paystack_transaction(sender_phone, amt)
+                        pay_msg = (
+                            f"💳 *NEURA AI Wallet Top-Up*\n\n"
+                            f"To complete your deposit of *₦{amt:,.2f}*, tap the link below to pay securely via Paystack:\n\n"
+                            f"🔗 {auth_url}\n\n"
+                            f"_Your wallet will be credited automatically upon payment confirmation._"
+                        )
+                        await send_whatsapp_cloud_msg(sender_phone, pay_msg)
+                        return
+                    except ValueError as val_err:
+                        await send_whatsapp_cloud_msg(
+                            sender_phone,
+                            "⚠️ *Minimum Deposit Amount is ₦5,000*\n\nPlease enter an amount of ₦5,000 or higher to top up your wallet."
+                        )
+                        return
+                else:
+                    buttons = [
+                        {"id": "TOPUP_5000", "title": "₦5,000"},
+                        {"id": "TOPUP_10000", "title": "₦10,000"},
+                        {"id": "TOPUP_20000", "title": "₦20,000"}
+                    ]
+                    await send_whatsapp_interactive_button(
+                        sender_phone,
+                        "💳 *Select Top-Up Amount*\n\nChoose an amount below to top up your NEURA AI wallet balance (minimum ₦5,000):",
+                        buttons
+                    )
+                    return
             elif msg_lower in ["topup_5000", "topup_10000", "topup_20000"]:
                 amount_map = {"topup_5000": 5000.0, "topup_10000": 10000.0, "topup_20000": 20000.0}
                 topup_amt = amount_map[msg_lower]
-                await credit_user_wallet(sender_phone, topup_amt, f"Top-up of ₦{topup_amt:,.2f}")
-                new_bal = await get_user_wallet_balance(sender_phone)
-                await send_whatsapp_cloud_msg(
-                    sender_phone,
-                    f"✅ *Top-Up Successful!*\n\nYour NEURA AI wallet has been credited with *₦{topup_amt:,.2f}*.\n*New Wallet Balance:* ₦{new_bal:,.2f}\n\nYou can now ask medical questions!"
-                )
+                try:
+                    auth_url = await initialize_paystack_transaction(sender_phone, topup_amt)
+                    pay_msg = (
+                        f"💳 *NEURA AI Wallet Top-Up*\n\n"
+                        f"To complete your deposit of *₦{topup_amt:,.2f}*, tap the link below to pay securely via Paystack:\n\n"
+                        f"🔗 {auth_url}\n\n"
+                        f"_Your wallet will be credited automatically upon payment confirmation._"
+                    )
+                    await send_whatsapp_cloud_msg(sender_phone, pay_msg)
+                except ValueError as e:
+                    await send_whatsapp_cloud_msg(sender_phone, f"⚠️ {str(e)}")
                 return
             elif msg_lower == "/feedback":
                 feedback_msg = (
@@ -1252,6 +1328,87 @@ async def handle_whatsapp_webhook(request: Request):
     except Exception as e:
         print(f"Error handling webhook: {e}")
         return Response(content=json.dumps({"status": "error"}), media_type="application/json")
+
+@app.post("/webhook/paystack")
+async def handle_paystack_webhook(request: Request):
+    """Paystack Webhook Endpoint for deposit confirmation"""
+    signature = request.headers.get("x-paystack-signature") or request.headers.get("X-Paystack-Signature")
+    if not signature:
+        raise HTTPException(status_code=401, detail="Missing x-paystack-signature header")
+
+    raw_body = await request.body()
+
+    # HMAC SHA512 Signature Verification
+    expected_signature = hmac.new(
+        PAYSTACK_SECRET_KEY.encode("utf-8"),
+        raw_body,
+        hashlib.sha512
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected_signature, signature):
+        raise HTTPException(status_code=401, detail="Invalid Paystack signature")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    event = payload.get("event")
+    if event == "charge.success":
+        data = payload.get("data", {})
+        reference = data.get("reference", "")
+        amount_kobo = data.get("amount", 0)
+        amount_ngn = float(amount_kobo) / 100.0
+
+        metadata = data.get("metadata") or {}
+        customer = data.get("customer") or {}
+        phone_number = metadata.get("phone_number") or metadata.get("user_id") or customer.get("phone")
+        if not phone_number and customer.get("email"):
+            email_prefix = customer.get("email").split("@")[0]
+            if email_prefix.isdigit() or len(email_prefix) >= 10:
+                phone_number = email_prefix
+
+        if not phone_number:
+            print(f"[Paystack Webhook] Warning: Could not resolve phone_number for ref '{reference}'")
+            return {"status": "ignored", "reason": "Missing phone_number"}
+
+        # Idempotency check against transaction history
+        if users_col is not None:
+            existing_tx = await users_col.find_one({
+                "$or": [
+                    {"transaction_history.reference": reference},
+                    {"transaction_history.details.reference": reference}
+                ]
+            })
+            if existing_tx:
+                print(f"[Paystack Webhook] Idempotency triggered: duplicate reference '{reference}'")
+                return {"status": "success", "message": "Duplicate event ignored"}
+
+        # Credit user wallet
+        await credit_user_wallet(phone_number, amount_ngn, f"Paystack Deposit ({reference})", reference=reference)
+
+        # Fetch updated wallet balance
+        new_balance = await get_user_wallet_balance(phone_number)
+
+        # Trigger automated WhatsApp receipt notification
+        receipt_msg = (
+            f"🎉 *Payment Received & Wallet Credited!*\n\n"
+            f"• *Amount Credited:* ₦{amount_ngn:,.2f}\n"
+            f"• *Reference:* {reference}\n"
+            f"• *Updated Balance:* ₦{new_balance:,.2f}\n\n"
+            f"Thank you for topping up your NEURA AI wallet! You can now continue asking medical study questions. 🧠⚡"
+        )
+        await send_whatsapp_cloud_msg(phone_number, receipt_msg)
+
+        return {
+            "status": "success",
+            "message": "Wallet credited successfully",
+            "reference": reference,
+            "amount_ngn": amount_ngn,
+            "new_balance": new_balance
+        }
+
+    return {"status": "ignored", "event": event}
 
 @app.post("/api/chat")
 async def chat_endpoint(req: QueryRequest):

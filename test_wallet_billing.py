@@ -223,13 +223,16 @@ class TestWalletBillingEngine(unittest.IsolatedAsyncioTestCase):
             "transaction_history": []
         }
 
-        # Select top-up option
+        # Select top-up option (returns Paystack checkout link)
         await main.process_whatsapp_message(user_id, "TOPUP_5000")
+        to, msg = self.sent_cloud_msgs[-1]
+        self.assertIn("Paystack", msg)
+        self.assertIn("₦5,000.00", msg)
+
+        # Simulate Paystack webhook payment credit
+        await main.credit_user_wallet(user_id, 5000.0, "Paystack Deposit (ref_test)")
         bal = await main.get_user_wallet_balance(user_id)
         self.assertEqual(bal, 5005.0)
-        to, msg = self.sent_cloud_msgs[-1]
-        self.assertIn("Top-Up Successful!", msg)
-        self.assertIn("₦5,000.00", msg)
 
         # Now query should succeed and deduct
         mock_llm_resp = ("Pathology explanation of inflammation.", {"prompt_tokens": 1000, "completion_tokens": 500, "total_tokens": 1500})
