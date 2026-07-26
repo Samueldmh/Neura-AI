@@ -1,6 +1,8 @@
 import os
 import re
 import json
+import uuid
+import datetime
 import traceback
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -18,6 +20,107 @@ QDRANT_URL = os.getenv("QDRANT_URL", "https://76ce5d85-4701-4671-8c3f-02bcc741b0
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
+
+# Billing Configuration & Profit Multiplier Constants
+USD_TO_NGN_RATE = float(os.getenv("USD_TO_NGN_RATE", "1500.0"))
+PROFIT_MULTIPLIER = 8.0
+GPT4O_MINI_INPUT_COST_PER_1M_USD = 0.15
+GPT4O_MINI_OUTPUT_COST_PER_1M_USD = 0.60
+
+def calculate_api_cost_ngn(prompt_tokens: int, completion_tokens: int, model: str = "openai/gpt-4o-mini", usd_to_ngn: float = USD_TO_NGN_RATE) -> tuple:
+    """
+    Calculates actual API cost in NGN and deducted cost in NGN after applying 8.0x Profit Multiplier.
+    Returns (actual_cost_ngn, deduction_ngn)
+    """
+    if model == "openai/gpt-4o-mini":
+        input_cost_usd = (prompt_tokens / 1_000_000.0) * GPT4O_MINI_INPUT_COST_PER_1M_USD
+        output_cost_usd = (completion_tokens / 1_000_000.0) * GPT4O_MINI_OUTPUT_COST_PER_1M_USD
+    else:
+        input_cost_usd = (prompt_tokens / 1_000_000.0) * GPT4O_MINI_INPUT_COST_PER_1M_USD
+        output_cost_usd = (completion_tokens / 1_000_000.0) * GPT4O_MINI_OUTPUT_COST_PER_1M_USD
+
+    actual_cost_usd = input_cost_usd + output_cost_usd
+    actual_cost_ngn = actual_cost_usd * usd_to_ngn
+    deduction_ngn = actual_cost_ngn * PROFIT_MULTIPLIER
+    return actual_cost_ngn, deduction_ngn
+
+async def get_user_wallet_balance(user_id: str) -> float:
+    """
+    Retrieves current wallet balance in NGN for a given user.
+    Includes safe fallback (.get) for existing or missing user documents.
+    """
+    if users_col is None:
+        return 0.0
+    user_doc = await users_col.find_one({"user_id": user_id})
+    if not user_doc:
+        return 0.0
+    return float(user_doc.get("wallet_balance_ngn", 0.0))
+
+async def credit_user_wallet(user_id: str, amount_ngn: float, description: str = "Wallet Top-up") -> dict:
+    """
+    Credits user wallet balance, updates wallet_balance_ngn,
+    and appends transaction record to transaction_history in MongoDB users collection.
+    """
+    tx_record = {
+        "tx_id": f"tx_{uuid.uuid4().hex[:12]}",
+        "type": "credit",
+        "amount_ngn": round(amount_ngn, 4),
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "details": {
+            "description": description
+        }
+    }
+
+    if users_col is not None:
+        await users_col.update_one(
+            {"user_id": user_id},
+            {
+                "$inc": {
+                    "wallet_balance_ngn": amount_ngn
+                },
+                "$push": {
+                    "transaction_history": tx_record
+                }
+            }
+        )
+    return tx_record
+
+async def deduct_user_wallet(user_id: str, prompt_tokens: int, completion_tokens: int, total_tokens: int, model: str = "openai/gpt-4o-mini") -> dict:
+    """
+    Deducts user wallet balance based on token usage, updates total_spent_ngn,
+    and appends transaction record to transaction_history in MongoDB users collection.
+    """
+    actual_cost_ngn, deduction_ngn = calculate_api_cost_ngn(prompt_tokens, completion_tokens, model)
+
+    tx_record = {
+        "tx_id": f"tx_{uuid.uuid4().hex[:12]}",
+        "type": "deduction",
+        "amount_ngn": round(deduction_ngn, 4),
+        "tokens_used": total_tokens,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "details": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "actual_api_cost_ngn": round(actual_cost_ngn, 6),
+            "profit_multiplier": PROFIT_MULTIPLIER,
+            "model": model
+        }
+    }
+
+    if users_col is not None:
+        await users_col.update_one(
+            {"user_id": user_id},
+            {
+                "$inc": {
+                    "wallet_balance_ngn": -deduction_ngn,
+                    "total_spent_ngn": deduction_ngn
+                },
+                "$push": {
+                    "transaction_history": tx_record
+                }
+            }
+        )
+    return tx_record
 
 # Official Meta WhatsApp Cloud API credentials
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAM3F01f3nYBSKwpMPZAU2Nhgdvr7b4481UQ2sCTosr3Hu6UIL3U5BTBiN8I5932PfnEx6GzDWiUfwMYiFok4eZCaMrLPNhhMvnAQ27fVsxxqpxIvES3SYhSi6speeab3FaBq8anZCoPVXS2f9LXA7b7ZA2kWrZBRA8zmBv03cBe2yTR3OWAAhgEh0lEk3ULqfAZDZD")
@@ -56,15 +159,16 @@ embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
 # Ensure payload index exists for book_title filtering
-try:
-    qdrant.create_payload_index(
-        collection_name=COLLECTION_NAME,
-        field_name="book_title",
-        field_schema=models.PayloadSchemaType.KEYWORD
-    )
-    print("✅ Created/verified Qdrant payload index for 'book_title'")
-except Exception as idx_err:
-    print(f"ℹ️ Payload index info: {idx_err}")
+if QDRANT_API_KEY:
+    try:
+        qdrant.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name="book_title",
+            field_schema=models.PayloadSchemaType.KEYWORD
+        )
+        print("[Qdrant] Created/verified payload index for 'book_title'")
+    except Exception as idx_err:
+        print(f"[Qdrant] Payload index info: {idx_err}")
 
 print(f"MONGO_URI Present: {bool(MONGO_URI)}")
 mongo_client = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
@@ -134,7 +238,7 @@ def classify_intent(message: str) -> str:
     
     return "MEDICAL"
 
-async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history: list = None) -> str:
+async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history: list = None) -> tuple:
     if not OPENROUTER_API_KEY:
         raise ValueError("OPENROUTER_API_KEY environment variable is not set on Render!")
         
@@ -163,7 +267,17 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
             print(f"OpenRouter Error Status {response.status_code}: {response.text}")
             raise HTTPException(status_code=500, detail=f"OpenRouter Error: {response.text}")
         data = response.json()
-        return data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"]
+        usage = data.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
+        usage_dict = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens
+        }
+        return content, usage_dict
 
 async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
     """Sends a text response directly to the student via Meta WhatsApp Cloud API"""
@@ -352,7 +466,7 @@ def extract_medical_terms(user_msg: str) -> list:
     if user_msg not in phrases:
         phrases.append(user_msg)
         
-    print(f"🔍 Extracted search keywords: {phrases} (from: '{user_msg}')")
+    print(f"[Search] Extracted search keywords: {phrases} (from: '{user_msg}')")
     return phrases
 
 def extract_book_keywords(preferred_books: list) -> list:
@@ -412,14 +526,14 @@ def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None)
                 ).points
                 all_points.extend(hits)
             except Exception as e:
-                print(f"⚠️ Failed to filter Qdrant for book '{book}': {e}")
+                print(f"[Qdrant] Failed to filter Qdrant for book '{book}': {e}")
                 
         # Sort the combined hits from all books by score
         all_points.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
         return all_points
 
     except Exception as outer_e:
-        print(f"❌ Error in search_qdrant: {outer_e}")
+        print(f"[Qdrant] Error in search_qdrant: {outer_e}")
         return []
 
 def multi_search_qdrant(search_terms: list, preferred_books: list = None) -> list:
@@ -438,7 +552,7 @@ def multi_search_qdrant(search_terms: list, preferred_books: list = None) -> lis
     
     # Cap at 24 results max to avoid overwhelming the LLM context
     all_results = all_results[:24]
-    print(f"📚 Multi-search returned {len(all_results)} unique chunks from {len(search_terms)} keyword(s) with filter {preferred_books}")
+    print(f"[Search] Multi-search returned {len(all_results)} unique chunks from {len(search_terms)} keyword(s) with filter {preferred_books}")
     return all_results
 
 async def extract_name_with_llm(user_msg: str) -> str:
@@ -453,7 +567,7 @@ Examples:
 - "Hello" -> NONE
 - "dhjdsf" -> NONE"""
     try:
-        res = await call_openrouter_llm(prompt, user_msg)
+        res, _ = await call_openrouter_llm(prompt, user_msg)
         return res.strip() if res.strip().upper() != "NONE" else None
     except:
         return None
@@ -519,7 +633,10 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
     if not user_doc:
         await users_col.insert_one({
             "user_id": sender_phone,
-            "onboarding_step": "ASK_NAME"
+            "onboarding_step": "ASK_NAME",
+            "wallet_balance_ngn": 0.0,
+            "total_spent_ngn": 0.0,
+            "transaction_history": []
         })
         welcome_msg = (
             "Hello! 👋 I'm *NEURA AI*, your elite medical study assistant.\n\n"
@@ -618,7 +735,14 @@ async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list
     user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nTOPIC TO TEST: {topic}"
 
     try:
-        json_raw = await call_openrouter_llm(SYSTEM_INTERACTIVE_QUIZ_PROMPT, user_prompt)
+        json_raw, usage = await call_openrouter_llm(SYSTEM_INTERACTIVE_QUIZ_PROMPT, user_prompt)
+        if usage:
+            await deduct_user_wallet(
+                sender_phone,
+                usage.get("prompt_tokens", 0),
+                usage.get("completion_tokens", 0),
+                usage.get("total_tokens", 0)
+            )
         cleaned_json = re.sub(r'```json\s*', '', json_raw)
         cleaned_json = re.sub(r'```\s*$', '', cleaned_json).strip()
         
@@ -808,9 +932,9 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                 level = user_doc.get("level", "Unknown Level")
                 preferred_books_list = user_doc.get("preferred_books_list", [])
 
-        # Check for profile commands first
+        # Check for system/profile/wallet commands first
         msg_lower = user_msg.strip().lower()
-        if msg_lower.startswith("/") and users_col is not None:
+        if (msg_lower.startswith("/") or msg_lower.startswith("topup_")) and users_col is not None:
             if msg_lower == "/reset":
                 await users_col.delete_one({"user_id": sender_phone})
                 if chat_history_col is not None:
@@ -823,10 +947,46 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                 return
             elif msg_lower == "/profile":
                 books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
+                wallet_bal = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
                 await send_whatsapp_cloud_msg(
                     sender_phone, 
-                    f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Books:\n  - {books_str}\n\n"
+                    f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Wallet Balance: ₦{wallet_bal:,.2f}\n• Books:\n  - {books_str}\n\n"
                     f"📝 *Feedback Survey:* https://forms.gle/dNr7SV5EUiqiFySx5"
+                )
+                return
+            elif msg_lower in ["/wallet", "/balance"]:
+                balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
+                spent = user_doc.get("total_spent_ngn", 0.0) if user_doc else 0.0
+                est_queries = int(balance / 5.0) if balance > 0 else 0
+                wallet_msg = (
+                    f"💳 *NEURA AI Wallet*\n\n"
+                    f"• *Current Balance:* ₦{balance:,.2f}\n"
+                    f"• *Total Spent:* ₦{spent:,.2f}\n"
+                    f"• *Est. Queries Remaining:* ~{est_queries}\n\n"
+                    f"Type */deposit* to top up your balance!"
+                )
+                await send_whatsapp_cloud_msg(sender_phone, wallet_msg)
+                return
+            elif msg_lower in ["/deposit", "/topup"]:
+                buttons = [
+                    {"id": "TOPUP_5000", "title": "₦5,000"},
+                    {"id": "TOPUP_10000", "title": "₦10,000"},
+                    {"id": "TOPUP_20000", "title": "₦20,000"}
+                ]
+                await send_whatsapp_interactive_button(
+                    sender_phone,
+                    "💳 *Select Top-Up Amount*\n\nChoose an amount below to top up your NEURA AI wallet balance:",
+                    buttons
+                )
+                return
+            elif msg_lower in ["topup_5000", "topup_10000", "topup_20000"]:
+                amount_map = {"topup_5000": 5000.0, "topup_10000": 10000.0, "topup_20000": 20000.0}
+                topup_amt = amount_map[msg_lower]
+                await credit_user_wallet(sender_phone, topup_amt, f"Top-up of ₦{topup_amt:,.2f}")
+                new_bal = await get_user_wallet_balance(sender_phone)
+                await send_whatsapp_cloud_msg(
+                    sender_phone,
+                    f"✅ *Top-Up Successful!*\n\nYour NEURA AI wallet has been credited with *₦{topup_amt:,.2f}*.\n*New Wallet Balance:* ₦{new_bal:,.2f}\n\nYou can now ask medical questions!"
                 )
                 return
             elif msg_lower == "/feedback":
@@ -858,6 +1018,15 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                 if not has_subjects:
                     await complete_onboarding(sender_phone)
                 return
+            elif msg_lower.startswith("/update"):
+                await send_whatsapp_cloud_msg(
+                    sender_phone,
+                    "⚙️ *Available Update Commands:*\n"
+                    "• */update name* - Change your first name\n"
+                    "• */update level* - Change your medical class/level\n"
+                    "• */update books* - Change your preferred textbooks"
+                )
+                return
 
         # Handle active interactive quiz answer if student is answering an MCQ
         if user_doc and "active_quiz" in user_doc:
@@ -887,6 +1056,22 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                 f"What medical topic, clinical case, or concept are we mastering today?"
             )
             await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
+            return
+
+        # Low-Balance Interceptor: Check if wallet balance is below minimum threshold (< ₦20.00)
+        wallet_balance = await get_user_wallet_balance(sender_phone) if users_col is not None else 0.0
+        if wallet_balance < 20.0:
+            low_balance_text = (
+                f"⚠️ *Insufficient Wallet Balance*\n\n"
+                f"Your current wallet balance is *₦{wallet_balance:,.2f}*, which is below the minimum required balance of *₦20.00* to process AI medical queries.\n\n"
+                f"Please top up your wallet to continue using NEURA AI:"
+            )
+            buttons = [
+                {"id": "TOPUP_5000", "title": "₦5,000"},
+                {"id": "TOPUP_10000", "title": "₦10,000"},
+                {"id": "TOPUP_20000", "title": "₦20,000"}
+            ]
+            await send_whatsapp_interactive_button(sender_phone, low_balance_text, buttons)
             return
 
         # Step 1: Extract medical terms from the query_to_search
@@ -938,7 +1123,15 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
             if user_doc and "messages" in user_doc:
                 chat_history = user_doc["messages"][-6:]
 
-        ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
+        ai_answer, usage = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
+
+        if usage:
+            await deduct_user_wallet(
+                sender_phone,
+                usage.get("prompt_tokens", 0),
+                usage.get("completion_tokens", 0),
+                usage.get("total_tokens", 0)
+            )
 
         if chat_history_col is not None:
             new_msgs = [
@@ -966,7 +1159,7 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
                     ]
                 )
             except Exception as btn_err:
-                print(f"⚠️ Non-critical error sending interactive button: {btn_err}")
+                print(f"[Button] Non-critical error sending interactive button: {btn_err}")
 
     except Exception as e:
         print(f"ERROR in process_whatsapp_message: {str(e)}")
@@ -1114,7 +1307,15 @@ async def chat_endpoint(req: QueryRequest):
             if user_doc and "messages" in user_doc:
                 chat_history = user_doc["messages"][-6:]
         
-        ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
+        ai_answer, usage = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
+        
+        if req.user_id and usage:
+            await deduct_user_wallet(
+                req.user_id,
+                usage.get("prompt_tokens", 0),
+                usage.get("completion_tokens", 0),
+                usage.get("total_tokens", 0)
+            )
         
         if chat_history_col is not None:
             new_msgs = [
