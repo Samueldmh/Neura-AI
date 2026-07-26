@@ -36,6 +36,8 @@ CURRICULUM = {
 
 AVAILABLE_BOOKS = {
     "Anatomy": ["Clinically Oriented Anatomy 8th Ed by Keith L Moore, Arthur F Dalley"],
+    "Physiology": ["K Sembulingam Essentials of Medical Physiology 6th Edition"],
+    "Biochemistry": ["Textbook of Biochemistry For Medical Students 7th Edition"],
     "Histopathology": ["Robbins Basic Pathology 10th Edition 2017 (1)"],
     "Haematology": ["Essentials of Haematology"],
     "Pharmacology": ["Lippincott Illustrated Reviews: Pharmacology"]
@@ -269,11 +271,17 @@ def get_explicit_book_override(user_msg: str, preferred_books: list) -> list:
             override_books.append(b)
         elif "anatomy" in msg_lower and "anatomy" in b_lower:
             override_books.append(b)
+        elif "physiology" in msg_lower and ("physiology" in b_lower or "sembulingam" in b_lower):
+            override_books.append(b)
+        elif "biochemistry" in msg_lower and "biochemistry" in b_lower:
+            override_books.append(b)
         elif "haematology" in msg_lower and ("haematology" in b_lower or "hoffbrand" in b_lower):
             override_books.append(b)
         elif "lippincott" in msg_lower and "lippincott" in b_lower:
             override_books.append(b)
         elif "robbins" in msg_lower and "robbins" in b_lower:
+            override_books.append(b)
+        elif "sembulingam" in msg_lower and "sembulingam" in b_lower:
             override_books.append(b)
             
     return override_books if override_books else preferred_books
