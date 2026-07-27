@@ -164,7 +164,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
     messages.append({"role": "user", "content": user_prompt})
     
     payload = {
-        "model": "anthropic/claude-3.5-haiku",
+        "model": "anthropic/claude-3-5-haiku",
         "messages": messages,
         "temperature": 0.3
     }
