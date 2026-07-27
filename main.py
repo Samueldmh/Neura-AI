@@ -870,7 +870,7 @@ async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: 
     await send_quiz_question(sender_phone, active_quiz)
     return True
 
-async def process_whatsapp_message(sender_phone: str, user_msg: str):
+async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_reply: bool = False):
     """Background task to run RAG & OpenRouter LLM and send WhatsApp reply"""
     try:
         # Fetch user doc early to get preferences
@@ -966,24 +966,27 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
             await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
             return
 
-        # Check if the user query is a conversational follow-up (e.g. "is this all?", "tell me more")
-        is_followup = check_is_followup_query(query_to_search)
+        # Check if the user query is a tagged reply OR a conversational follow-up
+        is_followup = is_tagged_reply or check_is_followup_query(query_to_search)
         
         last_topic = None
+        last_assistant_msg = None
         if is_followup and chat_history_col is not None:
             user_hist = await chat_history_col.find_one({"user_id": sender_phone})
             if user_hist and "messages" in user_hist:
-                for msg in reversed(user_hist["messages"]):
-                    if msg.get("role") == "user":
-                        content = msg.get("content", "")
+                msgs = user_hist["messages"]
+                for msg_item in reversed(msgs):
+                    if msg_item.get("role") == "assistant" and not last_assistant_msg:
+                        last_assistant_msg = msg_item.get("content")
+                    if msg_item.get("role") == "user" and not last_topic:
+                        content = msg_item.get("content", "")
                         if not check_is_followup_query(content) and not content.startswith("GENERATE_QUIZ"):
                             last_topic = content
-                            break
 
         if is_followup:
-            if last_topic:
-                print(f"[Follow-up Router] Resolved follow-up '{query_to_search}' to previous topic: '{last_topic}'")
-                search_term = last_topic
+            if last_topic or last_assistant_msg:
+                search_term = last_topic if last_topic else query_to_search
+                print(f"[Follow-up Router] (Tagged={is_tagged_reply}) Resolved query '{query_to_search}' to topic: '{search_term}'")
             else:
                 prompt_msg = (
                     "What medical topic, clinical case, or concept would you like to learn more about?\n\n"
@@ -1030,7 +1033,16 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
             context_blocks.append(block)
 
         formatted_context = "\n\n".join(context_blocks)
-        user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{query_to_search}"
+        
+        if is_tagged_reply and last_assistant_msg:
+            tagged_snippet = last_assistant_msg[:400]
+            user_prompt = (
+                f"THE USER EXPLICITLY TAGGED/QUOTED YOUR PREVIOUS WHATSAPP MESSAGE BELOW:\n\"\"\"{tagged_snippet}\"\"\"\n\n"
+                f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\n"
+                f"USER'S QUESTION/INSTRUCTION REGARDING THE TAGGED MESSAGE:\n{query_to_search}"
+            )
+        else:
+            user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{query_to_search}"
         
         # Build dynamic user context
         books_str = ", ".join(preferred_books_list) if preferred_books_list else "None"
@@ -1146,6 +1158,9 @@ async def handle_whatsapp_webhook(request: Request):
                     sender_phone = msg.get("from")
                     msg_type = msg.get("type")
                     
+                    context_obj = msg.get("context", {})
+                    is_tagged_reply = bool(context_obj.get("id"))
+                    
                     text_body = ""
                     if msg_type == "text":
                         text_body = msg.get("text", {}).get("body", "")
@@ -1158,9 +1173,9 @@ async def handle_whatsapp_webhook(request: Request):
                             text_body = interactive_obj.get("button_reply", {}).get("id") or interactive_obj.get("button_reply", {}).get("title", "")
 
                     if text_body:
-                        print(f"📩 Received msg ({msg_type}) from {sender_phone}: '{text_body}'")
+                        print(f"📩 Received msg ({msg_type}) from {sender_phone} (Tagged Reply: {is_tagged_reply}): '{text_body}'")
                         # Process in background task to respond to Meta immediately (prevents timeout)
-                        task = BackgroundTask(process_whatsapp_message, sender_phone, text_body)
+                        task = BackgroundTask(process_whatsapp_message, sender_phone, text_body, is_tagged_reply)
                         return Response(content=json.dumps({"status": "processing"}), media_type="application/json", background=task)
                     else:
                         print(f"⚠️ Received unsupported message type '{msg_type}' from {sender_phone}")
