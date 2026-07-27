@@ -163,7 +163,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
     messages.append({"role": "user", "content": user_prompt})
     
     payload = {
-        "model": "google/gemini-2.0-pro-exp-02-05",
+        "model": "deepseek/deepseek-v4-flash",
         "messages": messages,
         "temperature": 0.2
     }
