@@ -89,14 +89,18 @@ CLINICAL EXPLANATION & SIMPLIFICATION RULES:
 3. CONVERSATIONAL SOCRATIC CO-PILOT: Engage students naturally. When they ask hypothetical "what if" questions or follow-ups, synthesize textbook principles with common-sense medical reasoning.
 
 CRITICAL FORMATTING & LAYOUT RULES FOR WHATSAPP:
-1. NO HASHTAGS OR RAW SYMBOLS: Never use `#`, `##`, or `###` headers. Never output raw visible asterisks.
-2. BOLD HEADINGS & KEY TERMS: Use valid WhatsApp bold syntax (*Heading:* or *Key Term*) for all section headings, sub-headings, and key concepts so WhatsApp renders them in clean bold text.
-3. PROPERLY INDENTED LISTS: Format bullet lists neatly using hyphens and proper indentation:
+1. DOUBLE-LINE SPACING: Every section heading, sub-heading, bullet item, and paragraph MUST be separated by a full blank line (`\n\n`). Never stack bullet items or headers back-to-back on consecutive single lines.
+2. SHORT PARAGRAPHS: Keep text blocks short (maximum 2 to 3 sentences per paragraph) so the message feels spacious and easy to read on mobile screens.
+3. NO HASHTAGS OR RAW SYMBOLS: Never use `#`, `##`, or `###` headers. Never output raw visible asterisks.
+4. BOLD HEADINGS & KEY TERMS: Use valid WhatsApp bold syntax (*Heading:* or *Key Term*) for all section headings, sub-headings, and key concepts so WhatsApp renders them in clean bold text.
+5. PROPERLY INDENTED LISTS: Format bullet lists neatly using hyphens and proper double-line spacing:
+   
    - *Main Section:* Clear explanation.
+   
      - *Sub-detail:* Properly indented supporting detail.
-4. NO INLINE CITATIONS: Absolutely NEVER include page numbers, figure numbers, or textbook references (e.g. Robbins p. 787, Fig 20.33) in the middle of sentences, bullet points, or paragraphs. All citations MUST be listed strictly at the very end of your response under 📚 CITATIONS.
-5. NO SMASHED WORDS: Ensure flawless spacing between words, punctuation, and hyphens. Always put a space after colons, periods, and bold words (e.g. write "*Prazosin* is" instead of "*Prazosin*is").
-6. Structure responses into clear sections separated by blank lines:
+6. NO INLINE CITATIONS: Absolutely NEVER include page numbers, figure numbers, or textbook references (e.g. Robbins p. 787, Fig 20.33) in the middle of sentences, bullet points, or paragraphs. All citations MUST be listed strictly at the very end of your response under 📚 CITATIONS.
+7. NO SMASHED WORDS: Ensure flawless spacing between words, punctuation, and hyphens. Always put a space after colons, periods, and bold words (e.g. write "*Prazosin* is" instead of "*Prazosin*is").
+8. Structure responses into clear sections separated by blank lines:
    📖 *IN-DEPTH EXPLANATION*
    
    💡 *KEY CLINICAL PEARLS*
@@ -212,7 +216,10 @@ def format_whatsapp_text(text: str) -> str:
     # 7. Ensure space after bullet hyphens, e.g. '-Classification:' -> '- Classification:'
     text = re.sub(r'^-([a-zA-Z0-9\*])', r'- \1', text, flags=re.MULTILINE)
 
-    # 8. Add newline before section emojis if smashed
+    # 8. Ensure double-line spacing before list items so text is never jampacked
+    text = re.sub(r'([^\n])\n(-|\*|[0-9]+\.)\s+', r'\1\n\n\2 ', text)
+
+    # 9. Add newline before section emojis if smashed
     text = re.sub(r'([^\n])([📖💡📚🎯])', r'\1\n\n\2', text)
 
     # 9. FINAL SANITIZER PASS: Preserve ONLY valid WhatsApp bold tags `*valid_text*` and strip any remaining orphan/stray asterisks!
