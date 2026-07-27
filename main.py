@@ -101,6 +101,7 @@ CRITICAL FORMATTING LAYOUT RULES FOR WHATSAPP:
    💡 *KEY CLINICAL PEARLS*
    
    📚 *CITATIONS*
+5. TEXT EDITING & SPACING: Ensure flawless spelling, grammar, and space placement. Always put a space after colons, periods, and bold words (e.g. write "*Prazosin* is" instead of "*Prazosin*is").
 """
 
 SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate exactly 7 rigorous, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions (MCQs).
