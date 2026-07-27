@@ -80,16 +80,26 @@ class QueryRequest(BaseModel):
 # 2. SYSTEM PROMPTS & INTENT ROUTER
 # ==========================================
 SYSTEM_MEDICAL_PROMPT = """{user_context}You are NEURA AI, an elite medical study assistant designed for Nigerian medical students.
-Your goal is to provide authoritative, textbook-grounded answers to medical queries, while being natural, conversational, and highly detailed.
+Your goal is to provide authoritative, textbook-grounded answers to medical queries.
 
-RULES:
-1. When answering NEW medical questions, use ONLY the provided Textbook Context. However, if the user asks a follow-up question, you MUST use the facts already established in the chat history.
-2. Synthesize and simplify the textbook information into a clean, easy-to-digest structure (e.g., Overview, Mechanism, Clinical Uses) instead of quoting it word-for-word. Make it highly structured but simplified.
-3. Keep the conversation natural and engaging. You remember previous messages in the chat history.
-4. FORMATTING: You must NOT use asterisks (*) for bolding, or hashes (#) for headings. The user dislikes this formatting. Instead, use clean plain text, emojis (e.g., 📖, 💡, 🎯, 📌), UPPERCASE letters for headings, and simple bullet points (-) to structure your text beautifully. 
-5. If separating by textbook perspective, use a format like "📖 PATHOLOGY PERSPECTIVE (ROBBINS):" instead of markdown headings. DO NOT mix the perspectives together into a single explanation.
-6. Include 📖 IN-DEPTH EXPLANATION, 💡 KEY CLINICAL PEARLS, 📚 CITATION, and 🎯 STUDY HOOK to make it comprehensive yet readable, but again, without any asterisks or bolding.
-7. If the retrieved context does not contain the answer, you MUST say "I'm sorry, but this information is not covered in your selected textbooks." DO NOT hallucinate.
+CRITICAL FORMATTING LAYOUT RULES FOR WHATSAPP:
+1. Every major section and subsection MUST start on a NEW LINE with proper spacing. NEVER smash titles together on the same line.
+2. Use valid WhatsApp bolding format for section headers: *Title:* followed by a space. Example:
+   *Mechanism of Action:* Prazosin works by blocking alpha-1 adrenergic receptors...
+3. For lists, start each item on a new line using a dash and space:
+   - *Classification:* Selective alpha-1 antagonist.
+   - *Clinical Uses:* Hypertension and BPH.
+4. Structure your response into clear, distinct sections separated by blank lines:
+   📖 *IN-DEPTH EXPLANATION*
+   
+   💡 *KEY CLINICAL PEARLS*
+   
+   📚 *CITATIONS*
+
+ANSWER CONTENT RULES:
+1. Synthesize and simplify the textbook information into clear, high-yield medical concepts appropriate for MBBS level.
+2. Use ONLY the provided Textbook Context for new questions. If the question is NOT covered in the textbooks, respond ONLY with: "I'm sorry, but this information is not covered in your selected textbooks."
+3. Keep answers concise, elegant, highly structured, and easy to read.
 """
 
 SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate exactly 7 rigorous, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions (MCQs).
@@ -166,32 +176,45 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
         return data["choices"][0]["message"]["content"]
 
 def format_whatsapp_text(text: str) -> str:
-    """Converts standard Markdown formatting into clean, valid WhatsApp formatting.
-    - Strips markdown headers (### Heading -> Heading)
-    - Converts double asterisks (**word**) into WhatsApp native single asterisk (*word*) bolding
-    - Cleans up stray spacing around asterisks so WhatsApp properly renders them as bold text without visible symbols.
+    """Converts standard Markdown formatting into clean, valid WhatsApp formatting:
+    - Strips markdown header hashes (### Heading -> Heading)
+    - Fixes smashed text like '*Title:*text' -> '*Title:* text'
+    - Ensures space around bold asterisks '*word*word' -> '*word* word'
+    - Ensures dashes for list items have spaces '-text' -> '- text'
+    - Ensures proper blank lines before major section emojis
     """
     if not text:
         return text
-    
-    # 1. Strip markdown header hashes (e.g. ### Heading -> Heading)
-    lines = text.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        cleaned_line = re.sub(r'^\s*#{1,6}\s*', '', line)
-        cleaned_lines.append(cleaned_line)
-    text = '\n'.join(cleaned_lines)
 
-    # 2. Convert markdown double asterisks **text** -> WhatsApp native *text* bolding
-    text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
-
-    # 3. Fix stray spacing inside asterisks (e.g. * word * -> *word*)
-    text = re.sub(r'\*\s+([^\*]+?)\s+\*', r'*\1*', text)
-
-    # 4. Remove any remaining stray ### or ##
+    # 1. Remove markdown hashes (e.g. ### Header -> Header)
+    text = re.sub(r'^\s*#{1,6}\s*', '', text, flags=re.MULTILINE)
     text = text.replace('###', '').replace('##', '')
 
-    return text
+    # 2. Fix double asterisks **text** -> *text*
+    text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
+
+    # 3. Fix missing space after bold headers, e.g. '*Title:*text' -> '*Title:* text'
+    text = re.sub(r'(\*[^\*\n]+\*:)([^\s\n])', r'\1 \2', text)
+
+    # 4. Fix missing space before bold headers attached to hyphens, e.g. '-*Title:*' -> '- *\1*'
+    text = re.sub(r'-\*([^\*\n]+)\*', r'- *\1*', text)
+
+    # 5. Fix smashed bold words attached to subsequent text, e.g. '*Prazosin*based' -> '*Prazosin* based'
+    text = re.sub(r'(\*[^\*\n]+\*)([a-zA-Z0-9])', r'\1 \2', text)
+
+    # 6. Fix smashed preceding text attached to bold words, e.g. 'text*Prazosin*' -> 'text *Prazosin*'
+    text = re.sub(r'([a-zA-Z0-9])(\*[^\*\n]+\*)', r'\1 \2', text)
+
+    # 7. Ensure space after bullet hyphens, e.g. '-Classification:' -> '- Classification:'
+    text = re.sub(r'^-([a-zA-Z0-9\*])', r'- \1', text, flags=re.MULTILINE)
+
+    # 8. Add newline before section emojis if smashed, e.g. 'text📖 IN-DEPTH' -> 'text\n\n📖 IN-DEPTH'
+    text = re.sub(r'([^\n])([📖💡📚🎯])', r'\1\n\n\2', text)
+
+    # 9. Normalize multiple consecutive blank lines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
 
 async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
     """Sends a text response directly to the student via Meta WhatsApp Cloud API"""
@@ -988,8 +1011,12 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
         # Send the detailed answer
         await send_whatsapp_cloud_msg(sender_phone, ai_answer)
 
-        # Attach interactive follow-up button for quick MCQ generation if it was a medical question
-        if intent != "QUIZ" and not user_msg.startswith("GENERATE_QUIZ"):
+        # Check if the answer indicates information is missing from textbooks
+        ai_lower = ai_answer.lower()
+        is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
+
+        # Attach interactive follow-up button for quick MCQ generation ONLY if it was a valid medical answer
+        if intent != "QUIZ" and not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
             try:
                 topic_snippet = query_to_search[:50]
                 await send_whatsapp_interactive_button(
