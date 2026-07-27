@@ -165,8 +165,37 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
         data = response.json()
         return data["choices"][0]["message"]["content"]
 
+def format_whatsapp_text(text: str) -> str:
+    """Converts standard Markdown formatting into clean, valid WhatsApp formatting.
+    - Strips markdown headers (### Heading -> Heading)
+    - Converts double asterisks (**word**) into WhatsApp native single asterisk (*word*) bolding
+    - Cleans up stray spacing around asterisks so WhatsApp properly renders them as bold text without visible symbols.
+    """
+    if not text:
+        return text
+    
+    # 1. Strip markdown header hashes (e.g. ### Heading -> Heading)
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        cleaned_line = re.sub(r'^\s*#{1,6}\s*', '', line)
+        cleaned_lines.append(cleaned_line)
+    text = '\n'.join(cleaned_lines)
+
+    # 2. Convert markdown double asterisks **text** -> WhatsApp native *text* bolding
+    text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
+
+    # 3. Fix stray spacing inside asterisks (e.g. * word * -> *word*)
+    text = re.sub(r'\*\s+([^\*]+?)\s+\*', r'*\1*', text)
+
+    # 4. Remove any remaining stray ### or ##
+    text = text.replace('###', '').replace('##', '')
+
+    return text
+
 async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
     """Sends a text response directly to the student via Meta WhatsApp Cloud API"""
+    message_text = format_whatsapp_text(message_text)
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
@@ -188,6 +217,7 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
 
 async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_text: str, options: list):
     """Sends an Interactive List Message (max 10 options)"""
+    body_text = format_whatsapp_text(body_text)
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
@@ -238,6 +268,7 @@ async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_
 
 async def send_whatsapp_interactive_button(to_number: str, body_text: str, buttons: list):
     """Sends an Interactive Button Message (max 3 buttons)"""
+    body_text = format_whatsapp_text(body_text)
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
