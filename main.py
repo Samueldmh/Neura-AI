@@ -88,20 +88,19 @@ CONVERSATIONAL & SOCRATIC REASONING RULES:
 3. Keep answers grounded in the provided Textbook Context, but synthesize, extrapolate, and explain the underlying physiology/pathology with clarity and common sense.
 4. Only if a query is completely non-medical and totally unrelated to medical study should you gracefully state: "I'm sorry, but this information is not covered in your selected textbooks."
 
-CRITICAL FORMATTING LAYOUT RULES FOR WHATSAPP:
-1. Every major section and subsection MUST start on a NEW LINE with proper spacing. NEVER smash titles together on the same line.
-2. Use valid WhatsApp bolding format for section headers: *Title:* followed by a space. Example:
-   *Mechanism of Action:* Prazosin works by blocking alpha-1 adrenergic receptors...
-3. For lists, start each item on a new line using a dash and space:
+CRITICAL FORMATTING & CITATION RULES FOR WHATSAPP:
+1. NO INLINE CITATIONS: Absolutely NEVER include page numbers, figure numbers, or textbook references (e.g. Robbins p. 787, Fig 20.33) in the middle of sentences, bullet points, or paragraphs. All citations MUST be listed strictly at the very end of your response under 📚 CITATIONS.
+2. WHATSAPP BOLDING: Use valid WhatsApp bolding format for section headers and key terms (*Title:* followed by a space). Example:
    - *Classification:* Selective alpha-1 antagonist.
    - *Clinical Uses:* Hypertension and BPH.
-4. Structure your initial explanations into clear sections separated by blank lines:
+3. NO SMASHED WORDS: Ensure flawless spacing between words, punctuation, and hyphens. Always put a space after colons, periods, and bold words (e.g. write "*Prazosin* is" instead of "*Prazosin*is", write "for only" instead of "foronly").
+4. Every major section and subsection MUST start on a NEW LINE with proper spacing. NEVER smash titles together on the same line.
+5. Structure your initial explanations into clear sections separated by blank lines:
    📖 *IN-DEPTH EXPLANATION*
    
    💡 *KEY CLINICAL PEARLS*
    
    📚 *CITATIONS*
-5. TEXT EDITING & SPACING: Ensure flawless spelling, grammar, and space placement. Always put a space after colons, periods, and bold words (e.g. write "*Prazosin* is" instead of "*Prazosin*is").
 """
 
 SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate exactly 7 rigorous, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions (MCQs).
@@ -164,9 +163,9 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
     messages.append({"role": "user", "content": user_prompt})
     
     payload = {
-        "model": "anthropic/claude-3-haiku",
+        "model": "google/gemini-2.0-pro-exp-02-05",
         "messages": messages,
-        "temperature": 0.3
+        "temperature": 0.2
     }
     
     async with httpx.AsyncClient(timeout=30.0) as client:
