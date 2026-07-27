@@ -1105,9 +1105,9 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
                 topic_snippet = query_to_search[:50]
                 await send_whatsapp_interactive_button(
                     sender_phone,
-                    "💡 Want to test your MBBS exam knowledge on this topic?",
+                    "Ready to practice MCQs on this topic?",
                     [
-                        {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Generate MCQs"}
+                        {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice MCQs"}
                     ]
                 )
             except Exception as btn_err:
