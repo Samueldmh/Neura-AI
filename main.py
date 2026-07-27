@@ -346,6 +346,29 @@ SEARCH_STOP_WORDS = {
     "talk", "talking", "teach", "show", "break", "down", "breakdown",
 }
 
+FOLLOWUP_PHRASES = [
+    "tell me more", "tell me more about this", "is this all", "is that all",
+    "more details", "explain further", "elaborate", "what else", "give me more",
+    "continue", "explain simpler", "can you explain more", "anything else",
+    "tell me further", "more on this", "go on", "keep going", "is there more",
+    "summarize more", "more info", "expand on this", "details", "are you sure",
+    "what about this", "what of this", "further explanation"
+]
+
+def check_is_followup_query(msg: str) -> bool:
+    """Detects if a user message is a conversational follow-up without standalone medical terms."""
+    msg_clean = re.sub(r'[^\w\s]', '', msg.lower().strip())
+    if any(phrase in msg_clean for phrase in FOLLOWUP_PHRASES):
+        return True
+    
+    words = msg_clean.split()
+    if len(words) <= 4:
+        terms = extract_medical_terms(msg)
+        if not terms or (len(terms) == 1 and terms[0].lower() == msg_clean):
+            if all(w.lower() in SEARCH_STOP_WORDS for w in words):
+                return True
+    return False
+
 def get_explicit_book_override(user_msg: str, preferred_books: list) -> list:
     """If the user explicitly mentions a subject or book name in their prompt, restrict the search to that book."""
     msg_lower = user_msg.lower()
@@ -943,19 +966,47 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str):
             await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
             return
 
-        # Step 1: Extract medical terms from the query_to_search
-        medical_terms = extract_medical_terms(query_to_search)
+        # Check if the user query is a conversational follow-up (e.g. "is this all?", "tell me more")
+        is_followup = check_is_followup_query(query_to_search)
+        
+        last_topic = None
+        if is_followup and chat_history_col is not None:
+            user_hist = await chat_history_col.find_one({"user_id": sender_phone})
+            if user_hist and "messages" in user_hist:
+                for msg in reversed(user_hist["messages"]):
+                    if msg.get("role") == "user":
+                        content = msg.get("content", "")
+                        if not check_is_followup_query(content) and not content.startswith("GENERATE_QUIZ"):
+                            last_topic = content
+                            break
+
+        if is_followup:
+            if last_topic:
+                print(f"[Follow-up Router] Resolved follow-up '{query_to_search}' to previous topic: '{last_topic}'")
+                search_term = last_topic
+            else:
+                prompt_msg = (
+                    "What medical topic, clinical case, or concept would you like to learn more about?\n\n"
+                    "Type a specific subject or drug (e.g., *Prazosin*, *MEN1A*, *Antibiotics*) and I'll pull exact details from your textbooks!"
+                )
+                await send_whatsapp_cloud_msg(sender_phone, prompt_msg)
+                return
+        else:
+            search_term = query_to_search
+
+        # Step 1: Extract medical terms from the search_term
+        medical_terms = extract_medical_terms(search_term)
         
         # Step 1.5: Check for explicit book overrides (e.g. if user says "Use pharmacology")
-        active_books = get_explicit_book_override(query_to_search, preferred_books_list)
+        active_books = get_explicit_book_override(search_term, preferred_books_list)
         
-        # Step 2: Multi-search Qdrant with extracted terms + original query, filtered by active books
+        # Step 2: Multi-search Qdrant with extracted terms + search_term, filtered by active books
         if medical_terms:
-            if query_to_search not in medical_terms:
-                medical_terms.append(query_to_search)
+            if search_term not in medical_terms:
+                medical_terms.append(search_term)
             search_res = multi_search_qdrant(medical_terms, preferred_books=active_books)
         else:
-            search_res = search_qdrant(query_to_search, limit=12, preferred_books=active_books)
+            search_res = search_qdrant(search_term, limit=12, preferred_books=active_books)
 
         if not search_res:
             await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question in your selected textbooks. Try rephrasing or updating your preferred books using /update books!")
