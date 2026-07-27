@@ -54,6 +54,7 @@ print(f"PHONE_NUMBER_ID: {PHONE_NUMBER_ID}")
 
 embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+shared_http_client = httpx.AsyncClient(timeout=30.0)
 
 # Ensure payload index exists for book_title filtering
 try:
@@ -165,16 +166,21 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
     payload = {
         "model": "deepseek/deepseek-v4-pro",
         "messages": messages,
-        "temperature": 0.2
+        "temperature": 0.2,
+        "max_tokens": 2500
     }
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(url, headers=headers, json=payload)
-        if response.status_code != 200:
-            print(f"OpenRouter Error Status {response.status_code}: {response.text}")
-            raise HTTPException(status_code=500, detail=f"OpenRouter Error: {response.text}")
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
+    try:
+        response = await shared_http_client.post(url, headers=headers, json=payload)
+    except Exception as http_err:
+        async with httpx.AsyncClient(timeout=30.0) as fallback_client:
+            response = await fallback_client.post(url, headers=headers, json=payload)
+            
+    if response.status_code != 200:
+        print(f"OpenRouter Error Status {response.status_code}: {response.text}")
+        raise HTTPException(status_code=500, detail=f"OpenRouter Error: {response.text}")
+    data = response.json()
+    return data["choices"][0]["message"]["content"]
 
 def format_whatsapp_text(text: str) -> str:
     """Master WhatsApp text sanitizer. Guarantees 100% clean text by preserving ONLY valid WhatsApp bold tags (*word*) and stripping ALL stray asterisks."""
@@ -238,25 +244,50 @@ def format_whatsapp_text(text: str) -> str:
     return text.strip()
 
 async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
-    """Sends a text response directly to the student via Meta WhatsApp Cloud API"""
+    """Sends a text response directly to the student via Meta WhatsApp Cloud API. Automatically chunks messages exceeding Meta's 4000 char limit."""
     message_text = format_whatsapp_text(message_text)
+    if not message_text:
+        return
+
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
         "Content-Type": "application/json"
     }
-    payload = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": to_number,
-        "type": "text",
-        "text": {
-            "preview_url": False,
-            "body": message_text
+
+    # Meta WhatsApp text messages cap at 4096 chars. Split into ~3500 char chunks by paragraph.
+    chunks = []
+    if len(message_text) > 3500:
+        paragraphs = message_text.split("\n\n")
+        current_chunk = ""
+        for p in paragraphs:
+            if len(current_chunk) + len(p) + 2 <= 3500:
+                current_chunk += ("\n\n" if current_chunk else "") + p
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk)
+                current_chunk = p
+        if current_chunk:
+            chunks.append(current_chunk)
+    else:
+        chunks = [message_text]
+
+    for chunk in chunks:
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_number,
+            "type": "text",
+            "text": {
+                "preview_url": False,
+                "body": chunk
+            }
         }
-    }
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        res = await client.post(url, headers=headers, json=payload)
+        try:
+            res = await shared_http_client.post(url, headers=headers, json=payload)
+        except Exception:
+            async with httpx.AsyncClient(timeout=20.0) as fallback_client:
+                res = await fallback_client.post(url, headers=headers, json=payload)
         print(f"Meta Graph API Send Status {res.status_code}: {res.text}")
 
 async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_text: str, options: list):
@@ -527,15 +558,15 @@ def multi_search_qdrant(search_terms: list, preferred_books: list = None) -> lis
     
     # Search for each extracted medical term individually
     for term in search_terms:
-        results = search_qdrant(term, limit=12, preferred_books=preferred_books)
+        results = search_qdrant(term, limit=4, preferred_books=preferred_books)
         for point in results:
             text_key = point.payload.get("text", "")[:100]
             if text_key not in seen_texts:
                 seen_texts.add(text_key)
                 all_results.append(point)
     
-    # Cap at 24 results max to avoid overwhelming the LLM context
-    all_results = all_results[:24]
+    # Cap at 10 results max to optimize prompt processing speed while keeping 100% medical depth
+    all_results = all_results[:10]
     print(f"📚 Multi-search returned {len(all_results)} unique chunks from {len(search_terms)} keyword(s) with filter {preferred_books}")
     return all_results
 
