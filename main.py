@@ -1133,10 +1133,15 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
             user_prompt = (
                 f"THE USER EXPLICITLY TAGGED/QUOTED YOUR PREVIOUS WHATSAPP MESSAGE BELOW:\n\"\"\"{tagged_snippet}\"\"\"\n\n"
                 f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\n"
-                f"USER'S QUESTION/INSTRUCTION REGARDING THE TAGGED MESSAGE:\n{query_to_search}"
+                f"USER'S QUESTION/INSTRUCTION REGARDING THE TAGGED MESSAGE:\n{query_to_search}\n\n"
+                f"CRITICAL INSTRUCTION: Jump straight into the answer. Do NOT start your response with 'Based on the retrieved context', 'According to', or any similar robotic phrasing. Just speak naturally."
             )
         else:
-            user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{query_to_search}"
+            user_prompt = (
+                f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\n"
+                f"STUDENT QUESTION:\n{query_to_search}\n\n"
+                f"CRITICAL INSTRUCTION: Jump straight into the answer. Do NOT start your response with 'Based on the retrieved context', 'According to', or any similar robotic phrasing. Just speak naturally."
+            )
         
         # Build dynamic user context
         books_str = ", ".join(preferred_books_list) if preferred_books_list else "None"
