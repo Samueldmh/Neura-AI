@@ -188,7 +188,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
     return data["choices"][0]["message"]["content"]
 
 def format_whatsapp_text(text: str) -> str:
-    """Master WhatsApp text sanitizer. Guarantees 100% clean text by preserving ONLY valid WhatsApp bold tags (*word*) and stripping ALL stray asterisks."""
+    """Master WhatsApp text sanitizer. Fixes layout and bolding without destroying text."""
     if not text:
         return text
 
@@ -199,42 +199,39 @@ def format_whatsapp_text(text: str) -> str:
     # 2. Fix double asterisks **text** -> *text*
     text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
 
-    # 3. Strip useless asterisk combos like '* *', '*- *', '*-*', '* - *', '* ('
-    text = re.sub(r'\*\s*-\s*\*|\*-\*|\*-\s*|\*-\s*\*|\*\s*\*|\*\s*\(', r' ', text)
+    # 3. Add space around bold text if missing to prevent word merging
+    # e.g., "Nematodes*Based" -> "Nematodes *Based"
+    text = re.sub(r'([a-zA-Z0-9])(\*[^\*\n]+\*)', r'\1 \2', text)
+    # e.g., "*Nematodes*Based" -> "*Nematodes* Based"
+    text = re.sub(r'(\*[^\*\n]+\*)([a-zA-Z0-9])', r'\1 \2', text)
 
-    # 4. Remove asterisks that have spaces immediately inside them:
-    # '* word*' -> 'word'
-    # '*word *' -> 'word'
-    text = re.sub(r'\*\s+([^\*\n]+?)\*', r'\1', text)
-    text = re.sub(r'\*([^\*\n]+?)\s+\*', r'\1', text)
-
-    # 5. Fix missing space after colons in key headers
+    # 4. Fix missing space after colons/commas inside bold or right after bold
     text = re.sub(r'(\*[^\*\n]+\*:)([^\s\n])', r'\1 \2', text)
 
-    # 6. Fix missing space before bold words attached to hyphens, e.g. '-*Title:*' -> '- *\1*'
-    text = re.sub(r'-\*([^\*\n]+)\*', r'- *\1*', text)
-
-    # 7. Ensure space after bullet hyphens, e.g. '-Classification:' -> '- Classification:'
+    # 5. Ensure space after bullet hyphens
     text = re.sub(r'^-([a-zA-Z0-9\*])', r'- \1', text, flags=re.MULTILINE)
 
-    # 8. Ensure double-line spacing before list items so text is never jampacked
+    # 6. Ensure double-line spacing before list items
     text = re.sub(r'([^\n])\n(-|\*|[0-9]+\.)\s+', r'\1\n\n\2 ', text)
 
-    # 9. Add newline before section emojis if smashed
+    # 7. Add newline before emojis
     text = re.sub(r'([^\n])([📖💡📚🎯])', r'\1\n\n\2', text)
 
-    # 9. FINAL SANITIZER PASS: Preserve ONLY valid WhatsApp bold tags `*valid_text*` and strip any remaining orphan/stray asterisks!
+    # 8. FINAL PASS: Clean up orphan asterisks safely
     def clean_line_asterisks(line: str) -> str:
         placeholders = []
         def store_valid_bold(m):
             placeholders.append(m.group(0))
             return f"__VALID_BOLD_{len(placeholders)-1}__"
 
-        # Pattern for valid WhatsApp bold tag: *start_char ... end_char* (no internal linebreaks or stray spaces)
-        pattern = r'\*([a-zA-Z0-9📖💡📚🎯📌🔑\(\)][^\*\n]*?[a-zA-Z0-9:\?\.\!\)]|\b[a-zA-Z0-9]\b)\*'
+        # Match valid WhatsApp bold tags.
+        pattern = r'\*([^\s\*][^\*]*[^\s\*]|[^\s\*])\*'
         line_masked = re.sub(pattern, store_valid_bold, line)
 
-        # Remove any leftover stray '*' in the line
+        # Remove stray asterisks ONLY if they are alone or causing issues, but don't merge words!
+        # If an asterisk is between two letters (e.g., word*word), replace with space to prevent merging.
+        line_masked = re.sub(r'([a-zA-Z0-9])\*([a-zA-Z0-9])', r'\1 \2', line_masked)
+        # Any other stray asterisk can just be removed
         line_masked = line_masked.replace('*', '')
 
         # Restore valid bold placeholders
@@ -246,7 +243,7 @@ def format_whatsapp_text(text: str) -> str:
     cleaned_lines = [clean_line_asterisks(l) for l in text.split('\n')]
     text = '\n'.join(cleaned_lines)
 
-    # 10. Normalize multiple blank lines
+    # 9. Normalize multiple blank lines
     text = re.sub(r'\n{3,}', '\n\n', text)
 
     return text.strip()
