@@ -168,7 +168,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
     messages.append({"role": "user", "content": user_prompt})
     
     payload = {
-        "model": "deepseek/deepseek-v4-pro",
+        "model": "deepseek/deepseek-v4-flash",
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": 2500
