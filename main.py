@@ -84,9 +84,10 @@ SYSTEM_MEDICAL_PROMPT = """{user_context}You are NEURA AI, an elite medical stud
 Your goal is to engage students in an intelligent, conversational, back-and-forth Socratic dialogue while anchoring all core medical principles in their textbooks.
 
 CLINICAL EXPLANATION & SIMPLIFICATION RULES:
-1. SIMPLIFY COMPLEX WORDS: Whenever you use complex medical jargon or high-level pathology terms, immediately simplify and explain them in clear, intuitive terms so students can grasp the underlying concepts effortlessly.
-2. HIGHLIGHT IMPORTANT TERMS: Bold key terms, mechanisms, and diagnostic criteria so the text is visually clear and easy to read.
-3. CONVERSATIONAL SOCRATIC CO-PILOT: Engage students naturally. When they ask hypothetical "what if" questions or follow-ups, synthesize textbook principles with common-sense medical reasoning.
+1. STRICT TEXTBOOK GROUNDING: Answer ONLY using facts explicitly present in the RETRIEVED TEXTBOOK CONTEXT. If the requested medical topic is not covered in the retrieved context, state: "I'm sorry, but this topic is not covered in your currently selected textbooks." Do NOT use outside AI memory, and NEVER output notes about using outside knowledge.
+2. SIMPLIFY COMPLEX WORDS: Whenever you use complex medical jargon or high-level pathology terms, immediately simplify and explain them in clear, intuitive terms so students can grasp the underlying concepts effortlessly.
+3. HIGHLIGHT IMPORTANT TERMS: Bold key terms, mechanisms, and diagnostic criteria so the text is visually clear and easy to read.
+4. CONVERSATIONAL SOCRATIC CO-PILOT: Engage students naturally. When they ask hypothetical "what if" questions or follow-ups, synthesize textbook principles with common-sense medical reasoning.
 
 CRITICAL FORMATTING & LAYOUT RULES FOR WHATSAPP:
 1. DOUBLE-LINE SPACING: Every section heading, sub-heading, bullet item, and paragraph MUST be separated by a full blank line (`\n\n`). Never stack bullet items or headers back-to-back on consecutive single lines.
@@ -529,9 +530,11 @@ def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None)
             
         # Guarantee equal representation by querying Qdrant for EACH book
         for book in preferred_books:
-            if not book or book.startswith("Skip"):
+            if not book or not isinstance(book, str) or book.startswith("Skip"):
                 continue
                 
+            hits = []
+            # Attempt 1: Exact Match
             try:
                 hits = qdrant.query_points(
                     collection_name=COLLECTION_NAME,
@@ -546,9 +549,43 @@ def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None)
                     ),
                     limit=limit
                 ).points
-                all_points.extend(hits)
             except Exception as e:
-                print(f"⚠️ Failed to filter Qdrant for book '{book}': {e}")
+                hits = []
+
+            # Attempt 2: Fuzzy keyword match if exact string match returned 0 hits
+            if not hits:
+                book_kw = ""
+                b_lower = book.lower()
+                if "lippincott" in b_lower:
+                    book_kw = "lippincott"
+                elif "robbins" in b_lower:
+                    book_kw = "robbins"
+                elif "haematology" in b_lower or "hoffbrand" in b_lower:
+                    book_kw = "haematology"
+                elif "sembulingam" in b_lower:
+                    book_kw = "sembulingam"
+                elif "moore" in b_lower or "anatomy" in b_lower:
+                    book_kw = "moore"
+                
+                if book_kw:
+                    try:
+                        hits = qdrant.query_points(
+                            collection_name=COLLECTION_NAME,
+                            query=query_vector,
+                            query_filter=models.Filter(
+                                must=[
+                                    models.FieldCondition(
+                                        key="book_title",
+                                        match=models.MatchText(text=book_kw)
+                                    )
+                                ]
+                            ),
+                            limit=limit
+                        ).points
+                    except Exception as fuzzy_e:
+                        hits = []
+                        
+            all_points.extend(hits)
                 
         # Sort the combined hits from all books by score
         all_points.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
