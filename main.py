@@ -7,9 +7,11 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from fastembed import TextEmbedding
-from qdrant_client import QdrantClient
+from qdrant_client import AsyncQdrantClient
 from qdrant_client import models
 from motor.motor_asyncio import AsyncIOMotorClient
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 # ==========================================
 # 1. CONFIGURATION & ENVIRONMENT VARIABLES (v2.0 Webhook)
@@ -53,19 +55,24 @@ print(f"OPENROUTER_API_KEY Present: {bool(OPENROUTER_API_KEY)}")
 print(f"PHONE_NUMBER_ID: {PHONE_NUMBER_ID}")
 
 embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
-qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 shared_http_client = httpx.AsyncClient(timeout=30.0)
+embedding_pool = ThreadPoolExecutor(max_workers=4)
 
-# Ensure payload index exists for book_title filtering
-try:
-    qdrant.create_payload_index(
-        collection_name=COLLECTION_NAME,
-        field_name="book_title",
-        field_schema=models.PayloadSchemaType.KEYWORD
-    )
-    print("✅ Created/verified Qdrant payload index for 'book_title'")
-except Exception as idx_err:
-    print(f"ℹ️ Payload index info: {idx_err}")
+def get_embedding_sync(text: str):
+    return list(embedder.embed(text))[0]
+
+@app.on_event("startup")
+async def startup_event():
+    try:
+        await qdrant.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name="book_title",
+            field_schema=models.PayloadSchemaType.KEYWORD
+        )
+        print("✅ Created/verified Qdrant payload index for 'book_title'")
+    except Exception as idx_err:
+        print(f"ℹ️ Payload index info: {idx_err}")
 
 print(f"MONGO_URI Present: {bool(MONGO_URI)}")
 mongo_client = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
@@ -187,6 +194,69 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
         raise HTTPException(status_code=500, detail=f"OpenRouter Error: {response.text}")
     data = response.json()
     return data["choices"][0]["message"]["content"]
+
+async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str, sender_phone: str, chat_history: list = None) -> str:
+    if not OPENROUTER_API_KEY:
+        raise ValueError("OPENROUTER_API_KEY environment variable is not set on Render!")
+        
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://neura-ai.org",
+        "X-Title": "NEURA AI Medical Assistant"
+    }
+    
+    messages = [{"role": "system", "content": system_prompt}]
+    if chat_history:
+        messages.extend(chat_history)
+    messages.append({"role": "user", "content": user_prompt})
+    
+    payload = {
+        "model": "deepseek/deepseek-v4-flash",
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": 2500,
+        "stream": True
+    }
+    
+    full_text = ""
+    current_chunk = ""
+    
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as stream_client:
+            async with stream_client.stream("POST", url, headers=headers, json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        data_str = line[6:]
+                        try:
+                            data_json = json.loads(data_str)
+                            if "choices" in data_json and len(data_json["choices"]) > 0:
+                                delta = data_json["choices"][0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    full_text += content
+                                    current_chunk += content
+                                    
+                                    if "\n\n" in current_chunk and len(current_chunk) > 750:
+                                        parts = current_chunk.rsplit("\n\n", 1)
+                                        send_part = parts[0].strip()
+                                        if send_part:
+                                            await send_whatsapp_cloud_msg(sender_phone, send_part)
+                                        current_chunk = parts[1] if len(parts) > 1 else ""
+                        except json.JSONDecodeError:
+                            pass
+                            
+            if current_chunk.strip():
+                await send_whatsapp_cloud_msg(sender_phone, current_chunk.strip())
+                
+    except Exception as e:
+        print(f"Error streaming LLM: {e}")
+        full_text = await call_openrouter_llm(system_prompt, user_prompt, chat_history)
+        await send_whatsapp_cloud_msg(sender_phone, full_text)
+        
+    return full_text
 
 def format_whatsapp_text(text: str) -> str:
     """Master WhatsApp text sanitizer. Fixes layout and bolding without destroying text."""
@@ -511,20 +581,22 @@ def extract_book_keywords(preferred_books: list) -> list:
             keywords.extend(words)
     return keywords
 
-def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None) -> list:
+async def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None) -> list:
     """Search Qdrant securely per textbook to guarantee every selected book gets equal representation."""
     try:
-        query_vector = [e.tolist() for e in embedder.embed([query_text])][0]
+        loop = asyncio.get_running_loop()
+        query_vector = await loop.run_in_executor(embedding_pool, get_embedding_sync, query_text)
         
         all_points = []
         
         # If no preferred books are selected, fall back to a generic global search
         if not preferred_books:
-            return qdrant.query_points(
+            res = await qdrant.query_points(
                 collection_name=COLLECTION_NAME,
                 query=query_vector,
                 limit=limit
-            ).points
+            )
+            return res.points
             
         # Guarantee equal representation by querying Qdrant for EACH book
         for book in preferred_books:
@@ -534,7 +606,7 @@ def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None)
             hits = []
             # Attempt 1: Exact Match
             try:
-                hits = qdrant.query_points(
+                res = await qdrant.query_points(
                     collection_name=COLLECTION_NAME,
                     query=query_vector,
                     query_filter=models.Filter(
@@ -546,7 +618,8 @@ def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None)
                         ]
                     ),
                     limit=limit
-                ).points
+                )
+                hits = res.points
             except Exception as e:
                 hits = []
 
@@ -567,7 +640,7 @@ def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None)
                 
                 if book_kw:
                     try:
-                        hits = qdrant.query_points(
+                        res = await qdrant.query_points(
                             collection_name=COLLECTION_NAME,
                             query=query_vector,
                             query_filter=models.Filter(
@@ -579,7 +652,8 @@ def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None)
                                 ]
                             ),
                             limit=limit
-                        ).points
+                        )
+                        hits = res.points
                     except Exception as fuzzy_e:
                         hits = []
                         
@@ -593,14 +667,16 @@ def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None)
         print(f"❌ Error in search_qdrant: {outer_e}")
         return []
 
-def multi_search_qdrant(search_terms: list, preferred_books: list = None) -> list:
-    """Run separate Qdrant searches for each extracted medical keyword, then deduplicate"""
+async def multi_search_qdrant(search_terms: list, preferred_books: list = None) -> list:
+    """Run separate Qdrant searches for each extracted medical keyword CONCURRENTLY, then deduplicate"""
     seen_texts = set()
     all_results = []
     
-    # Search for each extracted medical term individually
-    for term in search_terms:
-        results = search_qdrant(term, limit=4, preferred_books=preferred_books)
+    # Run all searches concurrently!
+    tasks = [search_qdrant(term, limit=4, preferred_books=preferred_books) for term in search_terms]
+    results_list = await asyncio.gather(*tasks)
+    
+    for results in results_list:
         for point in results:
             text_key = point.payload.get("text", "")[:100]
             if text_key not in seen_texts:
@@ -1101,9 +1177,9 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
         if medical_terms:
             if search_term not in medical_terms:
                 medical_terms.append(search_term)
-            search_res = multi_search_qdrant(medical_terms, preferred_books=active_books)
+            search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
         else:
-            search_res = search_qdrant(search_term, limit=12, preferred_books=active_books)
+            search_res = await search_qdrant(search_term, limit=12, preferred_books=active_books)
 
         if not search_res:
             await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question in your selected textbooks. Try rephrasing or updating your preferred books using /update books!")
@@ -1157,7 +1233,11 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
             if user_doc and "messages" in user_doc:
                 chat_history = user_doc["messages"][-6:]
 
-        ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
+        if intent == "QUIZ":
+            ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
+            await send_whatsapp_cloud_msg(sender_phone, ai_answer)
+        else:
+            ai_answer = await stream_openrouter_llm_to_whatsapp(prompt_to_use, user_prompt, sender_phone, chat_history)
 
         if chat_history_col is not None:
             new_msgs = [
@@ -1169,9 +1249,6 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
                 {"$push": {"messages": {"$each": new_msgs}}},
                 upsert=True
             )
-
-        # Send the detailed answer
-        await send_whatsapp_cloud_msg(sender_phone, ai_answer)
 
         # Check if the answer indicates information is missing from textbooks
         ai_lower = ai_answer.lower()
