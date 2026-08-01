@@ -109,8 +109,14 @@ CRITICAL FORMATTING & LAYOUT RULES FOR WHATSAPP:
      - *Sub-detail:* Properly indented supporting detail.
 6. NO INLINE CITATIONS & NO CITATION COMPLAINTS: Absolutely NEVER include page numbers, figure numbers, or textbook references (e.g. Robbins p. 787, Fig 20.33) in the middle of sentences, bullet points, or paragraphs. All citations MUST be listed strictly at the very end of your response under 📚 CITATIONS. Under 📚 CITATIONS, ONLY list the raw source (e.g., "- Robbins Pathology"). NEVER add conversational notes, complaints about the textbook's relevance, or explanations about where you got the knowledge. Just list the source.
 7. NO SMASHED WORDS: Ensure flawless spacing between words, punctuation, and hyphens. Always put a space after colons, periods, and bold words (e.g. write "*Prazosin* is" instead of "*Prazosin*is").
-8. Structure responses into clear sections separated by blank lines:
+8. MANDATORY EXAM STRUCTURE: Structure responses into clear sections separated by blank lines:
+
    📖 *IN-DEPTH EXPLANATION*
+   
+   ⚡ *10-SECOND MCQ CHEAT SHEET*
+   - *Pathognomonic Sign / Classic Association:* Highlight the hallmark physical exam finding or key association.
+   - *First-Line vs. Definitive Test:* Distinguish the immediate initial test vs the gold-standard definitive test.
+   - *Examiner Trap & Distractor Breakdown:* Explain common trick choices and why distractor options fail in MCQs.
    
    💡 *KEY CLINICAL PEARLS*
    
@@ -124,8 +130,11 @@ RULES FOR MCQs:
 2. Provide 4 distinct options (A, B, C, D) for each of the 7 questions.
 3. Structure your response clearly using WhatsApp Markdown:
    - List Question 1 through 7 with their options (A, B, C, D).
-   - Provide a separate 🔑 **ANSWER KEY & DETAILED EXPLANATIONS** section at the bottom.
-   - For every answer, explain why the correct option is right AND why the key distractor options are wrong, citing the specific textbook title.
+   - Provide a separate 🔑 *ANSWER KEY & DETAILED EXPLANATIONS* section at the bottom.
+   - For every answer, break down the choices explicitly:
+     - *Correct Option:* Why it is right according to the textbook.
+     - *Distractor Breakdown:* Why the other options are wrong or when they would apply.
+     - *Examiner Trap:* Common mistakes students make on this question.
 """
 
 SYSTEM_INTERACTIVE_QUIZ_PROMPT = """You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate 5 rigorous, medical-school standard (MBBS / USMLE style) Multiple Choice Questions.
