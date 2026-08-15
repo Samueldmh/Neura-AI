@@ -711,7 +711,7 @@ Examples:
         return None
 
 async def send_subject_book_menu(sender_phone: str, level: str, subject: str) -> bool:
-    """Sends the book selection menu for a specific subject with options for Select All and one-by-one addition."""
+    """Sends the interactive book selection menu for a subject using the Live Checklist Dropdown UI."""
     user_doc = await users_col.find_one({"user_id": sender_phone}) if users_col is not None else None
     preferred_books = user_doc.get("preferred_books_list", []) if user_doc else []
     
@@ -724,50 +724,76 @@ async def send_subject_book_menu(sender_phone: str, level: str, subject: str) ->
             "Select Option", 
             [{"id": "SKIP_SUBJECT", "title": "⏭️ Skip this subject", "description": "Continue to next subject"}]
         )
+    elif len(all_books) == 1:
+        # Single-book subject: clean 1-tap selection
+        single_book = all_books[0]
+        body_text = f"Please select your preferred textbook for *{subject}*:"
+        options = [{
+            "id": single_book,
+            "title": single_book[:24].strip(),
+            "description": single_book[:72].strip()
+        }]
+        await send_whatsapp_interactive_list(sender_phone, body_text, "Select Textbook", options)
     else:
-        unselected = [b for b in all_books if b not in preferred_books]
-        if not unselected:
-            # All books for this subject selected, advance to next subject
-            return await send_next_subject_menu(sender_phone, level, subject)
+        # Multi-book subject: Live Checklist Dropdown
+        selected_for_subject = [b for b in all_books if b in preferred_books]
+        
+        # Build visual checklist lines
+        checklist_lines = []
+        for b in all_books:
+            b_display = b.split(":")[0][:40]
+            if b in selected_for_subject:
+                checklist_lines.append(f"• [✓] *{b_display}*")
+            else:
+                checklist_lines.append(f"• [  ] {b_display}")
+        checklist_str = "\n".join(checklist_lines)
+        
+        if selected_for_subject:
+            body_text = (
+                f"📚 *{subject} Textbooks* ({len(selected_for_subject)}/{len(all_books)} Selected):\n"
+                f"{checklist_str}\n\n"
+                f"Tap a book below to add/remove, or tap Finish when you're done!"
+            )
+        else:
+            body_text = (
+                f"📚 *{subject} Textbooks* (0/{len(all_books)} Selected):\n"
+                f"{checklist_str}\n\n"
+                f"Tap a textbook below to select it:"
+            )
             
         options = []
-        for b in unselected:
+        # Add Finish option if at least 1 book is selected
+        if selected_for_subject:
             options.append({
-                "id": b,
-                "title": b[:24].strip(),
-                "description": b[:72].strip()
+                "id": f"FINISH_SUBJECT_{subject}",
+                "title": "✅ Finish & Next Subject",
+                "description": f"Proceed with {len(selected_for_subject)} selected book(s)"
             })
             
-        if len(unselected) > 1:
-            options.append({
-                "id": f"SELECT_ALL_{subject}",
-                "title": "✨ Select All Books",
-                "description": f"Select all available books for {subject}"
-            })
-            
-        already_selected = [b for b in all_books if b in preferred_books]
-        if already_selected:
-            options.append({
-                "id": f"DONE_SUBJECT_{subject}",
-                "title": "➡️ Next Subject",
-                "description": "Proceed to next subject"
-            })
-        else:
+        # List all books with Add / Remove action indicators
+        for b in all_books:
+            if b in selected_for_subject:
+                options.append({
+                    "id": f"TOGGLE_{b}",
+                    "title": f"❌ Remove: {b}"[:24].strip(),
+                    "description": f"Remove {b}"[:72].strip()
+                })
+            else:
+                options.append({
+                    "id": f"TOGGLE_{b}",
+                    "title": f"➕ Add: {b}"[:24].strip(),
+                    "description": f"Add {b}"[:72].strip()
+                })
+                
+        # If no book selected yet, offer skip option
+        if not selected_for_subject:
             options.append({
                 "id": "SKIP_SUBJECT",
                 "title": "⏭️ Skip this subject",
                 "description": "Do not select any textbook for this subject"
             })
             
-        if already_selected:
-            body_text = (
-                f"✅ *{subject}* (Selected: {len(already_selected)}/{len(all_books)})\n\n"
-                f"Would you like to select another textbook for *{subject}*, or proceed to the next subject?"
-            )
-        else:
-            body_text = f"Please select your preferred textbook for *{subject}*:"
-            
-        await send_whatsapp_interactive_list(sender_phone, body_text, "Select Textbook", options)
+        await send_whatsapp_interactive_list(sender_phone, body_text, "Select / Toggle", options)
         
     await users_col.update_one(
         {"user_id": sender_phone}, 
@@ -799,17 +825,30 @@ async def send_next_subject_menu(sender_phone: str, level: str, current_subject:
 
 async def complete_onboarding(sender_phone: str):
     user_doc = await users_col.find_one({"user_id": sender_phone})
-    name = user_doc.get("name", "Student")
-    level = user_doc.get("level", "")
+    name = user_doc.get("name", "Student") if user_doc else "Student"
+    level = user_doc.get("level", "") if user_doc else ""
+    preferred_books = user_doc.get("preferred_books_list", []) if user_doc else []
+    
     await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "COMPLETED"}})
-    final_msg = (f"Awesome, {name}! Your profile is all set up for {level}. You can now start asking me medical questions! 📚\n\n"
-                 "⚙️ *Quick Commands:*\n"
-                 "• Type */feedback* to share quick feedback\n"
-                 "• Type */profile* to view your profile\n"
-                 "• Type */update name* to change your name\n"
-                 "• Type */update level* to change your level\n"
-                 "• Type */update books* to change your textbooks\n\n"
-                 "💬 _Help us improve! Share 2-min anonymous beta feedback anytime: https://forms.gle/dNr7SV5EUiqiFySx5_")
+    
+    if preferred_books:
+        books_summary = "\n".join(f"• {b}" for b in preferred_books)
+    else:
+        books_summary = "• None selected (searching general medical knowledge)"
+        
+    final_msg = (
+        f"🎉 Awesome, {name}! Your profile is all set up for *{level}*.\n\n"
+        f"📚 *Your Selected Textbooks:*\n"
+        f"{books_summary}\n\n"
+        f"You can now start asking me medical questions directly from these textbooks! 🧠⚡\n\n"
+        f"⚙️ *Quick Commands:*\n"
+        f"• Type */feedback* to share quick feedback\n"
+        f"• Type */profile* to view your profile\n"
+        f"• Type */update name* to change your name\n"
+        f"• Type */update level* to change your level\n"
+        f"• Type */update books* to change your textbooks\n\n"
+        f"💬 _Help us improve! Share 2-min anonymous beta feedback anytime: https://forms.gle/dNr7SV5EUiqiFySx5_"
+    )
     await send_whatsapp_cloud_msg(sender_phone, final_msg)
 
 async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
@@ -840,13 +879,14 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
     if step == "COMPLETED":
         # Block users from reusing old menu selections or level buttons after completing setup
         all_book_options = [b for books in AVAILABLE_BOOKS.values() for b in books] + [
-            "Skip (None available yet)", "SKIP_SUBJECT", "⏭️ Skip this subject", "✨ Select All Books", "➡️ Next Subject"
+            "Skip (None available yet)", "SKIP_SUBJECT", "⏭️ Skip this subject", "✅ Finish & Next Subject", "➡️ Next Subject"
         ]
         is_menu_tap = (
             user_msg in ["200L", "300L", "400L", "500L", "600L"] or 
             user_msg in all_book_options or 
             user_msg in ["START_ONBOARDING", "🚀 Start Setup"] or
-            user_msg.startswith("SELECT_ALL_") or
+            user_msg.startswith("TOGGLE_") or
+            user_msg.startswith("FINISH_SUBJECT_") or
             user_msg.startswith("DONE_SUBJECT_")
         )
         
@@ -893,7 +933,7 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             await complete_onboarding(sender_phone)
         return True
         
-    # 4. Extract Books (Dynamic Subject Loop)
+    # 4. Extract Books (Dynamic Subject Loop with Live Checklist Dropdown)
     if step.startswith("ASK_BOOK_"):
         current_subject = step.replace("ASK_BOOK_", "")
         all_subject_books = AVAILABLE_BOOKS.get(current_subject, [])
@@ -901,64 +941,75 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
         user_doc = await users_col.find_one({"user_id": sender_phone})
         preferred_books = user_doc.get("preferred_books_list", []) if user_doc else []
         
-        # A. Skip or Done
-        if user_msg in ["SKIP_SUBJECT", "Skip (None available yet)", f"DONE_SUBJECT_{current_subject}", "⏭️ Skip this subject", "➡️ Next Subject"]:
+        # A. Finish / Skip / Next Subject
+        is_finish = (
+            user_msg in [
+                "SKIP_SUBJECT", "Skip (None available yet)", "⏭️ Skip this subject",
+                f"FINISH_SUBJECT_{current_subject}", "✅ Finish & Next Subject",
+                f"DONE_SUBJECT_{current_subject}", "➡️ Next Subject"
+            ] or
+            user_msg.startswith("FINISH_SUBJECT_") or
+            user_msg.startswith("DONE_SUBJECT_")
+        )
+        
+        if is_finish:
             has_more = await send_next_subject_menu(sender_phone, level, current_subject)
             if not has_more:
                 await complete_onboarding(sender_phone)
             return True
             
-        # B. Select All for this subject
-        if user_msg == f"SELECT_ALL_{current_subject}" or user_msg in ["✨ Select All Books", "SELECT_ALL"]:
-            new_books = [b for b in all_subject_books if b not in preferred_books]
-            if new_books:
-                await users_col.update_one(
-                    {"user_id": sender_phone},
-                    {"$push": {"preferred_books_list": {"$each": new_books}}}
-                )
-            has_more = await send_next_subject_menu(sender_phone, level, current_subject)
-            if not has_more:
-                await complete_onboarding(sender_phone)
-            return True
+        # B. Handle Toggle / Book Selection
+        raw_book = user_msg
+        if raw_book.startswith("TOGGLE_"):
+            raw_book = raw_book.replace("TOGGLE_", "", 1)
             
-        # C. Specific Book selected
         matched_book = None
         for b in all_subject_books:
-            if user_msg == b or user_msg == b[:24].strip():
+            if raw_book == b or raw_book == b[:24].strip() or raw_book.endswith(b[:20]) or b.startswith(raw_book):
                 matched_book = b
                 break
                 
         if not matched_book:
             for b in [bk for books in AVAILABLE_BOOKS.values() for bk in books]:
-                if user_msg == b or user_msg == b[:24].strip():
+                if raw_book == b or raw_book == b[:24].strip() or b.startswith(raw_book):
                     matched_book = b
                     break
                     
         if not matched_book:
             await send_whatsapp_cloud_msg(
                 sender_phone, 
-                "Please use the menu button to select a valid textbook, select all, or tap skip."
+                "Please use the menu button to select/toggle your textbook, or tap Finish."
             )
             return True
             
-        # Add the selected book if not already added
-        if matched_book not in preferred_books:
+        # Single-book subject: 1-tap select & auto-advance
+        if len(all_subject_books) <= 1:
+            if matched_book not in preferred_books:
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$push": {"preferred_books_list": matched_book}}
+                )
+            has_more = await send_next_subject_menu(sender_phone, level, current_subject)
+            if not has_more:
+                await complete_onboarding(sender_phone)
+            return True
+            
+        # Multi-book subject: Toggle selection
+        if matched_book in preferred_books:
+            # Remove it (toggle off)
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$pull": {"preferred_books_list": matched_book}}
+            )
+        else:
+            # Add it (toggle on)
             await users_col.update_one(
                 {"user_id": sender_phone},
                 {"$push": {"preferred_books_list": matched_book}}
             )
-            preferred_books.append(matched_book)
             
-        # Check if there are more unselected books for this same subject
-        remaining = [b for b in all_subject_books if b not in preferred_books]
-        if len(all_subject_books) > 1 and remaining:
-            # Re-prompt subject menu to allow selecting another book one by one or clicking Next
-            await send_subject_book_menu(sender_phone, level, current_subject)
-        else:
-            # Subject finished, advance to next
-            has_more = await send_next_subject_menu(sender_phone, level, current_subject)
-            if not has_more:
-                await complete_onboarding(sender_phone)
+        # Re-send updated checklist menu for the same subject
+        await send_subject_book_menu(sender_phone, level, current_subject)
         return True
         
 async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list):
