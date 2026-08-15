@@ -2,6 +2,7 @@ mod config;
 mod llm;
 mod models;
 mod onboarding;
+mod queue;
 mod quiz;
 mod rag;
 mod whatsapp;
@@ -22,6 +23,7 @@ use mongodb::{Client as MongoClient, Collection, Database};
 use onboarding::{complete_onboarding, handle_onboarding, send_next_subject_menu};
 use qdrant_client::client::QdrantClient;
 use qdrant_client::config::QdrantConfig;
+use queue::UserQueueManager;
 use quiz::{handle_quiz_answer, start_interactive_quiz};
 use rag::{extract_medical_terms, get_explicit_book_override, RagEngine};
 use serde_json::json;
@@ -44,6 +46,7 @@ pub struct AppState {
     pub users_col: Option<Collection<UserDoc>>,
     pub chat_history_col: Option<Collection<ChatHistoryDoc>>,
     pub rag: Option<RagEngine>,
+    pub queue: UserQueueManager,
 }
 
 #[tokio::main]
@@ -114,6 +117,8 @@ async fn main() {
         None
     };
 
+    let queue = UserQueueManager::new();
+
     let state = AppState {
         config,
         http,
@@ -121,6 +126,7 @@ async fn main() {
         users_col,
         chat_history_col,
         rag,
+        queue,
     };
 
     let app = Router::new()
@@ -226,6 +232,26 @@ async fn process_whatsapp_message(
     user_msg: String,
     _is_tagged_reply: bool,
 ) {
+    // 1. Deduplication check (drops rapid duplicate taps within 3s)
+    if state.queue.is_duplicate_action(&sender_phone, &user_msg).await {
+        info!("🔇 Dropping duplicate action within 3s from {}: '{}'", sender_phone, user_msg);
+        return;
+    }
+
+    // 2. Rate limiter check (30 messages per minute)
+    if !state.queue.check_rate_limit(&sender_phone).await {
+        send_whatsapp_cloud_msg(
+            &state.http,
+            &state.config,
+            &sender_phone,
+            "⏳ You're studying fast! Please wait a moment before sending another message.",
+        ).await;
+        return;
+    }
+
+    // 3. Acquire user-specific async lock (ensures sequential processing per user while other users run in parallel)
+    let user_lock = state.queue.get_user_lock(&sender_phone).await;
+    let _lock_guard = user_lock.lock().await;
     let mut user_doc = None;
     let mut preferred_books_list = Vec::new();
     let mut name = "Student".to_string();
