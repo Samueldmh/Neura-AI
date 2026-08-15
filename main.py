@@ -42,6 +42,7 @@ AVAILABLE_BOOKS = {
     "Biochemistry": ["Textbook of Biochemistry For Medical Students 7th Edition"],
     "Histopathology": ["Robbins Basic Pathology 10th Edition 2017 (1)"],
     "Haematology": ["Essentials of Haematology"],
+    "Microbiology": ["Jawetz_Melnick_Adelbergs_Medical_Microbiology_27_edition_Med_zoneTV"],
     "Pharmacology": ["Lippincott Illustrated Reviews: Pharmacology"]
 }
 
@@ -516,6 +517,8 @@ def get_explicit_book_override(user_msg: str, preferred_books: list) -> list:
             override_books.append(b)
         elif "haematology" in msg_lower and ("haematology" in b_lower or "hoffbrand" in b_lower):
             override_books.append(b)
+        elif "microbiology" in msg_lower and ("microbiology" in b_lower or "jawetz" in b_lower):
+            override_books.append(b)
         elif "lippincott" in msg_lower and "lippincott" in b_lower:
             override_books.append(b)
         elif "robbins" in msg_lower and "robbins" in b_lower:
@@ -633,6 +636,8 @@ async def search_qdrant(query_text: str, limit: int = 4, preferred_books: list =
                     book_kw = "robbins"
                 elif "haematology" in b_lower or "hoffbrand" in b_lower:
                     book_kw = "haematology"
+                elif "microbiology" in b_lower or "jawetz" in b_lower:
+                    book_kw = "microbiology"
                 elif "sembulingam" in b_lower:
                     book_kw = "sembulingam"
                 elif "moore" in b_lower or "anatomy" in b_lower:
