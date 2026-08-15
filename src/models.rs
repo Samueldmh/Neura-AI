@@ -89,7 +89,7 @@ pub struct ButtonReply {
 }
 
 // ==========================================
-// MongoDB Documents
+// MongoDB Documents & Wallet System
 // ==========================================
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -101,6 +101,23 @@ pub struct UserDoc {
     #[serde(default)]
     pub preferred_books_list: Vec<String>,
     pub active_quiz: Option<ActiveQuiz>,
+    #[serde(default)]
+    pub wallet_balance_ngn: f64,
+    #[serde(default)]
+    pub total_spent_ngn: f64,
+    #[serde(default)]
+    pub transactions: Vec<WalletTransaction>,
+    pub awaiting_custom_deposit: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WalletTransaction {
+    pub tx_id: String,
+    pub tx_type: String, // "deposit" | "query_deduction"
+    pub amount_ngn: f64,
+    pub reference: Option<String>,
+    pub description: String,
+    pub timestamp: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -134,6 +151,48 @@ pub struct ChatMessage {
 pub struct ChatHistoryDoc {
     pub user_id: String,
     pub messages: Vec<ChatMessage>,
+}
+
+// ==========================================
+// Paystack Models
+// ==========================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaystackInitResponse {
+    pub status: bool,
+    pub message: String,
+    pub data: Option<PaystackInitData>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaystackInitData {
+    pub authorization_url: String,
+    pub access_code: String,
+    pub reference: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaystackWebhookPayload {
+    pub event: Option<String>,
+    pub data: Option<PaystackWebhookData>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaystackWebhookData {
+    pub id: Option<u64>,
+    pub amount: Option<u64>, // in Kobo
+    pub reference: Option<String>,
+    pub status: Option<String>,
+    pub channel: Option<String>,
+    pub customer: Option<PaystackCustomer>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaystackCustomer {
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub customer_code: Option<String>,
 }
 
 // ==========================================

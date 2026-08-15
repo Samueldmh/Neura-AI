@@ -279,3 +279,51 @@ pub async fn send_whatsapp_interactive_button(
         error!("Failed to send interactive button: {}", e);
     }
 }
+
+pub async fn send_whatsapp_cta_url_button(
+    http: &reqwest::Client,
+    config: &AppConfig,
+    to_number: &str,
+    body_text: &str,
+    button_label: &str,
+    url_target: &str,
+) {
+    let sanitized_body = format_whatsapp_text(body_text);
+    let url = format!(
+        "https://graph.facebook.com/v19.0/{}/messages",
+        config.phone_number_id
+    );
+
+    let display_title = button_label.chars().take(20).collect::<String>();
+
+    let payload = json!({
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": "interactive",
+        "interactive": {
+            "type": "cta_url",
+            "body": {
+                "text": sanitized_body
+            },
+            "action": {
+                "name": "cta_url",
+                "parameters": {
+                    "display_text": display_title,
+                    "url": url_target
+                }
+            }
+        }
+    });
+
+    if let Err(e) = http
+        .post(&url)
+        .bearer_auth(config.whatsapp_token.trim())
+        .json(&payload)
+        .send()
+        .await
+    {
+        error!("Failed to send CTA URL button: {}", e);
+    }
+}
+

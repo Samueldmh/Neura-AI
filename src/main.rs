@@ -1,3 +1,4 @@
+mod billing;
 mod config;
 mod llm;
 mod models;
@@ -9,7 +10,7 @@ mod whatsapp;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use config::{AppConfig, COLLECTION_NAME, SYSTEM_MEDICAL_PROMPT, SYSTEM_QUIZ_PROMPT};
@@ -63,6 +64,7 @@ async fn main() {
     info!("QDRANT_URL: {}", config.qdrant_url);
     info!("QDRANT_API_KEY Present: {}", !config.qdrant_api_key.is_empty());
     info!("OPENROUTER_API_KEY Present: {}", !config.openrouter_api_key.is_empty());
+    info!("PAYSTACK_SECRET_KEY Present: {}", !config.paystack_secret_key.is_empty());
     info!("PHONE_NUMBER_ID: {}", config.phone_number_id);
 
     let http = reqwest::Client::builder()
@@ -132,6 +134,8 @@ async fn main() {
     let app = Router::new()
         .route("/", get(root_handler))
         .route("/webhook", get(webhook_verify_handler).post(webhook_message_handler))
+        .route("/webhook/paystack", post(paystack_webhook_handler))
+        .route("/api/payment-complete", get(payment_complete_handler))
         .route("/api/chat", post(chat_handler))
         .route("/api/books", get(books_handler))
         .layer(CorsLayer::permissive())
@@ -151,8 +155,89 @@ async fn root_handler() -> Json<serde_json::Value> {
         "status": "online",
         "service": "NEURA AI Medical Backend (Rust)",
         "version": "2.0.0",
-        "runtime": "Rust / Axum / Tokio"
+        "runtime": "Rust / Axum / Tokio",
+        "billing": "Paystack In-App WebView + Dynamic Token Multiplier"
     }))
+}
+
+async fn payment_complete_handler() -> Html<&'static str> {
+    Html(r#"
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Payment Successful - NEURA AI</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f8fafc; color: #0f172a; text-align: center; }
+            .card { background: white; padding: 32px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); max-width: 400px; margin: 20px; }
+            .icon { font-size: 48px; margin-bottom: 16px; }
+            h1 { font-size: 24px; margin: 0 0 8px; color: #16a34a; }
+            p { color: #64748b; margin: 0 0 24px; font-size: 16px; line-height: 1.5; }
+            .btn { display: inline-block; background: #2563eb; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <div class="icon">✅</div>
+            <h1>Payment Confirmed!</h1>
+            <p>Your NEURA AI wallet has been successfully credited. You can close this window and return to WhatsApp.</p>
+        </div>
+    </body>
+    </html>
+    "#)
+}
+
+async fn paystack_webhook_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let signature = headers
+        .get("x-paystack-signature")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+
+    if !billing::verify_paystack_hmac(&state.config.paystack_secret_key, &body, signature) {
+        error!("❌ Paystack Webhook signature verification failed!");
+        return (StatusCode::UNAUTHORIZED, "Invalid signature").into_response();
+    }
+
+    if let Ok(payload) = serde_json::from_slice::<models::PaystackWebhookPayload>(&body) {
+        if payload.event.as_deref() == Some("charge.success") {
+            if let Some(data) = payload.data {
+                let amount = data.amount.unwrap_or(0);
+                let reference = data.reference.unwrap_or_default();
+                let phone = data
+                    .metadata
+                    .and_then(|m| {
+                        m.get("phone_number")
+                            .and_then(|p| p.as_str().map(|s| s.to_string()))
+                    })
+                    .or_else(|| data.customer.and_then(|c| c.phone))
+                    .unwrap_or_default();
+
+                if !phone.is_empty() && amount > 0 {
+                    info!(
+                        "💳 Confirmed payment of {} kobo from {} (Ref: {})",
+                        amount, phone, reference
+                    );
+                    if let Some(users_col) = &state.users_col {
+                        billing::credit_user_wallet(
+                            &state.http,
+                            &state.config,
+                            users_col,
+                            &phone,
+                            amount,
+                            &reference,
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+    }
+
+    (StatusCode::OK, "Webhook processed").into_response()
 }
 
 async fn webhook_verify_handler(
@@ -252,25 +337,53 @@ async fn process_whatsapp_message(
     // 3. Acquire user-specific async lock (ensures sequential processing per user while other users run in parallel)
     let user_lock = state.queue.get_user_lock(&sender_phone).await;
     let _lock_guard = user_lock.lock().await;
+
     let mut user_doc = None;
     let mut preferred_books_list = Vec::new();
     let mut name = "Student".to_string();
     let mut level = "Unknown Level".to_string();
+    let mut wallet_balance = 0.0;
+    let mut total_spent = 0.0;
 
     if let Some(users_col) = &state.users_col {
         if let Ok(Some(u)) = users_col.find_one(doc! { "user_id": &sender_phone }).await {
             name = u.name.clone().unwrap_or_else(|| "Student".to_string());
             level = u.level.clone().unwrap_or_else(|| "Unknown Level".to_string());
             preferred_books_list = u.preferred_books_list.clone();
+            wallet_balance = u.wallet_balance_ngn;
+            total_spent = u.total_spent_ngn;
             user_doc = Some(u);
         }
     }
 
-    // Profile commands
+    // Profile & Wallet commands
     let msg_lower = user_msg.trim().to_lowercase();
-    if msg_lower.starts_with('/') {
+    if msg_lower.starts_with('/') || msg_lower == "topup_wallet" || msg_lower == "start_deposit" {
         if let Some(users_col) = &state.users_col {
             match msg_lower.as_str() {
+                "/wallet" | "/balance" => {
+                    let est_queries = (wallet_balance / 20.0).floor() as u64;
+                    let wallet_msg = format!(
+                        "💳 *NEURA AI Wallet*\n\n• Available Balance: *₦{:.2}*\n• Total Spent: *₦{:.2}*\n• Estimated Queries Remaining: *~{}*\n\nType */deposit* to top up your wallet with any custom amount (min ₦5,000)!",
+                        wallet_balance, total_spent, est_queries
+                    );
+                    send_whatsapp_interactive_button(
+                        &state.http,
+                        &state.config,
+                        &sender_phone,
+                        &wallet_msg,
+                        &[ButtonOptionItem {
+                            id: "TOPUP_WALLET".to_string(),
+                            title: "💳 Deposit ₦5,000+".to_string(),
+                        }],
+                    )
+                    .await;
+                    return;
+                }
+                "/deposit" | "/topup" | "topup_wallet" | "start_deposit" => {
+                    billing::send_deposit_menu(&state.http, &state.config, &sender_phone, wallet_balance).await;
+                    return;
+                }
                 "/reset" => {
                     let _ = users_col.delete_one(doc! { "user_id": &sender_phone }).await;
                     if let Some(ch_col) = &state.chat_history_col {
@@ -300,8 +413,8 @@ async fn process_whatsapp_message(
                         "  - None".to_string()
                     };
                     let profile_msg = format!(
-                        "👤 *Your Profile*\n• Name: {}\n• Level: {}\n• Books:\n{}\n\n📝 *Feedback Survey:* https://forms.gle/dNr7SV5EUiqiFySx5",
-                        name, level, books_str
+                        "👤 *Your Profile*\n• Name: {}\n• Level: {}\n• Wallet Balance: ₦{:.2}\n• Books:\n{}\n\n📝 *Feedback Survey:* https://forms.gle/dNr7SV5EUiqiFySx5",
+                        name, level, wallet_balance, books_str
                     );
                     send_whatsapp_cloud_msg(&state.http, &state.config, &sender_phone, &profile_msg).await;
                     return;
@@ -365,6 +478,13 @@ async fn process_whatsapp_message(
         }
     }
 
+    // Handle In-App Paystack Deposit selection or custom amount typing
+    if let Some(users_col) = &state.users_col {
+        if billing::handle_deposit_request(&state.http, &state.config, users_col, &sender_phone, &user_msg).await {
+            return;
+        }
+    }
+
     // Handle Quiz Answer
     if let (Some(users_col), Some(u)) = (&state.users_col, &user_doc) {
         if u.active_quiz.is_some() {
@@ -381,7 +501,27 @@ async fn process_whatsapp_message(
         }
     }
 
-    // Fetch chat history
+    // Low Balance Interception
+    if wallet_balance < billing::LOW_BALANCE_THRESHOLD_NGN {
+        let low_bal_card = format!(
+            "⚠️ *Insufficient Wallet Balance (₦{:.2})*\n\nTo continue asking clinical questions and practicing MBBS MCQs, please top up your wallet (minimum deposit is ₦5,000).\n\nTap below to deposit:",
+            wallet_balance
+        );
+        send_whatsapp_interactive_button(
+            &state.http,
+            &state.config,
+            &sender_phone,
+            &low_bal_card,
+            &[ButtonOptionItem {
+                id: "TOPUP_WALLET".to_string(),
+                title: "💳 Deposit ₦5,000+".to_string(),
+            }],
+        )
+        .await;
+        return;
+    }
+
+    // Fetch chat history early
     let mut history_messages = Vec::new();
     if let Some(ch_col) = &state.chat_history_col {
         if let Ok(Some(ch)) = ch_col.find_one(doc! { "user_id": &sender_phone }).await {
@@ -483,6 +623,26 @@ async fn process_whatsapp_message(
         &history_messages,
     )
     .await;
+
+    // Dynamic Token Billing Deduction (8.0x Profit Multiplier)
+    if let Some(users_col) = &state.users_col {
+        let est_prompt_tokens = 1500 + (user_prompt.len() / 4);
+        let est_completion_tokens = final_response.len() / 4;
+        let query_charge_ngn = billing::calculate_query_cost_ngn(est_prompt_tokens, est_completion_tokens);
+
+        billing::deduct_user_wallet(
+            users_col,
+            &sender_phone,
+            query_charge_ngn,
+            "Medical Clinical Query / RAG Explanation",
+        )
+        .await;
+
+        info!(
+            "💰 Deducted ₦{:.2} from {} (Prompt: {} tok, Compl: {} tok, ~85% net margin)",
+            query_charge_ngn, sender_phone, est_prompt_tokens, est_completion_tokens
+        );
+    }
 
     // Send follow-up interactive buttons
     let short_topic: String = query_to_search.chars().take(20).collect();

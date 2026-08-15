@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub whatsapp_token: String,
     pub phone_number_id: String,
     pub verify_token: String,
+    pub paystack_secret_key: String,
+    pub base_url: String,
 }
 
 impl AppConfig {
@@ -25,6 +27,8 @@ impl AppConfig {
             whatsapp_token: env::var("WHATSAPP_TOKEN").unwrap_or_default(),
             phone_number_id: env::var("PHONE_NUMBER_ID").unwrap_or_else(|_| "1150180661520951".to_string()),
             verify_token: env::var("VERIFY_TOKEN").unwrap_or_else(|_| "neura_ai_webhook_secret_2026".to_string()),
+            paystack_secret_key: env::var("PAYSTACK_SECRET_KEY").unwrap_or_default(),
+            base_url: env::var("BASE_URL").unwrap_or_else(|_| "https://neura-ai.onrender.com".to_string()),
         }
     }
 }
