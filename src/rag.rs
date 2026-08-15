@@ -276,3 +276,38 @@ pub fn get_explicit_book_override(user_msg: &str, preferred_books: &[String]) ->
         override_books
     }
 }
+
+pub fn is_followup_question(user_msg: &str) -> bool {
+    let lower = user_msg.trim().to_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+
+    // If query is very short (<= 4 words) and not a basic greeting
+    if words.len() <= 4 && !["hi", "hello", "hey", "who are you"].contains(&lower.as_str()) {
+        return true;
+    }
+
+    // Pronouns & conversational follow-up references
+    let re_pronoun = Regex::new(r"\b(it|its|this|that|these|those|they|them|the drug|the disease|the condition|the organ|the patient|the lesion|the syndrome)\b").unwrap();
+    if re_pronoun.is_match(&lower) {
+        return true;
+    }
+
+    // Follow-up question openers
+    if lower.starts_with("what about")
+        || lower.starts_with("what of")
+        || lower.starts_with("how about")
+        || lower.starts_with("and ")
+        || lower.starts_with("can it")
+        || lower.starts_with("does it")
+        || lower.starts_with("why is it")
+        || lower.starts_with("what is its")
+        || lower.starts_with("antidote")
+        || lower.starts_with("side effect")
+        || lower.starts_with("treatment")
+    {
+        return true;
+    }
+
+    false
+}
+

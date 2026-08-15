@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use config::{AppConfig, COLLECTION_NAME, SYSTEM_MEDICAL_PROMPT, SYSTEM_QUIZ_PROMPT};
-use llm::{call_openrouter_llm, stream_openrouter_llm_to_whatsapp};
+use llm::{call_openrouter_llm, rewrite_query_with_context, stream_openrouter_llm_to_whatsapp};
 use models::{
     ButtonOptionItem, ChatHistoryDoc, ChatMessage, QueryRequest, UserDoc, WebhookPayload,
     WebhookVerificationParams,
@@ -25,7 +25,7 @@ use qdrant_client::client::QdrantClient;
 use qdrant_client::config::QdrantConfig;
 use queue::UserQueueManager;
 use quiz::{handle_quiz_answer, start_interactive_quiz};
-use rag::{extract_medical_terms, get_explicit_book_override, RagEngine};
+use rag::{extract_medical_terms, get_explicit_book_override, is_followup_question, RagEngine};
 use serde_json::json;
 use std::env;
 use std::net::SocketAddr;
@@ -381,6 +381,15 @@ async fn process_whatsapp_message(
         }
     }
 
+    // Fetch chat history
+    let mut history_messages = Vec::new();
+    if let Some(ch_col) = &state.chat_history_col {
+        if let Ok(Some(ch)) = ch_col.find_one(doc! { "user_id": &sender_phone }).await {
+            history_messages = ch.messages.iter().rev().take(6).cloned().collect::<Vec<_>>();
+            history_messages.reverse();
+        }
+    }
+
     // RAG and AI Medical Response Pipeline
     let mut query_to_search = user_msg.clone();
     let mut intent = "EXPLANATION";
@@ -388,6 +397,19 @@ async fn process_whatsapp_message(
     if user_msg.starts_with("GENERATE_QUIZ:") {
         query_to_search = user_msg.replace("GENERATE_QUIZ:", "").trim().to_string();
         intent = "QUIZ";
+    }
+
+    // Contextual Query Resolution for follow-up questions
+    if !history_messages.is_empty() && is_followup_question(&query_to_search) && intent == "EXPLANATION" {
+        let rewritten = rewrite_query_with_context(
+            &state.http,
+            &state.config.openrouter_api_key,
+            &query_to_search,
+            &history_messages,
+        )
+        .await;
+        info!("🔄 Contextual Query Rewritten: '{}' -> '{}'", query_to_search, rewritten);
+        query_to_search = rewritten;
     }
 
     let explicit_books = get_explicit_book_override(&query_to_search, &preferred_books_list);
@@ -451,15 +473,6 @@ async fn process_whatsapp_message(
         "RETRIEVED TEXTBOOK CONTEXT:\n{}\n\nSTUDENT QUESTION:\n{}",
         formatted_context, user_msg
     );
-
-    // Fetch chat history
-    let mut history_messages = Vec::new();
-    if let Some(ch_col) = &state.chat_history_col {
-        if let Ok(Some(ch)) = ch_col.find_one(doc! { "user_id": &sender_phone }).await {
-            history_messages = ch.messages.iter().rev().take(6).cloned().collect::<Vec<_>>();
-            history_messages.reverse();
-        }
-    }
 
     let final_response = stream_openrouter_llm_to_whatsapp(
         &state.http,

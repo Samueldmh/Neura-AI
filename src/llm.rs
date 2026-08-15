@@ -57,6 +57,75 @@ pub async fn call_openrouter_llm(
     Ok(content)
 }
 
+pub async fn rewrite_query_with_context(
+    http: &reqwest::Client,
+    api_key: &str,
+    user_msg: &str,
+    chat_history: &[ChatMessage],
+) -> String {
+    let system_prompt = r#"You are an expert medical search query rewriter.
+Given the chat history and the user's latest follow-up question, rewrite it into a single, standalone search query that includes the exact drug, disease, or medical concept being discussed.
+If the query is already complete and standalone, return it unchanged.
+Return ONLY the rewritten query text, without explanations, quotes, or conversational filler.
+Examples:
+- History: "Tell me about Chloroquine", Query: "What is its antidote?" -> "What is the antidote for Chloroquine?"
+- History: "Explain Tetralogy of Fallot", Query: "Can it be repaired surgically?" -> "Surgical repair of Tetralogy of Fallot"
+- History: "Describe Phenobarbital", Query: "Side effects?" -> "Side effects of Phenobarbital""#;
+
+    let url = "https://openrouter.ai/api/v1/chat/completions";
+
+    let mut messages = vec![json!({
+        "role": "system",
+        "content": system_prompt
+    })];
+
+    for msg in chat_history.iter().rev().take(4).cloned().collect::<Vec<_>>().into_iter().rev() {
+        let truncated: String = msg.content.chars().take(300).collect();
+        messages.push(json!({
+            "role": msg.role,
+            "content": truncated
+        }));
+    }
+
+    messages.push(json!({
+        "role": "user",
+        "content": format!("Latest question to rewrite: \"{}\"", user_msg)
+    }));
+
+    let payload = json!({
+        "model": "deepseek/deepseek-v4-flash",
+        "messages": messages,
+        "temperature": 0.0,
+        "max_tokens": 80
+    });
+
+    match http
+        .post(url)
+        .bearer_auth(api_key.trim())
+        .header("HTTP-Referer", "https://neura-ai.org")
+        .header("X-Title", "NEURA AI Query Rewriter")
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(res) => {
+            if let Ok(json_val) = res.json::<serde_json::Value>().await {
+                if let Some(content) = json_val["choices"][0]["message"]["content"].as_str() {
+                    let cleaned = content.trim().trim_matches('"').to_string();
+                    if !cleaned.is_empty() {
+                        return cleaned;
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            error!("Error in query rewriting LLM call: {}", e);
+        }
+    }
+
+    user_msg.to_string()
+}
+
 pub async fn stream_openrouter_llm_to_whatsapp(
     http: &reqwest::Client,
     config: &AppConfig,
