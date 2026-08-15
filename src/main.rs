@@ -384,6 +384,22 @@ async fn process_whatsapp_message(
                     billing::send_deposit_menu(&state.http, &state.config, &sender_phone, wallet_balance).await;
                     return;
                 }
+                "/clear wallet" | "/reset wallet" | "/empty wallet" => {
+                    let _ = users_col
+                        .update_one(
+                            doc! { "user_id": &sender_phone },
+                            doc! { "$set": { "wallet_balance_ngn": 0.0 } },
+                        )
+                        .await;
+                    send_whatsapp_cloud_msg(
+                        &state.http,
+                        &state.config,
+                        &sender_phone,
+                        "🗑️ *Wallet Cleared!*\n\nYour wallet balance has been reset to *₦0.00* for testing.\n\nType */deposit* to test depositing funds again, or ask a question to test the low-balance prompt!",
+                    )
+                    .await;
+                    return;
+                }
                 "/reset" => {
                     let _ = users_col.delete_one(doc! { "user_id": &sender_phone }).await;
                     if let Some(ch_col) = &state.chat_history_col {
