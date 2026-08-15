@@ -358,48 +358,74 @@ async fn process_whatsapp_message(
 
     // Profile & Wallet commands
     let msg_lower = user_msg.trim().to_lowercase();
-    if msg_lower.starts_with('/') || msg_lower == "topup_wallet" || msg_lower == "start_deposit" {
+    if msg_lower.starts_with('/')
+        || msg_lower == "topup_wallet"
+        || msg_lower == "start_deposit"
+        || msg_lower == "clearwallet"
+        || msg_lower == "deposit"
+        || msg_lower == "wallet"
+    {
         if let Some(users_col) = &state.users_col {
+            if msg_lower == "/clearwallet"
+                || msg_lower == "/clear_wallet"
+                || msg_lower == "/clear wallet"
+                || msg_lower == "/resetwallet"
+                || msg_lower == "/reset_wallet"
+                || msg_lower == "/reset wallet"
+                || msg_lower == "/emptywallet"
+                || msg_lower == "/empty_wallet"
+                || msg_lower == "/empty wallet"
+                || msg_lower == "clearwallet"
+            {
+                let _ = users_col
+                    .update_one(
+                        doc! { "user_id": &sender_phone },
+                        doc! { "$set": { "wallet_balance_ngn": 0.0 } },
+                    )
+                    .upsert(true)
+                    .await;
+                send_whatsapp_cloud_msg(
+                    &state.http,
+                    &state.config,
+                    &sender_phone,
+                    "🗑️ *Wallet Cleared!*\n\nYour wallet balance has been reset to *₦0.00* for testing.\n\nType */deposit* to test depositing funds again, or ask a question to test the low-balance prompt!",
+                )
+                .await;
+                return;
+            }
+
+            if msg_lower == "/wallet" || msg_lower == "/balance" || msg_lower == "wallet" || msg_lower == "balance" {
+                let est_queries = (wallet_balance / 20.0).floor() as u64;
+                let wallet_msg = format!(
+                    "💳 *NEURA AI Wallet*\n\n• Available Balance: *₦{:.2}*\n• Total Spent: *₦{:.2}*\n• Estimated Queries Remaining: *~{}*\n\nType */deposit* to top up your wallet with any custom amount (min ₦5,000)!",
+                    wallet_balance, total_spent, est_queries
+                );
+                send_whatsapp_interactive_button(
+                    &state.http,
+                    &state.config,
+                    &sender_phone,
+                    &wallet_msg,
+                    &[ButtonOptionItem {
+                        id: "TOPUP_WALLET".to_string(),
+                        title: "💳 Deposit ₦5,000+".to_string(),
+                    }],
+                )
+                .await;
+                return;
+            }
+
+            if msg_lower == "/deposit" || msg_lower == "/topup" || msg_lower == "topup_wallet" || msg_lower == "start_deposit" || msg_lower == "deposit" || msg_lower == "topup" {
+                billing::send_deposit_menu(&state.http, &state.config, &sender_phone, wallet_balance).await;
+                return;
+            }
+
+            if msg_lower.starts_with("/deposit ") || msg_lower.starts_with("deposit ") {
+                if billing::handle_deposit_request(&state.http, &state.config, users_col, &sender_phone, &user_msg).await {
+                    return;
+                }
+            }
+
             match msg_lower.as_str() {
-                "/wallet" | "/balance" => {
-                    let est_queries = (wallet_balance / 20.0).floor() as u64;
-                    let wallet_msg = format!(
-                        "💳 *NEURA AI Wallet*\n\n• Available Balance: *₦{:.2}*\n• Total Spent: *₦{:.2}*\n• Estimated Queries Remaining: *~{}*\n\nType */deposit* to top up your wallet with any custom amount (min ₦5,000)!",
-                        wallet_balance, total_spent, est_queries
-                    );
-                    send_whatsapp_interactive_button(
-                        &state.http,
-                        &state.config,
-                        &sender_phone,
-                        &wallet_msg,
-                        &[ButtonOptionItem {
-                            id: "TOPUP_WALLET".to_string(),
-                            title: "💳 Deposit ₦5,000+".to_string(),
-                        }],
-                    )
-                    .await;
-                    return;
-                }
-                "/deposit" | "/topup" | "topup_wallet" | "start_deposit" => {
-                    billing::send_deposit_menu(&state.http, &state.config, &sender_phone, wallet_balance).await;
-                    return;
-                }
-                "/clear wallet" | "/reset wallet" | "/empty wallet" => {
-                    let _ = users_col
-                        .update_one(
-                            doc! { "user_id": &sender_phone },
-                            doc! { "$set": { "wallet_balance_ngn": 0.0 } },
-                        )
-                        .await;
-                    send_whatsapp_cloud_msg(
-                        &state.http,
-                        &state.config,
-                        &sender_phone,
-                        "🗑️ *Wallet Cleared!*\n\nYour wallet balance has been reset to *₦0.00* for testing.\n\nType */deposit* to test depositing funds again, or ask a question to test the low-balance prompt!",
-                    )
-                    .await;
-                    return;
-                }
                 "/reset" => {
                     let _ = users_col.delete_one(doc! { "user_id": &sender_phone }).await;
                     if let Some(ch_col) = &state.chat_history_col {

@@ -30,6 +30,11 @@ impl UserQueueManager {
 
     /// Checks if an identical action/button-tap was sent by this user within the last 3 seconds.
     pub async fn is_duplicate_action(&self, user_id: &str, action: &str) -> bool {
+        // Never drop slash commands or regular typed messages
+        if action.starts_with('/') || (!action.contains(':') && !action.starts_with("DEPOSIT_") && !action.starts_with("Q") && !action.starts_with("TOGGLE_")) {
+            return false;
+        }
+
         let mut dedup = self.dedup.lock().await;
         let now = Instant::now();
 
