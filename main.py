@@ -507,6 +507,7 @@ async def initialize_flutterwave_transaction(amount_ngn: int, email: str, phone:
         "tx_ref": reference,
         "amount": str(amount_ngn),
         "currency": "NGN",
+        "payment_options": "banktransfer,card",
         "redirect_url": f"{BASE_URL}/api/payment-complete",
         "customer": {
             "email": email,
@@ -576,12 +577,12 @@ async def send_deposit_menu(sender_phone: str, current_balance: float):
         f"💳 *NEURA AI Wallet Top-Up*\n\n"
         f"• Current Balance: *₦{current_balance:.2f}*\n"
         f"• Minimum Deposit: *₦500*\n\n"
-        f"Tap a quick tier below, or reply with any custom amount (e.g. *500*, *1000*, *2000*, or */deposit 500*):"
+        f"Tap a quick tier below, or reply with any custom amount (e.g. *500*, *1000*, *1500*, or */deposit 500*):"
     )
     options = [
-        {"id": "DEPOSIT_500", "title": "₦500 Deposit", "description": "~25 In-Depth Medical Explanations"},
-        {"id": "DEPOSIT_2000", "title": "₦2,000 Deposit", "description": "~100 In-Depth Medical Explanations"},
-        {"id": "DEPOSIT_5000", "title": "₦5,000 Deposit", "description": "~250 In-Depth Medical Explanations"},
+        {"id": "DEPOSIT_500", "title": "₦500 Deposit", "description": "~180 In-Depth Medical Explanations"},
+        {"id": "DEPOSIT_1500", "title": "₦1,500 Deposit", "description": "~550 In-Depth Medical Explanations"},
+        {"id": "DEPOSIT_3000", "title": "₦3,000 Deposit", "description": "~1,200 In-Depth Medical Explanations"},
     ]
     await send_whatsapp_interactive_list(sender_phone, body_text, "Select Deposit", options)
 
@@ -591,8 +592,10 @@ async def handle_deposit_request(sender_phone: str, user_msg: str) -> bool:
     amount_ngn = None
     if msg_trim == "DEPOSIT_500":
         amount_ngn = 500
-    elif msg_trim == "DEPOSIT_2000":
-        amount_ngn = 2000
+    elif msg_trim == "DEPOSIT_1500":
+        amount_ngn = 1500
+    elif msg_trim == "DEPOSIT_3000":
+        amount_ngn = 3000
     elif msg_trim == "DEPOSIT_5000":
         amount_ngn = 5000
     elif msg_trim == "DEPOSIT_10000":
@@ -1440,7 +1443,7 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
             if msg_lower in ["/wallet", "/balance", "wallet", "balance"]:
                 balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
                 spent = user_doc.get("total_spent_ngn", 0.0) if user_doc else 0.0
-                est_queries = int(balance // 20)
+                est_queries = int(balance // 2.75)
                 wallet_msg = (
                     f"💳 *NEURA AI Wallet*\n\n"
                     f"• Available Balance: *₦{balance:.2f}*\n"
@@ -1679,13 +1682,13 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
                 upsert=True
             )
 
-        # Dynamic Token Billing Deduction (8.0x Markup)
+        # Dynamic Token Billing Deduction (2.5x Markup ~ 60% Margin)
         if users_col is not None:
             try:
                 est_prompt_tokens = 1500 + len(user_prompt) // 4
                 est_compl_tokens = len(ai_answer) // 4
                 raw_cost_usd = (est_prompt_tokens * 0.00000014) + (est_compl_tokens * 0.00000028)
-                cost_ngn = max(1.50, raw_cost_usd * 1550.0 * 8.0)
+                cost_ngn = max(2.00, raw_cost_usd * 1550.0 * 2.5)
                 await users_col.update_one(
                     {"user_id": sender_phone},
                     {

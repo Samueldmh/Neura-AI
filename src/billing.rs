@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 type HmacSha512 = Hmac<Sha512>;
 
-pub const PROFIT_MULTIPLIER: f64 = 8.0;
+pub const PROFIT_MULTIPLIER: f64 = 2.5;
 pub const MIN_DEPOSIT_NGN: u64 = 500;
 pub const LOW_BALANCE_THRESHOLD_NGN: f64 = 20.0;
 
@@ -35,6 +35,7 @@ pub async fn initialize_flutterwave_transaction(
         "tx_ref": reference,
         "amount": amount_ngn.to_string(),
         "currency": "NGN",
+        "payment_options": "banktransfer,card",
         "redirect_url": callback_url,
         "customer": {
             "email": email,
@@ -128,7 +129,7 @@ pub fn verify_paystack_hmac(secret_key: &str, payload_bytes: &[u8], signature_he
     expected.eq_ignore_ascii_case(signature_header.trim())
 }
 
-/// Calculates deduction in NGN based on token count with an 8.0x Profit Multiplier (~85% margin).
+/// Calculates deduction in NGN based on token count with a 2.5x Profit Multiplier (~60% margin).
 pub fn calculate_query_cost_ngn(prompt_tokens: usize, completion_tokens: usize) -> f64 {
     // DeepSeek V4 Flash: $0.14 / 1M prompt, $0.28 / 1M completion
     // NGN/USD ~ 1550
@@ -138,7 +139,7 @@ pub fn calculate_query_cost_ngn(prompt_tokens: usize, completion_tokens: usize) 
     let raw_ngn = raw_usd * 1550.0;
 
     let marked_up = raw_ngn * PROFIT_MULTIPLIER;
-    marked_up.max(1.50) // Minimum ₦1.50 per query
+    marked_up.max(2.00) // Minimum ₦2.00 per query
 }
 
 /// Sends the hybrid deposit menu with quick presets and custom amount prompt.
@@ -149,7 +150,7 @@ pub async fn send_deposit_menu(
     current_balance: f64,
 ) {
     let body_text = format!(
-        "💳 *NEURA AI Wallet Top-Up*\n\n• Current Balance: *₦{:.2}*\n• Minimum Deposit: *₦500*\n\nTap a quick tier below, or simply reply with any custom amount (e.g. *500* or *1000*):",
+        "💳 *NEURA AI Wallet Top-Up*\n\n• Current Balance: *₦{:.2}*\n• Minimum Deposit: *₦500*\n\nTap a quick tier below, or simply reply with any custom amount (e.g. *500*, *1000*, or *1500*):",
         current_balance
     );
 
@@ -157,17 +158,17 @@ pub async fn send_deposit_menu(
         ListOptionItem {
             id: "DEPOSIT_500".to_string(),
             title: "₦500 Deposit".to_string(),
-            description: Some("~25 In-Depth Medical Explanations".to_string()),
+            description: Some("~180 In-Depth Medical Explanations".to_string()),
         },
         ListOptionItem {
-            id: "DEPOSIT_2000".to_string(),
-            title: "₦2,000 Deposit".to_string(),
-            description: Some("~100 In-Depth Medical Explanations".to_string()),
+            id: "DEPOSIT_1500".to_string(),
+            title: "₦1,500 Deposit".to_string(),
+            description: Some("~550 In-Depth Medical Explanations".to_string()),
         },
         ListOptionItem {
-            id: "DEPOSIT_5000".to_string(),
-            title: "₦5,000 Deposit".to_string(),
-            description: Some("~250 In-Depth Medical Explanations".to_string()),
+            id: "DEPOSIT_3000".to_string(),
+            title: "₦3,000 Deposit".to_string(),
+            description: Some("~1,200 In-Depth Medical Explanations".to_string()),
         },
     ];
 
@@ -197,8 +198,10 @@ pub async fn handle_deposit_request(
 
     if upper == "DEPOSIT_500" {
         amount_ngn = Some(500);
-    } else if upper == "DEPOSIT_2000" {
-        amount_ngn = Some(2000);
+    } else if upper == "DEPOSIT_1500" {
+        amount_ngn = Some(1500);
+    } else if upper == "DEPOSIT_3000" {
+        amount_ngn = Some(3000);
     } else if upper == "DEPOSIT_5000" {
         amount_ngn = Some(5000);
     } else if upper == "DEPOSIT_10000" {
