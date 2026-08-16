@@ -642,6 +642,25 @@ async def handle_deposit_request(sender_phone: str, user_msg: str) -> bool:
         )
     return True
 
+async def send_commands_menu(sender_phone: str):
+    """Sends an interactive WhatsApp List containing all available slash commands with 1-tap execution"""
+    body_text = (
+        "📋 *NEURA AI Commands Menu*\n\n"
+        "Tap a command below to execute it instantly, or type any of them directly into the chat:"
+    )
+    options = [
+        {"id": "/wallet", "title": "💳 /wallet", "description": "Check balance, total spent & queries remaining"},
+        {"id": "/deposit", "title": "💰 /deposit", "description": "Top up your study wallet (min ₦500)"},
+        {"id": "/profile", "title": "👤 /profile", "description": "View your class, level & active textbooks"},
+        {"id": "/update books", "title": "📚 /update books", "description": "Change or add your preferred medical textbooks"},
+        {"id": "/update level", "title": "🎓 /update level", "description": "Update your current class/level (e.g. 400L)"},
+        {"id": "/update name", "title": "✏️ /update name", "description": "Update your student display name"},
+        {"id": "/clearwallet", "title": "🗑️ /clearwallet", "description": "Reset wallet balance to ₦0.00 (for testing)"},
+        {"id": "/reset", "title": "🔄 /reset", "description": "Reset full profile & chat history to start over"},
+        {"id": "/feedback", "title": "📝 /feedback", "description": "Share anonymous feedback on NEURA AI"},
+    ]
+    await send_whatsapp_interactive_list(sender_phone, body_text, "View Commands", options)
+
 
 # Filler words to strip for search (NOT removed from the AI prompt — only from Qdrant search)
 SEARCH_STOP_WORDS = {
@@ -1404,7 +1423,11 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
 
         # Check for profile and wallet commands first
         msg_lower = user_msg.strip().lower()
-        if (msg_lower.startswith("/") or msg_lower in ["topup_wallet", "start_deposit", "clearwallet", "deposit", "wallet", "balance", "clear wallet"]):
+        if (msg_lower.startswith("/") or msg_lower in ["topup_wallet", "start_deposit", "clearwallet", "deposit", "wallet", "balance", "clear wallet", "help", "menu", "commands"]):
+            if msg_lower in ["/", "/help", "help", "menu", "commands", "/menu", "/commands", "/start"]:
+                await send_commands_menu(sender_phone)
+                return
+
             if msg_lower in ["/clearwallet", "/clear_wallet", "/clear wallet", "/resetwallet", "/reset_wallet", "/emptywallet", "/empty_wallet", "clearwallet"]:
                 if users_col is not None:
                     await users_col.update_one({"user_id": sender_phone}, {"$set": {"wallet_balance_ngn": 0.0}}, upsert=True)
