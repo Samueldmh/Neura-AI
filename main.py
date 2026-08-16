@@ -24,6 +24,8 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
+FLUTTERWAVE_SECRET_KEY = os.getenv("FLUTTERWAVE_SECRET_KEY", "")
+FLUTTERWAVE_SECRET_HASH = os.getenv("FLUTTERWAVE_SECRET_HASH", "neura_flw_hash_2026")
 BASE_URL = os.getenv("BASE_URL", "https://neura-ai-df6q.onrender.com")
 
 # Official Meta WhatsApp Cloud API credentials
@@ -492,8 +494,44 @@ async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_la
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta CTA URL Button Send Status {res.status_code}: {res.text}")
 
+async def initialize_flutterwave_transaction(amount_ngn: int, email: str, phone: str, name: str = "Student"):
+    """Initializes a Flutterwave payment and returns the hosted checkout URL"""
+    import uuid
+    url = "https://api.flutterwave.com/v3/payments"
+    headers = {
+        "Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY.strip()}",
+        "Content-Type": "application/json"
+    }
+    reference = f"NEURA_{phone}_{uuid.uuid4().hex[:8]}"
+    payload = {
+        "tx_ref": reference,
+        "amount": str(amount_ngn),
+        "currency": "NGN",
+        "redirect_url": f"{BASE_URL}/api/payment-complete",
+        "customer": {
+            "email": email,
+            "phonenumber": phone,
+            "name": name
+        },
+        "customizations": {
+            "title": "NEURA AI Wallet Top-Up",
+            "description": f"NEURA AI MBBS Study Assistant (₦{amount_ngn:,})",
+            "logo": "https://raw.githubusercontent.com/Samueldmh/Neura-AI/main/assets/logo.png"
+        }
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            data = res.json()
+            if data.get("status") == "success" and "data" in data and "link" in data["data"]:
+                return data["data"]["link"]
+            print(f"Flutterwave init response: {data}")
+    except Exception as e:
+        print(f"Error initializing Flutterwave: {e}")
+    return None
+
 async def initialize_paystack_transaction(amount_ngn: int, email: str, phone: str):
-    """Initializes a Paystack transaction and returns the checkout URL"""
+    """Initializes a Paystack transaction and returns the checkout URL (Fallback)"""
     import uuid
     url = "https://api.paystack.co/transaction/initialize"
     headers = {
@@ -516,8 +554,7 @@ async def initialize_paystack_transaction(amount_ngn: int, email: str, phone: st
                 },
                 {
                     "display_name": "Product",
-                    "variable_name": "product",
-                    "value": "NEURA AI Wallet Credit"
+                    "variable_name": "NEURA AI Wallet Credit"
                 }
             ]
         }
@@ -549,7 +586,7 @@ async def send_deposit_menu(sender_phone: str, current_balance: float):
     await send_whatsapp_interactive_list(sender_phone, body_text, "Select Deposit", options)
 
 async def handle_deposit_request(sender_phone: str, user_msg: str) -> bool:
-    """Parses deposit selection or custom typed amount and sends an In-App Paystack CTA button"""
+    """Parses deposit selection or custom typed amount and sends an In-App Flutterwave CTA button"""
     msg_trim = user_msg.strip().upper()
     amount_ngn = None
     if msg_trim == "DEPOSIT_5000":
@@ -577,19 +614,27 @@ async def handle_deposit_request(sender_phone: str, user_msg: str) -> bool:
         return True
 
     email = f"user_{sender_phone.replace('+', '')}@neura.ai"
-    auth_url = await initialize_paystack_transaction(amount_ngn, email, sender_phone)
+    
+    # Try Flutterwave first, fallback to Paystack if configured
+    auth_url = None
+    if FLUTTERWAVE_SECRET_KEY:
+        auth_url = await initialize_flutterwave_transaction(amount_ngn, email, sender_phone)
+    elif PAYSTACK_SECRET_KEY:
+        auth_url = await initialize_paystack_transaction(amount_ngn, email, sender_phone)
+
     if auth_url:
         card_body = (
             f"💳 *NEURA AI In-App Checkout*\n\n"
             f"• Amount: *₦{amount_ngn:,}*\n"
+            f"• Payment Gateway: *Flutterwave*\n"
             f"• Status: *Ready*\n\n"
-            f"Tap the button below to complete your deposit directly inside WhatsApp:"
+            f"Tap the button below to complete your deposit directly inside WhatsApp (Supports all Nigerian Cards, Bank Transfer & USSD):"
         )
         await send_whatsapp_cta_url_button(sender_phone, card_body, f"Pay ₦{amount_ngn:,} Now", auth_url)
     else:
         await send_whatsapp_cloud_msg(
             sender_phone,
-            "Sorry, we couldn't generate the payment link right now. Please verify your Paystack setup or try again in a moment!"
+            "Sorry, we couldn't generate the payment link right now. Please verify your payment gateway setup or try again in a moment!"
         )
     return True
 
@@ -1663,12 +1708,73 @@ def root():
         "system": "NEURA AI Official WhatsApp Cloud API Backend v2.0",
         "phone_number_id": PHONE_NUMBER_ID,
         "openrouter_configured": bool(OPENROUTER_API_KEY),
-        "billing": "Paystack In-App WebView + Dynamic Token Multiplier"
+        "billing": "Flutterwave In-App WebView + Dynamic Token Multiplier"
     }
+
+@app.post("/webhook/flutterwave")
+async def flutterwave_webhook(request: Request):
+    """Flutterwave Webhook Endpoint to credit student wallets upon successful charge"""
+    try:
+        signature = request.headers.get("verif-hash", "")
+        if FLUTTERWAVE_SECRET_HASH and signature != FLUTTERWAVE_SECRET_HASH:
+            print("❌ Flutterwave secret hash mismatch!")
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
+        body = await request.json()
+        print(f"💳 Flutterwave Webhook: {json.dumps(body)}")
+        
+        event = body.get("event")
+        data = body.get("data", {})
+        status = data.get("status")
+        
+        if event == "charge.completed" and status == "successful":
+            amount_ngn = float(data.get("amount", 0.0))
+            tx_ref = data.get("tx_ref", "")
+            flw_ref = str(data.get("flw_ref") or tx_ref)
+            customer = data.get("customer", {})
+            phone = customer.get("phone_number") or customer.get("phonenumber")
+            
+            if not phone and "NEURA_" in tx_ref:
+                parts = tx_ref.split("_")
+                if len(parts) >= 2:
+                    phone = parts[1]
+
+            if phone and amount_ngn > 0 and users_col is not None:
+                # Idempotent credit
+                res = await users_col.update_one(
+                    {"user_id": phone, "transactions.reference": {"$ne": flw_ref}},
+                    {
+                        "$inc": {"wallet_balance_ngn": amount_ngn},
+                        "$push": {"transactions": {
+                            "amount_ngn": amount_ngn,
+                            "reference": flw_ref,
+                            "tx_ref": tx_ref,
+                            "type": "deposit",
+                            "description": f"Flutterwave Wallet Deposit (₦{amount_ngn:,.2f})",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }}
+                    },
+                    upsert=True
+                )
+                if res.modified_count > 0 or res.upserted_id:
+                    u = await users_col.find_one({"user_id": phone})
+                    bal = u.get("wallet_balance_ngn", amount_ngn) if u else amount_ngn
+                    receipt = (
+                        f"🎉 *PAYMENT RECEIVED!*\n\n"
+                        f"• Amount Credited: *₦{amount_ngn:,.2f}*\n"
+                        f"• New Wallet Balance: *₦{bal:,.2f}*\n"
+                        f"• Ref: _{flw_ref}_\n\n"
+                        f"You can now continue asking medical questions with full textbook grounding! 🧠⚡"
+                    )
+                    await send_whatsapp_cloud_msg(phone, receipt)
+        return {"status": "success"}
+    except Exception as e:
+        print(f"Error handling Flutterwave webhook: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.post("/webhook/paystack")
 async def paystack_webhook(request: Request):
-    """Paystack Webhook Endpoint to credit student wallets upon successful charge"""
+    """Paystack Webhook Endpoint to credit student wallets upon successful charge (Fallback)"""
     try:
         body_bytes = await request.body()
         signature = request.headers.get("x-paystack-signature", "")

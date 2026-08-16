@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub phone_number_id: String,
     pub verify_token: String,
     pub paystack_secret_key: String,
+    pub flutterwave_secret_key: String,
+    pub flutterwave_secret_hash: String,
     pub base_url: String,
 }
 
@@ -28,7 +30,9 @@ impl AppConfig {
             phone_number_id: env::var("PHONE_NUMBER_ID").unwrap_or_else(|_| "1150180661520951".to_string()),
             verify_token: env::var("VERIFY_TOKEN").unwrap_or_else(|_| "neura_ai_webhook_secret_2026".to_string()),
             paystack_secret_key: env::var("PAYSTACK_SECRET_KEY").unwrap_or_default(),
-            base_url: env::var("BASE_URL").unwrap_or_else(|_| "https://neura-ai.onrender.com".to_string()),
+            flutterwave_secret_key: env::var("FLUTTERWAVE_SECRET_KEY").unwrap_or_default(),
+            flutterwave_secret_hash: env::var("FLUTTERWAVE_SECRET_HASH").unwrap_or_else(|_| "neura_flw_hash_2026".to_string()),
+            base_url: env::var("BASE_URL").unwrap_or_else(|_| "https://neura-ai-df6q.onrender.com".to_string()),
         }
     }
 }

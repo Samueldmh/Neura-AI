@@ -19,7 +19,53 @@ pub const PROFIT_MULTIPLIER: f64 = 8.0;
 pub const MIN_DEPOSIT_NGN: u64 = 5000;
 pub const LOW_BALANCE_THRESHOLD_NGN: f64 = 20.0;
 
-/// Initializes a Paystack transaction and returns the checkout URL.
+/// Initializes a Flutterwave payment and returns the hosted checkout URL.
+pub async fn initialize_flutterwave_transaction(
+    http: &reqwest::Client,
+    secret_key: &str,
+    amount_ngn: u64,
+    email: &str,
+    phone: &str,
+    callback_url: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let url = "https://api.flutterwave.com/v3/payments";
+    let reference = format!("NEURA_{}_{}", phone, Uuid::new_v4().simple());
+
+    let payload = json!({
+        "tx_ref": reference,
+        "amount": amount_ngn.to_string(),
+        "currency": "NGN",
+        "redirect_url": callback_url,
+        "customer": {
+            "email": email,
+            "phonenumber": phone,
+            "name": "Student"
+        },
+        "customizations": {
+            "title": "NEURA AI Wallet Top-Up",
+            "description": format!("NEURA AI MBBS Study Assistant (₦{})", amount_ngn),
+            "logo": "https://raw.githubusercontent.com/Samueldmh/Neura-AI/main/assets/logo.png"
+        }
+    });
+
+    let res = http
+        .post(url)
+        .bearer_auth(secret_key.trim())
+        .json(&payload)
+        .send()
+        .await?;
+
+    let v: serde_json::Value = res.json().await?;
+    if v.get("status").and_then(|s| s.as_str()) == Some("success") {
+        if let Some(link) = v.pointer("/data/link").and_then(|l| l.as_str()) {
+            return Ok(link.to_string());
+        }
+    }
+
+    Err(format!("Flutterwave init failed: {:?}", v).into())
+}
+
+/// Initializes a Paystack transaction and returns the checkout URL (Fallback).
 pub async fn initialize_paystack_transaction(
     http: &reqwest::Client,
     secret_key: &str,
@@ -182,19 +228,16 @@ pub async fn handle_deposit_request(
     let email = format!("user_{}@neura.ai", sender_phone.replace('+', ""));
     let callback_url = format!("{}/api/payment-complete", config.base_url);
 
-    match initialize_paystack_transaction(
-        http,
-        &config.paystack_secret_key,
-        amt,
-        &email,
-        sender_phone,
-        &callback_url,
-    )
-    .await
-    {
+    let auth_res = if !config.flutterwave_secret_key.is_empty() {
+        initialize_flutterwave_transaction(http, &config.flutterwave_secret_key, amt, &email, sender_phone, &callback_url).await
+    } else {
+        initialize_paystack_transaction(http, &config.paystack_secret_key, amt, &email, sender_phone, &callback_url).await
+    };
+
+    match auth_res {
         Ok(auth_url) => {
             let card_body = format!(
-                "💳 *NEURA AI In-App Checkout*\n\n• Amount: *₦{}*\n• Status: *Ready*\n\nTap the button below to complete your deposit directly inside WhatsApp:",
+                "💳 *NEURA AI In-App Checkout*\n\n• Amount: *₦{}*\n• Gateway: *Flutterwave*\n• Status: *Ready*\n\nTap the button below to complete your deposit directly inside WhatsApp (Supports all Nigerian Cards, Bank Transfer & USSD):",
                 amt
             );
             let btn_title = format!("Pay ₦{} Now", amt);
@@ -216,12 +259,12 @@ pub async fn handle_deposit_request(
                 .await;
         }
         Err(e) => {
-            error!("Failed to initialize Paystack checkout: {}", e);
+            error!("Failed to initialize checkout: {}", e);
             send_whatsapp_cloud_msg(
                 http,
                 config,
                 sender_phone,
-                "Sorry, we couldn't generate the payment link right now. Please verify your Paystack setup or try again in a moment!",
+                "Sorry, we couldn't generate the payment link right now. Please verify your payment gateway setup or try again in a moment!",
             )
             .await;
         }

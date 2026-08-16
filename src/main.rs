@@ -134,6 +134,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(root_handler))
         .route("/webhook", get(webhook_verify_handler).post(webhook_message_handler))
+        .route("/webhook/flutterwave", post(flutterwave_webhook_handler))
         .route("/webhook/paystack", post(paystack_webhook_handler))
         .route("/api/payment-complete", get(payment_complete_handler))
         .route("/api/chat", post(chat_handler))
@@ -156,7 +157,7 @@ async fn root_handler() -> Json<serde_json::Value> {
         "service": "NEURA AI Medical Backend (Rust)",
         "version": "2.0.0",
         "runtime": "Rust / Axum / Tokio",
-        "billing": "Paystack In-App WebView + Dynamic Token Multiplier"
+        "billing": "Flutterwave In-App WebView + Dynamic Token Multiplier"
     }))
 }
 
@@ -185,6 +186,66 @@ async fn payment_complete_handler() -> Html<&'static str> {
     </body>
     </html>
     "#)
+}
+
+async fn flutterwave_webhook_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let signature = headers
+        .get("verif-hash")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+
+    if !state.config.flutterwave_secret_hash.is_empty() && signature != state.config.flutterwave_secret_hash {
+        error!("❌ Flutterwave secret hash verification failed!");
+        return (StatusCode::UNAUTHORIZED, "Invalid signature").into_response();
+    }
+
+    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&body) {
+        if val.get("event").and_then(|e| e.as_str()) == Some("charge.completed") {
+            if let Some(data) = val.get("data") {
+                let status = data.get("status").and_then(|s| s.as_str());
+                if status == Some("successful") {
+                    let amount_ngn = data.get("amount").and_then(|a| a.as_f64()).unwrap_or(0.0);
+                    let tx_ref = data.get("tx_ref").and_then(|r| r.as_str()).unwrap_or_default();
+                    let flw_ref = data.get("flw_ref").map(|r| r.to_string()).unwrap_or_else(|| tx_ref.to_string());
+                    
+                    let mut phone = data.pointer("/customer/phone_number")
+                        .or_else(|| data.pointer("/customer/phonenumber"))
+                        .and_then(|p| p.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+
+                    if phone.is_empty() && tx_ref.starts_with("NEURA_") {
+                        let parts: Vec<&str> = tx_ref.split('_').collect();
+                        if parts.len() >= 2 {
+                            phone = parts[1].to_string();
+                        }
+                    }
+
+                    if !phone.is_empty() && amount_ngn > 0.0 {
+                        info!("💳 Confirmed Flutterwave payment of ₦{:.2} from {} (Ref: {})", amount_ngn, phone, flw_ref);
+                        if let Some(users_col) = &state.users_col {
+                            let amount_kobo = (amount_ngn * 100.0) as u64;
+                            billing::credit_user_wallet(
+                                &state.http,
+                                &state.config,
+                                users_col,
+                                &phone,
+                                amount_kobo,
+                                &flw_ref,
+                            )
+                            .await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (StatusCode::OK, "Webhook processed").into_response()
 }
 
 async fn paystack_webhook_handler(
