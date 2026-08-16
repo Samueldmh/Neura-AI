@@ -16,7 +16,7 @@ use uuid::Uuid;
 type HmacSha512 = Hmac<Sha512>;
 
 pub const PROFIT_MULTIPLIER: f64 = 8.0;
-pub const MIN_DEPOSIT_NGN: u64 = 5000;
+pub const MIN_DEPOSIT_NGN: u64 = 500;
 pub const LOW_BALANCE_THRESHOLD_NGN: f64 = 20.0;
 
 /// Initializes a Flutterwave payment and returns the hosted checkout URL.
@@ -149,25 +149,25 @@ pub async fn send_deposit_menu(
     current_balance: f64,
 ) {
     let body_text = format!(
-        "💳 *NEURA AI Wallet Top-Up*\n\n• Current Balance: *₦{:.2}*\n• Minimum Deposit: *₦5,000*\n\nTap a quick tier below, or simply reply with any custom amount (e.g. *7500* or *15000*):",
+        "💳 *NEURA AI Wallet Top-Up*\n\n• Current Balance: *₦{:.2}*\n• Minimum Deposit: *₦500*\n\nTap a quick tier below, or simply reply with any custom amount (e.g. *500* or *1000*):",
         current_balance
     );
 
     let options = vec![
         ListOptionItem {
+            id: "DEPOSIT_500".to_string(),
+            title: "₦500 Deposit".to_string(),
+            description: Some("~25 In-Depth Medical Explanations".to_string()),
+        },
+        ListOptionItem {
+            id: "DEPOSIT_2000".to_string(),
+            title: "₦2,000 Deposit".to_string(),
+            description: Some("~100 In-Depth Medical Explanations".to_string()),
+        },
+        ListOptionItem {
             id: "DEPOSIT_5000".to_string(),
             title: "₦5,000 Deposit".to_string(),
             description: Some("~250 In-Depth Medical Explanations".to_string()),
-        },
-        ListOptionItem {
-            id: "DEPOSIT_10000".to_string(),
-            title: "₦10,000 Deposit".to_string(),
-            description: Some("~550 In-Depth Medical Explanations".to_string()),
-        },
-        ListOptionItem {
-            id: "DEPOSIT_20000".to_string(),
-            title: "₦20,000 Deposit".to_string(),
-            description: Some("~1,200 In-Depth Medical Explanations".to_string()),
         },
     ];
 
@@ -195,7 +195,11 @@ pub async fn handle_deposit_request(
 
     let mut amount_ngn: Option<u64> = None;
 
-    if upper == "DEPOSIT_5000" {
+    if upper == "DEPOSIT_500" {
+        amount_ngn = Some(500);
+    } else if upper == "DEPOSIT_2000" {
+        amount_ngn = Some(2000);
+    } else if upper == "DEPOSIT_5000" {
         amount_ngn = Some(5000);
     } else if upper == "DEPOSIT_10000" {
         amount_ngn = Some(10000);
@@ -219,7 +223,7 @@ pub async fn handle_deposit_request(
 
     if amt < MIN_DEPOSIT_NGN {
         let warning = format!(
-            "⚠️ Minimum deposit amount is *₦5,000*.\n\nPlease choose ₦5,000 or more (e.g. *5000*, *7500*, *10000*)."
+            "⚠️ Minimum deposit amount is *₦500*.\n\nPlease choose ₦500 or more (e.g. *500*, *1000*, *2000*, *5000*)."
         );
         send_whatsapp_cloud_msg(http, config, sender_phone, &warning).await;
         return true;

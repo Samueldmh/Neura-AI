@@ -575,13 +575,13 @@ async def send_deposit_menu(sender_phone: str, current_balance: float):
     body_text = (
         f"💳 *NEURA AI Wallet Top-Up*\n\n"
         f"• Current Balance: *₦{current_balance:.2f}*\n"
-        f"• Minimum Deposit: *₦5,000*\n\n"
-        f"Tap a quick tier below, or reply with any custom amount (e.g. *7500* or */deposit 7500*):"
+        f"• Minimum Deposit: *₦500*\n\n"
+        f"Tap a quick tier below, or reply with any custom amount (e.g. *500*, *1000*, *2000*, or */deposit 500*):"
     )
     options = [
+        {"id": "DEPOSIT_500", "title": "₦500 Deposit", "description": "~25 In-Depth Medical Explanations"},
+        {"id": "DEPOSIT_2000", "title": "₦2,000 Deposit", "description": "~100 In-Depth Medical Explanations"},
         {"id": "DEPOSIT_5000", "title": "₦5,000 Deposit", "description": "~250 In-Depth Medical Explanations"},
-        {"id": "DEPOSIT_10000", "title": "₦10,000 Deposit", "description": "~550 In-Depth Medical Explanations"},
-        {"id": "DEPOSIT_20000", "title": "₦20,000 Deposit", "description": "~1,200 In-Depth Medical Explanations"},
     ]
     await send_whatsapp_interactive_list(sender_phone, body_text, "Select Deposit", options)
 
@@ -589,7 +589,11 @@ async def handle_deposit_request(sender_phone: str, user_msg: str) -> bool:
     """Parses deposit selection or custom typed amount and sends an In-App Flutterwave CTA button"""
     msg_trim = user_msg.strip().upper()
     amount_ngn = None
-    if msg_trim == "DEPOSIT_5000":
+    if msg_trim == "DEPOSIT_500":
+        amount_ngn = 500
+    elif msg_trim == "DEPOSIT_2000":
+        amount_ngn = 2000
+    elif msg_trim == "DEPOSIT_5000":
         amount_ngn = 5000
     elif msg_trim == "DEPOSIT_10000":
         amount_ngn = 10000
@@ -606,10 +610,10 @@ async def handle_deposit_request(sender_phone: str, user_msg: str) -> bool:
     if amount_ngn is None:
         return False
 
-    if amount_ngn < 5000:
+    if amount_ngn < 500:
         await send_whatsapp_cloud_msg(
             sender_phone,
-            "⚠️ Minimum deposit amount is *₦5,000*.\n\nPlease choose ₦5,000 or more (e.g. *5000*, *7500*, *10000*)."
+            "⚠️ Minimum deposit amount is *₦500*.\n\nPlease choose ₦500 or more (e.g. *500*, *1000*, *2000*, *5000*)."
         )
         return True
 
@@ -1419,12 +1423,12 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
                     f"• Available Balance: *₦{balance:.2f}*\n"
                     f"• Total Spent: *₦{spent:.2f}*\n"
                     f"• Estimated Queries Remaining: *~{est_queries}*\n\n"
-                    f"Type */deposit* to top up your wallet with any custom amount (min ₦5,000)!"
+                    f"Type */deposit* to top up your wallet with any custom amount (min ₦500)!"
                 )
                 await send_whatsapp_interactive_button(
                     sender_phone,
                     wallet_msg,
-                    [{"id": "TOPUP_WALLET", "title": "💳 Deposit ₦5,000+"}]
+                    [{"id": "TOPUP_WALLET", "title": "💳 Deposit ₦500+"}]
                 )
                 return
 
@@ -1488,7 +1492,7 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
                         await complete_onboarding(sender_phone)
                     return
 
-        # Handle deposit menu selection (e.g. DEPOSIT_5000) or custom amount entry
+        # Handle deposit menu selection (e.g. DEPOSIT_500) or custom amount entry
         handled_deposit = await handle_deposit_request(sender_phone, user_msg)
         if handled_deposit:
             return
@@ -1509,13 +1513,13 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
         if wallet_balance < 20.0:
             low_bal_card = (
                 f"⚠️ *Insufficient Wallet Balance (₦{wallet_balance:.2f})*\n\n"
-                f"To continue asking clinical questions and practicing MBBS MCQs, please top up your wallet (minimum deposit is ₦5,000).\n\n"
+                f"To continue asking clinical questions and practicing MBBS MCQs, please top up your wallet (minimum deposit is ₦500).\n\n"
                 f"Tap below to deposit:"
             )
             await send_whatsapp_interactive_button(
                 sender_phone,
                 low_bal_card,
-                [{"id": "TOPUP_WALLET", "title": "💳 Deposit ₦5,000+"}]
+                [{"id": "TOPUP_WALLET", "title": "💳 Deposit ₦500+"}]
             )
             return
 
