@@ -116,6 +116,7 @@ CRITICAL FORMATTING & LAYOUT RULES FOR WHATSAPP:
    💡 *KEY CLINICAL PEARLS*
    
    📚 *CITATIONS*
+9. NO RAW MARKDOWN TABLES: WhatsApp does NOT render markdown tables. NEVER output pipes or table headers (| Col 1 | Col 2 | or |---|---|). Always structure comparisons and summary tables as clean bulleted list cards (e.g. - *Category:* followed by indented • *Detail:* bullets).
 """
 
 SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate exactly 7 rigorous, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions (MCQs).
@@ -263,10 +264,55 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
         
     return full_text
 
+def convert_markdown_tables_to_whatsapp_cards(text: str) -> str:
+    """Detects raw markdown tables and transforms them into clean, indented WhatsApp bullet cards."""
+    lines = text.split('\n')
+    output_lines = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        # Detect if line is part of a markdown table
+        if line.startswith('|') and line.endswith('|') and line.count('|') >= 2:
+            table_rows = []
+            while i < len(lines) and lines[i].strip().startswith('|') and lines[i].strip().endswith('|'):
+                row_raw = lines[i].strip()
+                cells = [c.strip() for c in row_raw.split('|')[1:-1]]
+                # Exclude delimiter rows like |---|---|
+                if not all(re.match(r'^[-\s:]+$', c) for c in cells if c):
+                    table_rows.append(cells)
+                i += 1
+            
+            if table_rows:
+                headers = table_rows[0]
+                data_rows = table_rows[1:] if len(table_rows) > 1 else []
+                output_lines.append("")
+                for r in data_rows:
+                    if not r or not any(r): continue
+                    primary_title = r[0]
+                    output_lines.append(f"- *{primary_title}*")
+                    for c_idx in range(1, min(len(headers), len(r))):
+                        col_name = headers[c_idx] if c_idx < len(headers) and headers[c_idx] else f"Detail {c_idx}"
+                        val = r[c_idx]
+                        if val:
+                            output_lines.append(f"  • *{col_name}:* {val}")
+                    output_lines.append("")
+            continue
+        else:
+            # Strip ugly standalone horizontal rules --- or ___
+            if re.match(r'^\s*[-_]{3,}\s*$', line):
+                output_lines.append("")
+            else:
+                output_lines.append(lines[i])
+            i += 1
+    return '\n'.join(output_lines)
+
 def format_whatsapp_text(text: str) -> str:
-    """Master WhatsApp text sanitizer. Fixes layout and bolding without destroying text."""
+    """Master WhatsApp text sanitizer. Fixes layout, tables, and bolding without destroying text."""
     if not text:
         return text
+
+    # 0. Convert raw markdown tables to readable bullet cards & remove --- lines
+    text = convert_markdown_tables_to_whatsapp_cards(text)
 
     # 1. Remove markdown hashes (e.g. ### Header -> Header)
     text = re.sub(r'^\s*#{1,6}\s*', '', text, flags=re.MULTILINE)
@@ -276,9 +322,7 @@ def format_whatsapp_text(text: str) -> str:
     text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
 
     # 3. Add space around bold text if missing to prevent word merging
-    # e.g., "Nematodes*Based" -> "Nematodes *Based"
     text = re.sub(r'([a-zA-Z0-9])(\*[^\*\n]+\*)', r'\1 \2', text)
-    # e.g., "*Nematodes*Based" -> "*Nematodes* Based"
     text = re.sub(r'(\*[^\*\n]+\*)([a-zA-Z0-9])', r'\1 \2', text)
 
     # 4. Fix missing space after colons/commas inside bold or right after bold
@@ -300,17 +344,12 @@ def format_whatsapp_text(text: str) -> str:
             placeholders.append(m.group(0))
             return f"__VALID_BOLD_{len(placeholders)-1}__"
 
-        # Match valid WhatsApp bold tags.
         pattern = r'\*([^\s\*][^\*]*[^\s\*]|[^\s\*])\*'
         line_masked = re.sub(pattern, store_valid_bold, line)
 
-        # Remove stray asterisks ONLY if they are alone or causing issues, but don't merge words!
-        # If an asterisk is between two letters (e.g., word*word), replace with space to prevent merging.
         line_masked = re.sub(r'([a-zA-Z0-9])\*([a-zA-Z0-9])', r'\1 \2', line_masked)
-        # Any other stray asterisk can just be removed
         line_masked = line_masked.replace('*', '')
 
-        # Restore valid bold placeholders
         for idx, ph in enumerate(placeholders):
             line_masked = line_masked.replace(f"__VALID_BOLD_{idx}__", ph)
 
