@@ -776,6 +776,48 @@ def extract_medical_terms(user_msg: str) -> list:
     print(f"🔍 Extracted search keywords: {phrases} (from: '{user_msg}')")
     return phrases
 
+async def normalize_medical_query(user_msg: str) -> dict:
+    """Fast micro-LLM pass that resolves all typos, medical slang, and extracts authoritative textbook search phrases and diagram topics."""
+    if not OPENROUTER_API_KEY:
+        return {"search_keywords": extract_medical_terms(user_msg), "diagram_topic": None}
+        
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://neura-ai.org",
+        "X-Title": "NEURA AI Medical Assistant"
+    }
+    system_prompt = (
+        "You are an expert MBBS medical query normalizer. The student may send questions with typos, shorthand, Nigerian medical student slang, or visual requests (e.g. 'can I get diagram of b cel dev in body').\n"
+        "Output ONLY a JSON object with two fields:\n"
+        "1. 'search_keywords': A list of 1 to 3 authoritative medical textbook search phrases. Fix all typos and expand abbreviations (e.g. ['B-cell development and maturation', 'B-lymphocyte lymphopoiesis in bone marrow']). Strip visual words like 'diagram', 'picture', 'show me'.\n"
+        "2. 'diagram_topic': The clean medical anatomical/pathological subject if a visual/diagram was requested or appropriate (e.g. 'B-cell development'), else null.\n"
+        "Output ONLY valid JSON (no markdown, no ```json)."
+    )
+    payload = {
+        "model": "deepseek/deepseek-v4-flash",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg}
+        ],
+        "temperature": 0.0,
+        "max_tokens": 140
+    }
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            if res.status_code == 200:
+                text = res.json()["choices"][0]["message"]["content"]
+                text = text.replace("```json", "").replace("```", "").strip()
+                parsed = json.loads(text)
+                if isinstance(parsed, dict) and "search_keywords" in parsed:
+                    return parsed
+    except Exception as e:
+        print(f"⚠️ Micro-LLM normalizer error (using fallback): {e}")
+        
+    return {"search_keywords": extract_medical_terms(user_msg), "diagram_topic": None}
+
 def extract_book_keywords(preferred_books: list) -> list:
     """Extract core textbook keywords for matching (e.g., 'lippincott', 'robbins', 'moore', 'hoffbrand')"""
     keywords = []
@@ -1583,19 +1625,18 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         else:
             search_term = query_to_search
 
-        # Step 1: Extract medical terms from the search_term
-        medical_terms = extract_medical_terms(search_term)
+        # Step 1: Zero-shot Micro-LLM Query Normalization & Typo Resolution
+        normalized_data = await normalize_medical_query(search_term)
+        medical_terms = normalized_data.get("search_keywords", [])
+        diagram_target = normalized_data.get("diagram_topic") or search_term
+        if not medical_terms:
+            medical_terms = extract_medical_terms(search_term)
         
         # Step 1.5: Check for explicit book overrides (e.g. if user says "Use pharmacology")
         active_books = get_explicit_book_override(search_term, preferred_books_list)
         
-        # Step 2: Multi-search Qdrant with extracted terms + search_term, filtered by active books
-        if medical_terms:
-            if search_term not in medical_terms:
-                medical_terms.append(search_term)
-            search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
-        else:
-            search_res = await search_qdrant(search_term, limit=12, preferred_books=active_books)
+        # Step 2: Multi-search Qdrant with clean medical terms, filtered by active books
+        search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
 
         if not search_res:
             await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question in your selected textbooks. Try rephrasing or updating your preferred books using /update books!")
@@ -1673,9 +1714,9 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Retrieve and send authentic peer-reviewed medical diagram / histology slide if topic is visual or requested
         if intent != "QUIZ" and not is_not_covered and should_generate_medical_illustration(query_to_search, ai_answer):
             try:
-                img_url, img_title = await retrieve_real_medical_diagram(query_to_search)
+                img_url, img_title = await retrieve_real_medical_diagram(diagram_target)
                 if img_url:
-                    img_caption = f"🔬 *Authentic Medical Figure:* _{img_title or query_to_search[:60]}_\n📚 _Peer-Reviewed Scientific & Textbook Archive_"
+                    img_caption = f"🔬 *Authentic Medical Figure:* _{img_title or diagram_target[:60]}_\n📚 _Peer-Reviewed Scientific & Textbook Archive_"
                     await send_whatsapp_image_url(sender_phone, img_url, img_caption)
             except Exception as img_err:
                 print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
