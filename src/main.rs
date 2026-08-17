@@ -161,31 +161,52 @@ async fn root_handler() -> Json<serde_json::Value> {
     }))
 }
 
-async fn payment_complete_handler() -> Html<&'static str> {
-    Html(r#"
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Payment Successful - NEURA AI</title>
-        <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f8fafc; color: #0f172a; text-align: center; }
-            .card { background: white; padding: 32px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); max-width: 400px; margin: 20px; }
-            .icon { font-size: 48px; margin-bottom: 16px; }
-            h1 { font-size: 24px; margin: 0 0 8px; color: #16a34a; }
-            p { color: #64748b; margin: 0 0 24px; font-size: 16px; line-height: 1.5; }
-            .btn { display: inline-block; background: #2563eb; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; }
-        </style>
-    </head>
-    <body>
+async fn payment_complete_handler(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Html<String> {
+    let status = params.get("status").map(|s| s.to_lowercase()).unwrap_or_default();
+    let is_successful = status == "successful" || status == "success" || status == "completed";
+
+    let body_html = if is_successful {
+        r#"
         <div class="card">
             <div class="icon">✅</div>
-            <h1>Payment Confirmed!</h1>
-            <p>Your NEURA AI wallet has been successfully credited. You can close this window and return to WhatsApp.</p>
+            <h1 style="color: #16a34a;">Payment Confirmed!</h1>
+            <p>Your NEURA AI wallet has been successfully credited. You can return to WhatsApp.</p>
         </div>
-    </body>
-    </html>
-    "#)
+        "#
+    } else {
+        r#"
+        <div class="card">
+            <div class="icon">❌</div>
+            <h1 style="color: #dc2626;">Payment Cancelled</h1>
+            <p>The transaction was not completed and your wallet was not charged. You can return to WhatsApp and try again anytime with <b>/deposit</b>.</p>
+        </div>
+        "#
+    };
+
+    Html(format!(
+        r#"
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Payment Status - NEURA AI</title>
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f8fafc; color: #0f172a; text-align: center; }}
+                .card {{ background: white; padding: 32px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); max-width: 400px; margin: 20px; }}
+                .icon {{ font-size: 48px; margin-bottom: 16px; }}
+                h1 {{ font-size: 24px; margin: 0 0 8px; }}
+                p {{ color: #64748b; margin: 0 0 24px; font-size: 16px; line-height: 1.5; }}
+            </style>
+        </head>
+        <body>
+            {}
+        </body>
+        </html>
+        "#,
+        body_html
+    ))
 }
 
 async fn flutterwave_webhook_handler(

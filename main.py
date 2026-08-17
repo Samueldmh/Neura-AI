@@ -1856,15 +1856,29 @@ async def paystack_webhook(request: Request):
         return {"status": "error", "message": str(e)}
 
 @app.get("/api/payment-complete")
-async def payment_complete_page():
-    html_content = """
-    <!DOCTYPE html>
-    <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Successful</title>
-    <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#0f172a;text-align:center;}
-    .card{background:white;padding:32px;border-radius:16px;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);max-width:400px;margin:20px;}
-    .icon{font-size:48px;margin-bottom:16px;}h1{font-size:24px;margin:0 0 8px;color:#16a34a;}p{color:#64748b;font-size:16px;line-height:1.5;}</style></head>
-    <body><div class="card"><div class="icon">✅</div><h1>Payment Confirmed!</h1><p>Your NEURA AI wallet has been successfully credited. You can return to WhatsApp.</p></div></body></html>
-    """
+async def payment_complete_page(request: Request):
+    status = request.query_params.get("status", "").lower()
+    
+    is_successful = status in ["successful", "success", "completed"]
+    
+    if is_successful:
+        html_content = """
+        <!DOCTYPE html>
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Confirmed - NEURA AI</title>
+        <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#0f172a;text-align:center;}
+        .card{background:white;padding:32px;border-radius:16px;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);max-width:400px;margin:20px;}
+        .icon{font-size:48px;margin-bottom:16px;}h1{font-size:24px;margin:0 0 8px;color:#16a34a;}p{color:#64748b;font-size:16px;line-height:1.5;}</style></head>
+        <body><div class="card"><div class="icon">✅</div><h1>Payment Confirmed!</h1><p>Your NEURA AI wallet has been successfully credited. You can return to WhatsApp.</p></div></body></html>
+        """
+    else:
+        html_content = """
+        <!DOCTYPE html>
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Cancelled - NEURA AI</title>
+        <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#0f172a;text-align:center;}
+        .card{background:white;padding:32px;border-radius:16px;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);max-width:400px;margin:20px;}
+        .icon{font-size:48px;margin-bottom:16px;}h1{font-size:24px;margin:0 0 8px;color:#dc2626;}p{color:#64748b;font-size:16px;line-height:1.5;}</style></head>
+        <body><div class="card"><div class="icon">❌</div><h1>Payment Cancelled</h1><p>The transaction was not completed and your wallet was not charged. You can return to WhatsApp and try again anytime with <b>/deposit</b>.</p></div></body></html>
+        """
     return Response(content=html_content, media_type="text/html")
 
 
