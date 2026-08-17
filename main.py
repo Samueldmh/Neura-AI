@@ -494,6 +494,89 @@ async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_la
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta CTA URL Button Send Status {res.status_code}: {res.text}")
 
+async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str = ""):
+    """Sends an image to WhatsApp via Meta Cloud API using an image URL"""
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": "image",
+        "image": {
+            "link": image_url,
+            "caption": caption[:1024] if caption else ""
+        }
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            print(f"Meta Image Send Status {res.status_code}: {res.text}")
+    except Exception as e:
+        print(f"⚠️ Error sending WhatsApp image: {e}")
+
+def should_generate_medical_illustration(user_msg: str, ai_answer: str) -> bool:
+    """Detects if query or medical topic warrants a visual anatomical, histological or clinical illustration"""
+    msg_low = user_msg.lower()
+    # Explicit user requests
+    explicit_triggers = ["diagram", "illustration", "picture", "image", "draw", "show me", "illustrate", "schematic", "visualize", "structure", "layers", "pathway", "relations of", "parts of"]
+    if any(t in msg_low for t in explicit_triggers):
+        return True
+    
+    # Anatomical / clinical topics where visual diagrams are high-yield
+    visual_keywords = [
+        "anatomy", "cross section", "blood supply", "innervation", "artery", "arteries",
+        "vein", "veins", "nerve", "plexus", "triangle", "foramen", "fossa", "sulcus",
+        "cranial nerve", "circle of willis", "brachial plexus", "inguinal canal", "femoral triangle",
+        "histology", "histopathology", "epithelium", "layers of", "nephron", "sarcomere",
+        "kreb", "glycolysis", "action potential", "cardiac cycle", "ecg", "heart", "brain",
+        "liver", "kidney", "lungs", "embryology", "germ layer", "branchial arch", "pharyngeal arch"
+    ]
+    return any(kw in msg_low for kw in visual_keywords)
+
+def build_medical_illustration_prompt(topic: str) -> str:
+    """Builds a high-yield, scientifically accurate medical illustration prompt for Flux"""
+    return (
+        f"Professional medical textbook educational anatomical illustration of {topic}. "
+        f"Clean high-yield clinical diagram, detailed labeled anatomical structures, cross-section view, "
+        f"clean white background, scientific clarity, medical journal quality, highly detailed."
+    )
+
+async def generate_medical_illustration(topic: str) -> str:
+    """Generates a custom medical diagram using OpenRouter Flux Image API"""
+    if not OPENROUTER_API_KEY:
+        return None
+    
+    prompt = build_medical_illustration_prompt(topic)
+    url = "https://openrouter.ai/api/v1/images"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://neura.ai",
+        "X-Title": "NEURA AI MBBS Co-Pilot"
+    }
+    payload = {
+        "model": "black-forest-labs/flux-1-schnell",
+        "prompt": prompt,
+        "aspect_ratio": "1:1"
+    }
+    try:
+        async with httpx.AsyncClient(timeout=35.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            if res.status_code == 200:
+                data = res.json()
+                if "data" in data and len(data["data"]) > 0:
+                    img_data = data["data"][0]
+                    if "url" in img_data:
+                        return img_data["url"]
+            print(f"OpenRouter image generation response ({res.status_code}): {res.text[:200]}")
+    except Exception as e:
+        print(f"⚠️ Error generating medical illustration: {e}")
+    return None
+
 async def initialize_flutterwave_transaction(amount_ngn: int, email: str, phone: str, name: str = "Student"):
     """Initializes a Flutterwave payment and returns the hosted checkout URL"""
     import uuid
@@ -1707,6 +1790,16 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
         # Check if the answer indicates information is missing from textbooks
         ai_lower = ai_answer.lower()
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
+
+        # Generate and send high-yield medical illustration if topic is visual or requested
+        if intent != "QUIZ" and not is_not_covered and should_generate_medical_illustration(query_to_search, ai_answer):
+            try:
+                img_url = await generate_medical_illustration(query_to_search)
+                if img_url:
+                    img_caption = f"🎨 *Medical Diagram:* _{query_to_search[:80]}_"
+                    await send_whatsapp_image_url(sender_phone, img_url, img_caption)
+            except Exception as img_err:
+                print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
 
         # Attach interactive follow-up button for quick MCQ generation ONLY if it was a valid medical answer
         if intent != "QUIZ" and not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
