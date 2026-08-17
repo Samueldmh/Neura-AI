@@ -585,52 +585,134 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
 def should_generate_medical_illustration(user_msg: str, ai_answer: str) -> bool:
     """Detects if query or medical topic warrants a visual anatomical, histological or clinical illustration"""
     msg_low = user_msg.lower()
-    # Explicit user requests
-    explicit_triggers = ["diagram", "illustration", "picture", "image", "draw", "show me", "illustrate", "schematic", "visualize", "structure", "layers", "pathway", "relations of", "parts of"]
+    # Explicit user visual requests
+    explicit_triggers = [
+        "diagram", "illustration", "picture", "image", "draw", "show me", "illustrate",
+        "schematic", "visualize", "get a", "can i get", "layers", "pathway",
+        "relations of", "parts of", "structure of", "structures of"
+    ]
     if any(t in msg_low for t in explicit_triggers):
         return True
     
-    # Anatomical / clinical topics where visual diagrams are high-yield
+    # Anatomical / clinical topics where visual diagrams are high-yield (auto-send image)
     visual_keywords = [
         "anatomy", "cross section", "blood supply", "innervation", "artery", "arteries",
         "vein", "veins", "nerve", "plexus", "triangle", "foramen", "fossa", "sulcus",
         "cranial nerve", "circle of willis", "brachial plexus", "inguinal canal", "femoral triangle",
-        "histology", "histopathology", "epithelium", "layers of", "nephron", "sarcomere",
-        "kreb", "glycolysis", "action potential", "cardiac cycle", "ecg", "heart", "brain",
-        "liver", "kidney", "lungs", "embryology", "germ layer", "branchial arch", "pharyngeal arch"
+        "histology", "histopathology", "epithelium", "nephron", "sarcomere",
+        "krebs", "glycolysis", "action potential", "cardiac cycle", "ecg", "heart", "brain",
+        "liver", "kidney", "lungs", "embryology", "germ layer", "branchial arch", "pharyngeal arch",
+        "b cell", "t cell", "nk cell", "lymphocyte", "development", "maturation", "lymphopoiesis",
+        "renin", "angiotensin", "aldosterone", "raas", "coagulation", "cascade", "complement",
+        "immunoglobulin", "antibody", "granuloma", "necrosis", "infarction", "atherosclerosis",
+        "epidermis", "dermis", "skin layer", "renal tubule", "nephron", "alveoli", "bronchi",
+        "neuromuscular", "synapse", "receptor", "spinal cord", "meninges", "ventricle"
     ]
     return any(kw in msg_low for kw in visual_keywords)
 
-async def retrieve_real_medical_diagram(topic: str):
-    """Retrieves authentic, peer-reviewed medical diagrams, Gray's anatomy plates, and genuine H&E histology micrographs."""
+# Comprehensive list of filler words to aggressively strip from diagram topic searches
+_DIAGRAM_FILLER_PATTERN = re.compile(
+    r'(?i)\b(show|me|get|a|can|i|diagram|diagrams|illustration|illustrations|picture|pictures|'
+    r'image|images|draw|drawing|drawings|photo|photos|pic|pics|sketch|visual|visualize|'
+    r'view|of|the|an|with|and|in|for|please|help|want|give|need|display|generate|'
+    r'create|make|produce|see|look|at|whats|what|is|are|how|does|do|'
+    r'explain|describe|tell|show|present|provide)\b'
+)
+
+async def retrieve_real_medical_diagram(topic_or_candidates):
+    """Retrieves authentic, peer-reviewed medical diagrams, Gray's anatomy plates, and genuine H&E histology micrographs.
+    Accepts either a single topic string or a list of pre-cleaned candidate search terms."""
     import urllib.parse
     headers = {"User-Agent": "NeuraAI-MBBS-Bot/2.0 (contact: medical.support@neura.ai)"}
     
-    # 1. Clean query of filler words
-    clean_topic = re.sub(r'(?i)\b(show|diagram|illustration|picture|image|draw|illustrate|of|the|a|an|with|and|in)\b', ' ', topic)
-    clean_topic = re.sub(r'\s+', ' ', clean_topic).strip()
+    # Known medical keyword → exact Wikipedia article title mappings
+    # These are patterns that appear in user queries → exact Wikipedia article names
+    MEDICAL_WIKI_MAP = [
+        (["b cell", "b-cell", "b lymph", "b cell develop", "b cell matur", "lymphopoies", "b cell activat"], "B cell"),
+        (["t cell activat", "t cell develop", "t lymph", "t cell matur"], "T cell activation"),
+        (["t cell", "t-cell"], "T cell"),
+        (["nk cell", "natural killer"], "Natural killer cell"),
+        (["coagulat", "clotting cascade", "clotting factor", "coagulation cascade"], "Coagulation cascade"),
+        (["circle of willis", "circle willis", "cerebral arterial circle", "willis"], "Circle of Willis"),
+        (["atrioventricular node", "av node", "cardiac conduction", "heart conduction"], "Cardiac conduction system"),
+        (["renin", "angiotensin", "aldosteron", "raas"], "Renin-angiotensin system"),
+        (["immunoglobulin", "igg", "iga", "igm", "igd", "ige", "antibody structur"], "Immunoglobulin G"),
+        (["epidermis", "skin layer", "layer skin", "stratum", "keratinocyte"], "Epidermis"),
+        (["granuloma", "granulom", "tubercul", "tubercol", "caseat"], "Granuloma"),
+        (["glycolys", "glucose breakdown"], "Glycolysis"),
+        (["krebs", "citric acid cycle", "tca cycle"], "Citric acid cycle"),
+        (["action potential", "nerve impulse"], "Action potential"),
+        (["cardiac cycle", "heart cycle"], "Cardiac cycle"),
+        (["brachial plexus"], "Brachial plexus"),
+        (["femoral triangle"], "Femoral triangle"),
+        (["inguinal canal"], "Inguinal canal"),
+        (["nephron", "renal tubule"], "Nephron"),
+        (["sarcomere", "muscle fiber", "muscle structur"], "Sarcomere"),
+        (["complement system", "complement cascade", "complement activat"], "Complement system"),
+        (["lymph node", "lymph node structur"], "Lymph node"),
+        (["bone marrow", "hematopoiesis", "haematopoiesis"], "Hematopoiesis"),
+        (["alveol", "alveolus", "lung unit"], "Pulmonary alveolus"),
+        (["synapse", "synaptic", "neuromuscular junction"], "Chemical synapse"),
+        (["spinal cord", "spinal cord cross"], "Spinal cord"),
+        (["meninges", "dura mater", "arachnoid"], "Meninges"),
+        (["ecg", "electrocardiogram", "ekg"], "Electrocardiography"),
+        (["atherosclerosis", "atheromatous plaque"], "Atherosclerosis"),
+        (["myocardial infarction", "heart attack"], "Myocardial infarction"),
+        (["stroke", "cerebral infarct"], "Stroke"),
+        (["diabetes", "insulin pathway"], "Diabetes mellitus"),
+    ]
     
-    # Search strategies: clean topic, extracted medical terms, or full subject
-    candidates = [clean_topic]
-    terms = extract_medical_terms(topic)
-    if terms:
-        for t in terms[:3]:
-            if t.lower() not in clean_topic.lower():
-                candidates.append(t)
-            candidates.append(f"{t} histology" if any(w in topic.lower() for w in ["histology", "necrosis", "granuloma", "cell", "biopsy", "microscopic"]) else t)
+    # Build candidate list from input
+    if isinstance(topic_or_candidates, list):
+        input_candidates = topic_or_candidates
+        raw_topic = " ".join(topic_or_candidates[:3]).lower()
+    else:
+        input_candidates = [topic_or_candidates]
+        raw_topic = (topic_or_candidates or "").lower()
+    
+    # Step 1: Check known wiki map first (deterministic, no API needed)
+    prioritized_wiki_titles = []
+    for patterns, wiki_title in MEDICAL_WIKI_MAP:
+        if any(p in raw_topic for p in patterns):
+            if wiki_title not in prioritized_wiki_titles:
+                prioritized_wiki_titles.append(wiki_title)
+    
+    # Step 2: Build search candidates from input
+    seen = set()
+    search_candidates = []
+    for c in input_candidates:
+        c = c.strip() if c else ""
+        if not c or len(c) < 2: continue
+        if c.lower() not in seen:
+            seen.add(c.lower())
+            search_candidates.append(c)
+        # Also try filler-stripped version
+        clean = _DIAGRAM_FILLER_PATTERN.sub(' ', c)
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        if clean and clean.lower() not in seen and len(clean) > 2:
+            seen.add(clean.lower())
+            search_candidates.append(clean)
+        # Histology variant for pathology topics
+        if any(w in raw_topic for w in ["histology", "necrosis", "granuloma", "biopsy", "microscopic", "stain"]):
+            hist_cand = clean + " histology" if clean else c + " histology"
+            if hist_cand.lower() not in seen:
+                seen.add(hist_cand.lower())
+                search_candidates.append(hist_cand)
+    
+    all_candidates = prioritized_wiki_titles + search_candidates
     
     search_url = "https://en.wikipedia.org/w/api.php"
-    for cand in candidates:
-        if not cand or len(cand) < 3: continue
-        search_params = {
-            "action": "opensearch",
-            "search": cand,
-            "limit": 4,
-            "namespace": 0,
-            "format": "json"
-        }
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        for cand in all_candidates[:10]:  # Try up to 10 candidates
+            if not cand or len(cand) < 2: continue
+            search_params = {
+                "action": "opensearch",
+                "search": cand,
+                "limit": 5,
+                "namespace": 0,
+                "format": "json"
+            }
+            try:
                 s_res = await client.get(search_url, params=search_params, headers=headers)
                 if s_res.status_code == 200:
                     titles = s_res.json()[1] if len(s_res.json()) > 1 else []
@@ -641,13 +723,15 @@ async def retrieve_real_medical_diagram(topic: str):
                         if sum_res.status_code == 200:
                             data = sum_res.json()
                             img_url = data.get("originalimage", {}).get("source") or data.get("thumbnail", {}).get("source")
-                            # Verify valid image url (not a generic logo/icon)
-                            if img_url and any(img_url.lower().endswith(ext) or ext in img_url.lower() for ext in [".jpg", ".jpeg", ".png", ".svg"]):
+                            if img_url and any(
+                                img_url.lower().endswith(ext) or ext in img_url.lower()
+                                for ext in [".jpg", ".jpeg", ".png", ".svg"]
+                            ):
                                 if not any(bad in img_url.lower() for bad in ["symbol", "icon", "stub", "question_mark", "disambig"]):
                                     return img_url, title
-        except Exception as e:
-            print(f"⚠️ Error retrieving real medical image for '{cand}': {e}")
-            
+            except Exception as e:
+                print(f"⚠️ Error retrieving real medical image for '{cand}': {e}")
+                
     return None, None
 
 async def initialize_flutterwave_transaction(amount_ngn: int, email: str, phone: str, name: str = "Student"):
@@ -1849,9 +1933,12 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Step 1: Zero-shot Micro-LLM Query Normalization & Typo Resolution
         normalized_data = await normalize_medical_query(search_term)
         medical_terms = normalized_data.get("search_keywords", [])
-        diagram_target = normalized_data.get("diagram_topic") or search_term
+        diagram_target = normalized_data.get("diagram_topic")
         if not medical_terms:
             medical_terms = extract_medical_terms(search_term)
+        # If LLM gave no clean diagram topic, use medical_terms as diagram candidates
+        # (these are already clean, typo-corrected authoritative phrases)
+        diagram_candidates = ([diagram_target] if diagram_target else []) + medical_terms
         
         # Step 1.5: Check for explicit book overrides (e.g. if user says "Use pharmacology")
         active_books = get_explicit_book_override(search_term, preferred_books_list)
@@ -1957,9 +2044,10 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Retrieve and send authentic peer-reviewed medical diagram / histology slide if topic is visual or requested
         if intent != "QUIZ" and not is_not_covered and should_generate_medical_illustration(query_to_search, ai_answer):
             try:
-                img_url, img_title = await retrieve_real_medical_diagram(diagram_target)
+                img_url, img_title = await retrieve_real_medical_diagram(diagram_candidates)
                 if img_url:
-                    img_caption = f"🔬 *Authentic Medical Figure:* _{img_title or diagram_target[:60]}_\n📚 _Peer-Reviewed Scientific & Textbook Archive_"
+                    display_topic = (diagram_candidates[0] if diagram_candidates else query_to_search)[:60]
+                    img_caption = f"🔬 *Authentic Medical Figure:* _{img_title or display_topic}_\n📚 _Peer-Reviewed Scientific & Textbook Archive_"
                     await send_whatsapp_image_url(sender_phone, img_url, img_caption)
             except Exception as img_err:
                 print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
