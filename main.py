@@ -838,7 +838,12 @@ SEARCH_STOP_WORDS = {
     "meaning", "meant", "using", "used", "work", "works", "working", "way",
     "thing", "things", "something", "anything", "everything", "nothing",
     "talk", "talking", "teach", "show", "break", "down", "breakdown",
+    "diagram", "diagrams", "illustration", "illustrations", "picture", "pictures",
+    "image", "images", "draw", "drawing", "drawings", "photo", "photos", "pic", "pics",
+    "sketch", "visual", "visualize", "view"
 }
+
+SPECIAL_SHORT_MEDICAL = {"b", "t", "nk", "av", "sa", "ph", "c3", "c4", "c5", "k", "na", "ca", "fe", "mg", "ig"}
 
 FOLLOWUP_PHRASES = [
     "tell me more", "tell me more about this", "is this all", "is that all",
@@ -894,15 +899,19 @@ def get_explicit_book_override(user_msg: str, preferred_books: list) -> list:
     return override_books if override_books else preferred_books
 
 def extract_medical_terms(user_msg: str) -> list:
-    """Instantly extract medical keywords by stripping filler words and splitting on conjunctions.
-    This is used ONLY for Qdrant search — the original message is still sent to the AI."""
-    """Instantly extract medical keywords by stripping filler words and splitting on conjunctions. Preserves capitalization."""
-    # We strip punctuation but keep case
-    msg = re.sub(r'[^\w\s]', ' ', user_msg)
-    words = msg.split()
+    """Instantly extract clean medical keywords by normalizing typos, preserving short medical terms (B-cell, T-cell), and stripping filler words."""
+    # 1. Normalize common student typos (e.g., 'b cel' -> 'b cell', 't cel' -> 't cell')
+    msg = re.sub(r'\b([bt])\s*cel\b', r'\1 cell', user_msg, flags=re.IGNORECASE)
+    msg = re.sub(r'\bcel\b', 'cell', msg, flags=re.IGNORECASE)
     
-    # Check lower case for stop words, but preserve original case
-    meaningful_words = [w for w in words if w.lower() not in SEARCH_STOP_WORDS and len(w) > 2]
+    msg_cleaned = re.sub(r'[^\w\s]', ' ', msg)
+    words = msg_cleaned.split()
+    
+    # Check lowercase for stop words, but preserve essential short medical abbreviations
+    meaningful_words = [
+        w for w in words 
+        if (w.lower() in SPECIAL_SHORT_MEDICAL or len(w) > 2) and w.lower() not in SEARCH_STOP_WORDS
+    ]
     
     if not meaningful_words:
         return [user_msg]
@@ -921,9 +930,10 @@ def extract_medical_terms(user_msg: str) -> list:
     if current_phrase:
         phrases.append(" ".join(current_phrase))
     
-    # Add the raw message as a whole phrase to ensure context is kept
-    if user_msg not in phrases:
-        phrases.append(user_msg)
+    # Add the unified cleaned query at the start to maximize semantic relevance
+    joined_query = " ".join(meaningful_words)
+    if joined_query and joined_query not in phrases:
+        phrases.insert(0, joined_query)
         
     print(f"🔍 Extracted search keywords: {phrases} (from: '{user_msg}')")
     return phrases
