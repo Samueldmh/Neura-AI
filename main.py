@@ -1330,8 +1330,22 @@ async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: 
     await send_quiz_question(sender_phone, active_quiz)
     return True
 
+# User-level sequential lock to prevent race conditions on simultaneous messages from the same user
+_user_locks: dict[str, asyncio.Lock] = {}
+
+def get_user_lock(user_id: str) -> asyncio.Lock:
+    if user_id not in _user_locks:
+        _user_locks[user_id] = asyncio.Lock()
+    return _user_locks[user_id]
+
 async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_reply: bool = False):
-    """Background task to run RAG & OpenRouter LLM and send WhatsApp reply"""
+    """Background task wrapper to process messages sequentially per user lock"""
+    lock = get_user_lock(sender_phone)
+    async with lock:
+        await _process_whatsapp_message_internal(sender_phone, user_msg, is_tagged_reply)
+
+async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, is_tagged_reply: bool = False):
+    """Internal task to run RAG & OpenRouter LLM and send WhatsApp reply"""
     try:
         # Fetch user doc early to get preferences
         user_doc = None
