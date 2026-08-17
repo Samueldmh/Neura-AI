@@ -223,6 +223,7 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
     
     full_text = ""
     current_chunk = ""
+    chunk_sent_count = 0
     
     try:
         async with httpx.AsyncClient(timeout=60.0) as stream_client:
@@ -240,11 +241,14 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
                                     full_text += content
                                     current_chunk += content
                                     
-                                    if "\n\n" in current_chunk and len(current_chunk) > 750:
+                                    # Send first chunk fast (~220 chars) so student gets instant answer, then larger paragraphs
+                                    threshold = 220 if chunk_sent_count == 0 else 750
+                                    if "\n\n" in current_chunk and len(current_chunk) > threshold:
                                         parts = current_chunk.rsplit("\n\n", 1)
                                         send_part = parts[0].strip()
                                         if send_part:
                                             await send_whatsapp_cloud_msg(sender_phone, send_part)
+                                            chunk_sent_count += 1
                                         current_chunk = parts[1] if len(parts) > 1 else ""
                         except json.JSONDecodeError:
                             pass
@@ -486,6 +490,26 @@ async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_la
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta CTA URL Button Send Status {res.status_code}: {res.text}")
 
+async def mark_message_as_read(message_id: str):
+    """Marks incoming message as read on WhatsApp Cloud API for instant blue ticks (<100ms)"""
+    if not message_id or not WHATSAPP_TOKEN:
+        return
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": message_id
+    }
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            await client.post(url, headers=headers, json=payload)
+    except Exception:
+        pass
+
 async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str = ""):
     """Sends an image to WhatsApp via Meta Cloud API using an image URL"""
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
@@ -532,42 +556,26 @@ def should_generate_medical_illustration(user_msg: str, ai_answer: str) -> bool:
 def build_medical_illustration_prompt(topic: str) -> str:
     """Builds a high-yield, scientifically accurate medical illustration prompt for Flux"""
     return (
-        f"Professional medical textbook educational anatomical illustration of {topic}. "
+        f"Medical textbook educational anatomical illustration of {topic}. "
         f"Clean high-yield clinical diagram, detailed labeled anatomical structures, cross-section view, "
-        f"clean white background, scientific clarity, medical journal quality, highly detailed."
+        f"pure white background, scientific clarity, medical journal quality, highly detailed."
     )
 
 async def generate_medical_illustration(topic: str) -> str:
-    """Generates a custom medical diagram using OpenRouter Flux Image API"""
-    if not OPENROUTER_API_KEY:
-        return None
-    
-    prompt = build_medical_illustration_prompt(topic)
-    url = "https://openrouter.ai/api/v1/images"
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://neura.ai",
-        "X-Title": "NEURA AI MBBS Co-Pilot"
-    }
-    payload = {
-        "model": "black-forest-labs/flux-1-schnell",
-        "prompt": prompt,
-        "aspect_ratio": "1:1"
-    }
+    """Generates a high-resolution medical diagram via Pollinations Flux Engine in ~1.5s"""
+    import urllib.parse
+    import random
     try:
-        async with httpx.AsyncClient(timeout=35.0) as client:
-            res = await client.post(url, headers=headers, json=payload)
-            if res.status_code == 200:
-                data = res.json()
-                if "data" in data and len(data["data"]) > 0:
-                    img_data = data["data"][0]
-                    if "url" in img_data:
-                        return img_data["url"]
-            print(f"OpenRouter image generation response ({res.status_code}): {res.text[:200]}")
+        clean_topic = topic.strip().replace("\n", " ")[:120]
+        prompt = build_medical_illustration_prompt(clean_topic)
+        encoded_prompt = urllib.parse.quote(prompt)
+        seed = random.randint(1000, 999999)
+        # Direct high-res Flux image URL from Pollinations.ai (accepts direct WhatsApp fetch)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&model=flux&seed={seed}&nologo=true"
+        return image_url
     except Exception as e:
-        print(f"⚠️ Error generating medical illustration: {e}")
-    return None
+        print(f"⚠️ Error generating medical illustration URL: {e}")
+        return None
 
 async def send_commands_menu(sender_phone: str):
     """Sends an interactive WhatsApp List containing all available slash commands with 1-tap execution"""
@@ -1245,6 +1253,11 @@ async def send_quiz_question(sender_phone: str, quiz_state: dict):
             "id": f"Q{q_num}_D",
             "title": "Option D",
             "description": q.get('option_d', '')[:72]
+        },
+        {
+            "id": "EXIT_QUIZ",
+            "title": "🛑 Exit Quiz",
+            "description": "Stop this practice quiz and return to normal chat"
         }
     ]
 
@@ -1257,17 +1270,54 @@ async def send_quiz_question(sender_phone: str, quiz_state: dict):
 
 async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: dict):
     """Processes the student's selected option (A, B, C, or D), provides textbook rationale, and advances to next question"""
-    q_match = re.search(r'Q(\d+)_([A-D])', selected_option.upper())
+    opt_upper = selected_option.strip().upper()
     active_quiz = user_doc.get("active_quiz") if user_doc else None
+
+    # Handle explicit quiz exit
+    if opt_upper in ["EXIT_QUIZ", "EXIT", "STOP", "QUIT", "CANCEL", "/EXIT", "STOP QUIZ", "EXIT QUIZ", "END QUIZ"]:
+        if users_col is not None:
+            await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
+        await send_whatsapp_cloud_msg(
+            sender_phone,
+            "🛑 *Practice Quiz Ended.*\n\nFeel free to ask any medical question or explore another topic whenever you're ready! 🧠⚡"
+        )
+        return True
+
+    q_match = re.search(r'Q(\d+)_([A-D])', opt_upper)
 
     # If student taps an MCQ option dropdown after the quiz is finished/cleared
     if not active_quiz:
         if q_match:
             await send_whatsapp_cloud_msg(
                 sender_phone,
-                "⚠️ This quiz session has already ended! To start a new practice quiz, tap '📝 Generate MCQs' under any medical answer!"
+                "⚠️ This quiz session has already ended! To start a new practice quiz, tap '📝 Practice MCQs' under any medical answer!"
             )
             return True
+        return False
+
+    # Check if the input is a valid MCQ choice (Q#_A or raw A, B, C, D, 1, 2, 3, 4, Option A)
+    # If the user typed a new question (e.g. "What causes acute pancreatitis?"), AUTO-EXIT the quiz cleanly
+    valid_raw_choices = {"A": "A", "B": "B", "C": "C", "D": "D", "OPTION A": "A", "OPTION B": "B", "OPTION C": "C", "OPTION D": "D", "1": "A", "2": "B", "3": "C", "4": "D"}
+    
+    choice = None
+    if q_match:
+        tapped_q_num = int(q_match.group(1))
+        choice = q_match.group(2)
+        current_q_num = active_quiz.get("current_idx", 0) + 1
+        
+        if tapped_q_num != current_q_num:
+            await send_whatsapp_cloud_msg(
+                sender_phone,
+                f"⚠️ You have already answered Question {tapped_q_num}! Please select your answer for Question {current_q_num} below."
+            )
+            return True
+    elif opt_upper in valid_raw_choices:
+        choice = valid_raw_choices[opt_upper]
+    else:
+        # Non-option message: Student is moving on or asking a new question -> auto-exit quiz and let message process normally!
+        if users_col is not None:
+            await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
+        print(f"ℹ️ User {sender_phone} sent non-MCQ input during quiz: '{selected_option}'. Auto-exiting quiz session.")
         return False
 
     questions = active_quiz.get("questions", [])
@@ -1278,27 +1328,10 @@ async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: 
         if q_match:
             await send_whatsapp_cloud_msg(
                 sender_phone,
-                "⚠️ This quiz session has already ended! To start a new practice quiz, tap '📝 Generate MCQs' under any medical answer!"
+                "⚠️ This quiz session has already ended! To start a new practice quiz, tap '📝 Practice MCQs' under any medical answer!"
             )
             return True
         return False
-
-    if q_match:
-        tapped_q_num = int(q_match.group(1))
-        choice = q_match.group(2)
-        current_q_num = idx + 1
-        
-        if tapped_q_num != current_q_num:
-            await send_whatsapp_cloud_msg(
-                sender_phone,
-                f"⚠️ You have already answered Question {tapped_q_num}! Please select your answer for Question {current_q_num} below."
-            )
-            return True
-    else:
-        match = re.search(r'\b([A-D])\b', selected_option.upper())
-        if not match:
-            return False
-        choice = match.group(1)
 
     q = questions[idx]
     correct = q.get("correct_option", "A").upper().strip()
@@ -1651,6 +1684,10 @@ async def handle_whatsapp_webhook(request: Request):
                 for msg in messages:
                     sender_phone = msg.get("from")
                     msg_type = msg.get("type")
+                    msg_id = msg.get("id")
+                    
+                    if msg_id:
+                        asyncio.create_task(mark_message_as_read(msg_id))
                     
                     context_obj = msg.get("context", {})
                     is_tagged_reply = bool(context_obj.get("id"))
