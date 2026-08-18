@@ -614,14 +614,14 @@ _DIAGRAM_FILLER_PATTERN = re.compile(
 # Pre-verified high-yield medical diagram atlas (Instant 0ms, zero-rate-limit, 100% verified authentic figures)
 VERIFIED_MEDICAL_ATLAS = [
     # Immunology & Hematology
-    (["b cell", "b-cell", "b lymph", "b cell develop", "b cell matur", "lymphopoies", "b cell activat", "b cel"], 
-     ("B-cell Development and Activation", "https://upload.wikimedia.org/wikipedia/commons/7/7c/Blausen_0624_Lymphocyte_B_cell_%28crop%29.png")),
-    (["t cell activat", "t cell develop", "t lymph", "t cell matur", "t cel"], 
-     ("T-cell Maturation and Activation Pathway", "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/T-cell_and_microvillus.png/3840px-T-cell_and_microvillus.png")),
+    (["b cell", "b-cell", "b lymph", "b cell develop", "b cell matur", "lymphopoies", "b cell activat", "b cel", "differentiat"], 
+     ("B-cell Differentiation & Hematopoietic Lineage Flowchart", "https://upload.wikimedia.org/wikipedia/commons/6/69/Hematopoiesis_%28human%29_diagram.png")),
+    (["t cell activat", "t cell develop", "t lymph", "t cell matur", "t cel", "thymus"], 
+     ("T-cell Maturation and Activation Pathway", "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/T-cell_and_microvillus.png/1920px-T-cell_and_microvillus.png")),
     (["nk cell", "natural killer"], 
      ("Natural Killer (NK) Cell Cytotoxic Action", "https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Natural_killer_cell.jpg/1920px-Natural_killer_cell.jpg")),
     (["coagulat", "clotting cascade", "clotting factor", "coagulation cascade", "hemostasis"], 
-     ("Coagulation Cascade (Intrinsic & Extrinsic Pathways)", "https://upload.wikimedia.org/wikipedia/commons/4/4f/Coagulation_in_vivo.png")),
+     ("Coagulation Cascade with Clinical Coagulation Tests (Intrinsic & Extrinsic Pathways)", "https://upload.wikimedia.org/wikipedia/commons/4/4b/Coagulation_Cascade_with_Tests.jpg")),
     (["immunoglobulin", "igg", "iga", "igm", "igd", "ige", "antibody structur"], 
      ("Immunoglobulin G (IgG) Molecular Structure", "https://upload.wikimedia.org/wikipedia/commons/3/3a/Antibody_IgG1_surface.png")),
     (["complement system", "complement cascade", "complement activat"], 
@@ -629,7 +629,7 @@ VERIFIED_MEDICAL_ATLAS = [
     (["lymph node", "lymph node structur"], 
      ("Lymph Node Histological Architecture", "https://upload.wikimedia.org/wikipedia/commons/thumb/9/92/Schematic_of_lymph_node.svg/1920px-Schematic_of_lymph_node.svg.png")),
     (["bone marrow", "hematopoiesis", "haematopoiesis"], 
-     ("Hematopoiesis and Blood Cell Lineage Differentiation", "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f0/Hematopoiesis_simple.svg/1920px-Hematopoiesis_simple.svg.png")),
+     ("Hematopoiesis and Blood Cell Lineage Differentiation", "https://upload.wikimedia.org/wikipedia/commons/6/69/Hematopoiesis_%28human%29_diagram.png")),
 
     # Cardiology & Vascular
     (["circle of willis", "circle willis", "cerebral arterial circle", "willis"], 
@@ -637,9 +637,9 @@ VERIFIED_MEDICAL_ATLAS = [
     (["atrioventricular node", "av node", "cardiac conduction", "heart conduction", "sa node", "bundle of his"], 
      ("Cardiac Electrical Conduction Pathway", "https://upload.wikimedia.org/wikipedia/commons/0/0f/Cardiac_Conduction_System.jpg")),
     (["renin", "angiotensin", "aldosteron", "raas"], 
-     ("Renin-Angiotensin-Aldosterone System (RAAS)", "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7c/Renin-angiotensin_system_in_man_pathway.svg/1920px-Renin-angiotensin_system_in_man_pathway.svg.png")),
+     ("Renin-Angiotensin-Aldosterone System (RAAS Pathway Illustration)", "https://upload.wikimedia.org/wikipedia/commons/a/a7/2117_Renin_Angiotensin_Aldosterone_Pathway.jpg")),
     (["cardiac cycle", "heart cycle", "wiggers diagram"], 
-     ("Cardiac Cycle (Phases, Pressures & Valves)", "https://upload.wikimedia.org/wikipedia/commons/3/38/2027_Phases_of_the_Cardiac_Cycle.jpg")),
+     ("Cardiac Cycle Wiggers Diagram (Pressures, Volumes & Heart Sounds)", "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Wiggers_Diagram_2.svg/1920px-Wiggers_Diagram_2.svg.png")),
     (["ecg", "electrocardiogram", "ekg"], 
      ("Electrocardiography (ECG Waveform Components)", "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9e/SinusRhythmLabels.svg/1920px-SinusRhythmLabels.svg.png")),
     (["atherosclerosis", "atheromatous plaque", "plaque"], 
@@ -653,11 +653,11 @@ VERIFIED_MEDICAL_ATLAS = [
     (["granuloma", "granulom", "tubercul", "tubercol", "caseat", "caseous", "langhans"], 
      ("Caseating Tubercular Granuloma (H&E Micrograph)", "https://upload.wikimedia.org/wikipedia/commons/1/10/Granuloma_mac.jpg")),
     (["epidermis", "skin layer", "layer skin", "stratum", "keratinocyte", "dermis"], 
-     ("Epidermis Layers and Histological Organization", "https://upload.wikimedia.org/wikipedia/commons/8/84/Epidermis-delimited.JPG")),
+     ("Epidermis Strata & Cellular Layers (Histological Cross-Section)", "https://upload.wikimedia.org/wikipedia/commons/f/f9/502_Layers_of_epidermis.jpg")),
     (["nephron", "renal tubule", "glomerul", "bowman"], 
      ("Nephron Structure and Renal Tubule Anatomy", "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1c/Kidney_Nephron.svg/1920px-Kidney_Nephron.svg.png")),
     (["sarcomere", "muscle fiber", "muscle structur", "myofibril", "sliding filament"], 
-     ("Sarcomere Ultrastructure and Actin-Myosin Filaments", "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Sarcomere.svg/1920px-Sarcomere.svg.png")),
+     ("Sarcomere Sliding Filament Mechanism (Actin-Myosin Cross-Bridges)", "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Sarcomere_diagram.svg/1920px-Sarcomere_diagram.svg.png")),
     (["alveol", "alveolus", "lung unit", "respiratory membrane"], 
      ("Pulmonary Alveolus and Gas Exchange Barrier", "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d4/Alveolus_diagram.svg/1920px-Alveolus_diagram.svg.png")),
     (["synapse", "synaptic", "neuromuscular junction", "acetylcholine receptor"], 
@@ -679,7 +679,7 @@ VERIFIED_MEDICAL_ATLAS = [
 
     # Biochemistry & Physiology
     (["glycolys", "glucose breakdown", "embden meyerhof"], 
-     ("Glycolysis Metabolic Pathway (10 Enzymatic Steps)", "https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/Glycolysis_metabolic_pathway_3_annotated.svg/1920px-Glycolysis_metabolic_pathway_3_annotated.svg.png")),
+     ("Glycolysis Metabolic Pathway (10 Enzymatic Steps & Energy Yields)", "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a0/Glycolysis.svg/1920px-Glycolysis.svg.png")),
     (["krebs", "citric acid cycle", "tca cycle"], 
      ("Citric Acid Cycle (Krebs TCA Cycle Steps & Enzymes)", "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0b/Citric_acid_cycle_with_aconitate_2.svg/1920px-Citric_acid_cycle_with_aconitate_2.svg.png")),
     (["diabetes", "insulin pathway", "glucose transporter", "glut4"], 
