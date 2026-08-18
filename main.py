@@ -583,19 +583,22 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
         print(f"⚠️ Error sending WhatsApp image: {e}")
 
 def should_generate_medical_illustration(user_msg: str, ai_answer: str) -> bool:
-    """Detects if query or medical topic warrants a visual anatomical, histological or clinical illustration"""
+    """Detects if query or medical topic warrants a visual anatomical, histological or clinical illustration (Pre-clinical & Clinical 200L-600L)"""
     msg_low = user_msg.lower()
-    # Explicit user visual requests
+    # Explicit user visual requests (Pre-clinical & Clinical)
     explicit_triggers = [
         "diagram", "illustration", "picture", "image", "draw", "show me", "illustrate",
-        "schematic", "visualize", "get a", "can i get", "layers", "pathway",
-        "relations of", "parts of", "structure of", "structures of"
+        "schematic", "visualize", "get a", "can i get", "layers", "pathway", "flowchart",
+        "algorithm", "stages of", "mechanism of", "relations of", "parts of", "structure of",
+        "structures of", "scoring", "cross section", "arterial supply", "venous drainage",
+        "innervation", "lymphatic drainage", "histopathology", "pathology slide"
     ]
     if any(t in msg_low for t in explicit_triggers):
         return True
     
-    # Anatomical / clinical topics where visual diagrams are high-yield (auto-send image)
+    # Anatomical / clinical topics where visual diagrams are high-yield across 200L-600L (auto-send image)
     visual_keywords = [
+        # Pre-clinical (200L/300L/400L: Anatomy, Physio, Biochem, Path, Pharm, Micro)
         "anatomy", "cross section", "blood supply", "innervation", "artery", "arteries",
         "vein", "veins", "nerve", "plexus", "triangle", "foramen", "fossa", "sulcus",
         "cranial nerve", "circle of willis", "brachial plexus", "inguinal canal", "femoral triangle",
@@ -606,7 +609,17 @@ def should_generate_medical_illustration(user_msg: str, ai_answer: str) -> bool:
         "renin", "angiotensin", "aldosterone", "raas", "coagulation", "cascade", "complement",
         "immunoglobulin", "antibody", "granuloma", "necrosis", "infarction", "atherosclerosis",
         "epidermis", "dermis", "skin layer", "renal tubule", "nephron", "alveoli", "bronchi",
-        "neuromuscular", "synapse", "receptor", "spinal cord", "meninges", "ventricle"
+        "neuromuscular", "synapse", "receptor", "spinal cord", "meninges", "ventricle",
+
+        # Senior Clinical (500L/600L: O&G, Surgery, Pediatrics, Internal Medicine, Comm Health)
+        "menstrual cycle", "calot", "tetralogy of fallot", "apgar", "glasgow coma", "gcs",
+        "dka", "ketoacidosis", "appendicitis", "placenta previa", "abruptio", "ectopic pregnancy",
+        "partograph", "jvp", "jugular venous", "portal hypertension", "portacaval", "portosystemic",
+        "rule of nines", "burns", "hernia", "hesselbach", "murmur", "heart murmur", "cardiac murmur",
+        "bishop score", "episiotomy", "pph", "postpartum hemorrhage", "imci", "phototherapy",
+        "bilirubin nomogram", "curb-65", "wells score", "child-pugh", "meld score", "heparin",
+        "warfarin", "atrial fibrillation", "ventricular tachycardia", "stemi", "nstemi", "ctg",
+        "cardiotocography", "fetal heart rate", "cardinal movements", "stages of labor", "cholecystectomy"
     ]
     return any(kw in msg_low for kw in visual_keywords)
 
@@ -619,9 +632,9 @@ _DIAGRAM_FILLER_PATTERN = re.compile(
     r'explain|describe|tell|show|present|provide)\b'
 )
 
-# Pre-verified high-yield medical diagram atlas (Instant 0ms, zero-rate-limit, 100% verified authentic figures)
+# Pre-verified high-yield medical diagram atlas (Instant 0ms, zero-rate-limit, 100% verified authentic figures across 200L-600L)
 VERIFIED_MEDICAL_ATLAS = [
-    # Immunology & Hematology
+    # Immunology & Hematology (Pre-clinical & Clinical)
     (["b cell", "b-cell", "b lymph", "b cell develop", "b cell matur", "lymphopoies", "b cell activat", "b cel", "differentiat"], 
      ("B-cell Differentiation & Hematopoietic Lineage Flowchart", "https://upload.wikimedia.org/wikipedia/commons/6/69/Hematopoiesis_%28human%29_diagram.png")),
     (["t cell activat", "t cell develop", "t lymph", "t cell matur", "t cel", "thymus"], 
@@ -639,7 +652,7 @@ VERIFIED_MEDICAL_ATLAS = [
     (["bone marrow", "hematopoiesis", "haematopoiesis"], 
      ("Hematopoiesis and Blood Cell Lineage Differentiation", "https://upload.wikimedia.org/wikipedia/commons/6/69/Hematopoiesis_%28human%29_diagram.png")),
 
-    # Cardiology & Vascular
+    # Cardiology & Vascular (Medicine & Surgery)
     (["circle of willis", "circle willis", "cerebral arterial circle", "willis"], 
      ("Circle of Willis (Cerebral Arterial Network)", "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2e/Circle_of_Willis_en.svg/1920px-Circle_of_Willis_en.svg.png")),
     (["atrioventricular node", "av node", "cardiac conduction", "heart conduction", "sa node", "bundle of his"], 
@@ -657,6 +670,28 @@ VERIFIED_MEDICAL_ATLAS = [
     (["stroke", "cerebral infarct", "mca infarct"], 
      ("Cerebral Infarction and Middle Cerebral Artery Territory", "https://upload.wikimedia.org/wikipedia/commons/thumb/4/49/MCA_Territory_Infarct.png/1920px-MCA_Territory_Infarct.png")),
 
+    # Obstetrics & Gynaecology (500L/600L)
+    (["menstrual cycle", "ovarian cycle", "uterine cycle", "follicular phase", "luteal phase", "lh surge"], 
+     ("Menstrual Cycle Hormonal Fluctuation & Endometrial Phases", "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2a/MenstrualCycle2_en.svg/1920px-MenstrualCycle2_en.svg.png")),
+
+    # Surgery & Anatomy (500L/600L)
+    (["calot", "calots triangle", "cystohepatic triangle", "cholecystectomy"], 
+     ("Calot's Triangle (Cystohepatic Triangle Anatomy for Cholecystectomy)", "https://upload.wikimedia.org/wikipedia/commons/6/65/Gray532.png")),
+    (["brachial plexus"], 
+     ("Brachial Plexus (Roots, Trunks, Divisions, Cords, Branches)", "https://upload.wikimedia.org/wikipedia/commons/3/3a/Gray808.png")),
+    (["femoral triangle", "scarpa triangle"], 
+     ("Femoral Triangle Anatomy and Neurovascular Contents", "https://upload.wikimedia.org/wikipedia/commons/4/47/Femoral-triangle-diagram.jpg")),
+    (["inguinal canal", "inguinal ring"], 
+     ("Inguinal Canal Anatomy (Walls, Rings & Spermatic Cord)", "https://upload.wikimedia.org/wikipedia/commons/b/b4/Gray1227.png")),
+    (["spinal cord", "spinal cord cross", "spinothalamic", "corticospinal"], 
+     ("Spinal Cord Cross-Section and Ascending/Descending Tracts", "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b2/Spinal_cord_tracts_-_English.svg/1920px-Spinal_cord_tracts_-_English.svg.png")),
+    (["meninges", "dura mater", "arachnoid", "pia mater"], 
+     ("Cranial Meninges (Dura, Arachnoid, and Pia Mater Layers)", "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8e/Meninges-en.svg/1920px-Meninges-en.svg.png")),
+
+    # Pediatrics (500L/600L)
+    (["tetralogy of fallot", "tof", "fallot"], 
+     ("Tetralogy of Fallot (4 Cardinal Anatomical Defects)", "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e6/Tetralogy_of_Fallot.svg/1920px-Tetralogy_of_Fallot.svg.png")),
+
     # Pathology & Histology
     (["granuloma", "granulom", "tubercul", "tubercol", "caseat", "caseous", "langhans"], 
      ("Caseating Tubercular Granuloma (H&E Micrograph)", "https://upload.wikimedia.org/wikipedia/commons/1/10/Granuloma_mac.jpg")),
@@ -672,18 +707,6 @@ VERIFIED_MEDICAL_ATLAS = [
      ("Chemical Synapse and Neurotransmitter Transmission", "https://upload.wikimedia.org/wikipedia/commons/thumb/1/19/Chemical_synapse_schema_cropped.jpg/1920px-Chemical_synapse_schema_cropped.jpg")),
     (["action potential", "nerve impulse", "depolarization"], 
      ("Neuronal Action Potential Phases (Depolarization / Repolarization)", "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4a/Action_potential.svg/1920px-Action_potential.svg.png")),
-
-    # Anatomy
-    (["brachial plexus"], 
-     ("Brachial Plexus (Roots, Trunks, Divisions, Cords, Branches)", "https://upload.wikimedia.org/wikipedia/commons/3/3a/Gray808.png")),
-    (["femoral triangle", "scarpa triangle"], 
-     ("Femoral Triangle Anatomy and Neurovascular Contents", "https://upload.wikimedia.org/wikipedia/commons/4/47/Femoral-triangle-diagram.jpg")),
-    (["inguinal canal", "inguinal ring"], 
-     ("Inguinal Canal Anatomy (Walls, Rings & Spermatic Cord)", "https://upload.wikimedia.org/wikipedia/commons/b/b4/Gray1227.png")),
-    (["spinal cord", "spinal cord cross", "spinothalamic", "corticospinal"], 
-     ("Spinal Cord Cross-Section and Ascending/Descending Tracts", "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b2/Spinal_cord_tracts_-_English.svg/1920px-Spinal_cord_tracts_-_English.svg.png")),
-    (["meninges", "dura mater", "arachnoid", "pia mater"], 
-     ("Cranial Meninges (Dura, Arachnoid, and Pia Mater Layers)", "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8e/Meninges-en.svg/1920px-Meninges-en.svg.png")),
 
     # Biochemistry & Physiology
     (["glycolys", "glucose breakdown", "embden meyerhof"], 
