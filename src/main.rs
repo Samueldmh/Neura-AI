@@ -470,7 +470,7 @@ async fn process_whatsapp_message(
     let system_prompt = base_prompt.replace("{user_context}", &format!("User Name: {}, Class: {}\n", name, level));
 
     let user_prompt = format!(
-        "RETRIEVED TEXTBOOK CONTEXT:\n{}\n\nSTUDENT QUESTION:\n{}",
+        "RETRIEVED TEXTBOOK CONTEXT:\n{}\n\nSTUDENT QUESTION:\n{}\n\nCRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly.",
         formatted_context, user_msg
     );
 
@@ -571,7 +571,7 @@ async fn chat_handler(
 
     let system_prompt = SYSTEM_MEDICAL_PROMPT.replace("{user_context}", "");
     let user_prompt = format!(
-        "RETRIEVED TEXTBOOK CONTEXT:\n{}\n\nSTUDENT QUESTION:\n{}",
+        "RETRIEVED TEXTBOOK CONTEXT:\n{}\n\nSTUDENT QUESTION:\n{}\n\nCRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly.",
         context_blocks.join("\n\n"),
         req.message
     );
