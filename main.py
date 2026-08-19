@@ -719,23 +719,9 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
         except Exception as upload_err:
             print(f"⚠️ Media upload to Meta failed: {upload_err}")
 
-    # Step 3: Fallback to link payload only if server-side upload could not be performed
-    payload = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": to_number,
-        "type": "image",
-        "image": {
-            "link": image_url,
-            "caption": caption[:1024] if caption else ""
-        }
-    }
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            res = await client.post(messages_url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}", "Content-Type": "application/json"}, json=payload)
-            print(f"Meta Image Link Send Status {res.status_code}: {res.text}")
-    except Exception as e:
-        print(f"⚠️ Error sending WhatsApp image fallback: {e}")
+    # Step 3: If image bytes could not be downloaded server-side, abort sending media to prevent Meta 131053 error
+    print(f"⚠️ Image could not be fetched server-side from {image_url}. Aborting image delivery to protect WhatsApp delivery status.")
+    return
 
 REJECT_MICROGRAPH_REGEX = re.compile(
     r'(?i)(micrograph|photomicrograph|histolog|histopatholog|biopsy|'
@@ -926,17 +912,17 @@ VERIFIED_MEDICAL_ATLAS = [
     (
         ["falciparum", "plasmodium falciparum", "p falciparum", "blackwater fever"],
         ("Plasmodium falciparum Life Cycle & Erythrocytic Schizogony",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/CDC_Malaria_LifeCycle.png/1920px-CDC_Malaria_LifeCycle.png")
+         "https://upload.wikimedia.org/wikipedia/commons/9/9a/Life_Cycle_of_the_Malaria_Parasite.jpg")
     ),
     (
         ["vivax", "plasmodium vivax", "ovale", "plasmodium ovale", "relapse malaria"],
         ("Plasmodium vivax and ovale Hepatic Hypnozoite Dormancy Cycle",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/CDC_Malaria_LifeCycle.png/1920px-CDC_Malaria_LifeCycle.png")
+         "https://upload.wikimedia.org/wikipedia/commons/9/9a/Life_Cycle_of_the_Malaria_Parasite.jpg")
     ),
     (
         ["malaria", "plasmodium", "sporogony", "schizogony", "sporozoite", "merozoite", "malaria trophozoite", "hypnozoite", "gametocyte", "ring form"],
         ("Malaria Plasmodium Life Cycle (Hepatic & Erythrocytic Schizogony, Mosquito Sporogony)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/CDC_Malaria_LifeCycle.png/1920px-CDC_Malaria_LifeCycle.png")
+         "https://upload.wikimedia.org/wikipedia/commons/9/9a/Life_Cycle_of_the_Malaria_Parasite.jpg")
     ),
     (
         ["schistosoma", "schistosomiasis", "bilharzia", "miracidia", "cercariae", "snail host", "biomphalaria", "bulinus", "haematobium", "mansoni", "japonicum"],
