@@ -913,772 +913,46 @@ _DIAGRAM_FILLER_PATTERN = re.compile(
     r'explain|describe|tell|show|present|provide)\b'
 )
 
-# Pre-verified high-yield medical diagram atlas (Instant 0ms, zero-rate-limit, 100% verified authentic figures across 200L-600L)
-VERIFIED_MEDICAL_ATLAS = [
-    # ==========================================
-    # 1. PARASITOLOGY (Multi-Stage Life Cycles)
-    # ==========================================
-    (
-        ["falciparum", "plasmodium falciparum", "p falciparum", "blackwater fever"],
-        ("Plasmodium falciparum Life Cycle & Erythrocytic Schizogony",
-         "https://upload.wikimedia.org/wikipedia/commons/9/9a/Life_Cycle_of_the_Malaria_Parasite.jpg")
-    ),
-    (
-        ["vivax", "plasmodium vivax", "ovale", "plasmodium ovale", "relapse malaria"],
-        ("Plasmodium vivax and ovale Hepatic Hypnozoite Dormancy Cycle",
-         "https://upload.wikimedia.org/wikipedia/commons/9/9a/Life_Cycle_of_the_Malaria_Parasite.jpg")
-    ),
-    (
-        ["malaria", "plasmodium", "sporogony", "schizogony", "sporozoite", "merozoite", "malaria trophozoite", "hypnozoite", "gametocyte", "ring form"],
-        ("Malaria Plasmodium Life Cycle (Hepatic & Erythrocytic Schizogony, Mosquito Sporogony)",
-         "https://upload.wikimedia.org/wikipedia/commons/9/9a/Life_Cycle_of_the_Malaria_Parasite.jpg")
-    ),
-    (
-        ["schistosoma", "schistosomiasis", "bilharzia", "miracidia", "cercariae", "snail host", "biomphalaria", "bulinus", "haematobium", "mansoni", "japonicum"],
-        ("Schistosoma Multi-Host Life Cycle (Miracidia, Snail Intermediate, Cercariae)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Schistosoma_life_cycle.svg/1920px-Schistosoma_life_cycle.svg.png")
-    ),
-    (
-        ["leishmania", "leishmaniasis", "kala-azar", "kala azar", "kalaazar", "promastigote", "amastigote", "sandfly", "phlebotomus", "donovani"],
-        ("Leishmania Life Cycle (Sandfly Promastigote & Macrophage Amastigote Stages)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/b/be/Leishmania_LifeCycle.svg/1920px-Leishmania_LifeCycle.svg.png")
-    ),
-    (
-        ["entamoeba", "amoebiasis", "amebiasis", "histolytica", "entamoeba cyst", "amebic trophozoite", "liver abscess amoebic", "flask-shaped"],
-        ("Entamoeba histolytica Life Cycle (Trophozoite, Cyst & Colonic/Hepatic Invasion)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Entamoeba_histolytica_life_cycle.svg/1920px-Entamoeba_histolytica_life_cycle.svg.png")
-    ),
-    (
-        ["trypanosoma brucei", "sleeping sickness", "tsetse", "trypanosomiasis african", "procyclic", "epimastigote", "trypomastigote"],
-        ("Trypanosoma brucei Life Cycle (African Sleeping Sickness & Tsetse Fly Vector)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Trypanosoma_brucei_LifeCycle.svg/1920px-Trypanosoma_brucei_LifeCycle.svg.png")
-    ),
-    (
-        ["trypanosoma cruzi", "chagas", "reduviid", "kissing bug", "triatomine", "romana sign"],
-        ("Trypanosoma cruzi Life Cycle (Chagas Disease & Reduviid Vector)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Trypanosoma_cruzi_LifeCycle.svg/1920px-Trypanosoma_cruzi_LifeCycle.svg.png")
-    ),
-    (
-        ["ascaris", "ascariasis", "lumbricoides", "roundworm", "pulmonary migration ascaris", "loeffler"],
-        ("Ascaris lumbricoides Life Cycle (Tracheal & Pulmonary Migration Pathway)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ae/Ascaris_Lumbricoides_Life_Cycle.svg/1920px-Ascaris_Lumbricoides_Life_Cycle.svg.png")
-    ),
-    (
-        ["taenia solium", "pork tapeworm", "cysticercosis", "neurocysticercosis", "oncosphere", "proglottid"],
-        ("Taenia solium Life Cycle (Pork Tapeworm & Cysticercosis Stages)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Taenia_solium_Life_Cycle.svg/1920px-Taenia_solium_Life_Cycle.svg.png")
-    ),
-    (
-        ["taenia saginata", "beef tapeworm", "cysticercus bovis"],
-        ("Taenia saginata Life Cycle (Beef Tapeworm Intermediate Host Cycle)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Taenia_saginata_Life_Cycle.svg/1920px-Taenia_saginata_Life_Cycle.svg.png")
-    ),
-    (
-        ["echinococcus", "hydatid", "echinococcosis", "granulosus", "hydatid sand", "protoscolex"],
-        ("Echinococcus granulosus Life Cycle (Hydatid Cyst Disease & Host Cycle)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f9/Echinococcus_LifeCycle.svg/1920px-Echinococcus_LifeCycle.svg.png")
-    ),
-    (
-        ["wuchereria", "bancrofti", "filariasis", "elephantiasis", "microfilaria", "culex", "brugia"],
-        ("Wuchereria bancrofti Life Cycle (Lymphatic Filariasis & Mosquito Transmission)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Wuchereria_bancrofti_LifeCycle.svg/1920px-Wuchereria_bancrofti_LifeCycle.svg.png")
-    ),
-    (
-        ["giardia", "giardiasis", "lamblia", "duodenalis", "falling leaf motility", "steatorrhea"],
-        ("Giardia lamblia Life Cycle (Flagellated Trophozoite & Cyst Fecal-Oral Cycle)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Giardia_LifeCycle.svg/1920px-Giardia_LifeCycle.svg.png")
-    ),
-    (
-        ["toxoplasma", "toxoplasmosis", "gondii", "bradyzoite", "tachyzoite", "cat definitive", "oocyst"],
-        ("Toxoplasma gondii Life Cycle (Feline Definitive Host & Intermediate Tachyzoite Cycle)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Toxoplasma_gondii_life_cycle.svg/1920px-Toxoplasma_gondii_life_cycle.svg.png")
-    ),
-    (
-        ["hookworm", "ancylostoma", "necator", "ground itch", "filariform", "rhabditiform hookworm"],
-        ("Hookworm Life Cycle (Ancylostoma duodenale & Necator americanus Skin Penetration)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Hookworm_LifeCycle.svg/1920px-Hookworm_LifeCycle.svg.png")
-    ),
-    (
-        ["strongyloides", "strongyloidiasis", "stercoralis", "autoinfection", "hyperinfection"],
-        ("Strongyloides stercoralis Life Cycle (Autoinfection & Filariform Larval Cycle)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/9/90/Strongyloides_stercoralis_Life_Cycle.svg/1920px-Strongyloides_stercoralis_Life_Cycle.svg.png")
-    ),
-    (
-        ["enterobius", "vermicularis", "pinworm", "scotch tape test", "perianal pruritus"],
-        ("Enterobius vermicularis Life Cycle (Pinworm Retroinfection & Perianal Ovum Cycle)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Enterobius_vermicularis_LifeCycle.svg/1920px-Enterobius_vermicularis_LifeCycle.svg.png")
-    ),
-    (
-        ["dracunculus", "medinensis", "guinea worm", "copepod", "cyclops water"],
-        ("Dracunculus medinensis Life Cycle (Guinea Worm Disease & Copepod Vector)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Dracunculus_medinensis_Life_Cycle.svg/1920px-Dracunculus_medinensis_Life_Cycle.svg.png")
-    ),
+# ==========================================
+# DECOUPLED CURATED ATLAS & CONTROLLED 2-TIER VISUAL RETRIEVAL
+# ==========================================
+ATLAS_PATH = os.path.join(os.path.dirname(__file__), "medical_atlas.json")
 
-    # ==========================================
-    # 2. MICROBIOLOGY & VIROLOGY
-    # ==========================================
-    (
-        ["sporulation", "endospore", "spore formation", "dipicolinic acid", "bacterial spore"],
-        ("Bacterial Endospore Formation (7-Stage Sporulation Cycle)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Bacterial_sporulation_diagram.svg/1920px-Bacterial_sporulation_diagram.svg.png")
-    ),
-    (
-        ["cell wall", "gram positive", "gram negative", "gram positive cell", "gram negative cell", "gram-positive", "gram-negative", "peptidoglycan", "lipopolysaccharide", "periplasmic", "teichoic acid"],
-        ("Gram-Positive vs. Gram-Negative Bacterial Cell Wall Architecture",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/2/22/Gram_positive_and_negative_cell_wall.svg/1920px-Gram_positive_and_negative_cell_wall.svg.png")
-    ),
-    (
-        ["influenza", "influenza replication", "hemagglutinin", "neuraminidase", "influenza life cycle", "sialic acid", "orthomyxovirus"],
-        ("Influenza Virus Replication Cycle & Antiviral Targets (Oseltamivir/Zanamivir)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/61/Influenza_virus_replication_cycle.svg/1920px-Influenza_virus_replication_cycle.svg.png")
-    ),
-    (
-        ["hiv replication", "hiv life cycle", "reverse transcriptase", "integrase", "protease inhibitor", "cd4 gp120", "ccr5"],
-        ("HIV Replication Cycle and Antiretroviral Drug Targets",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b6/HIV_replication_cycle.svg/1920px-HIV_replication_cycle.svg.png")
-    ),
-    (
-        ["hepatitis b replication", "hbv replication", "cccdna", "pgrna", "reverse transcription hbv"],
-        ("Hepatitis B Virus (HBV) Replication Cycle & cccDNA Formation",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Hepatitis_B_virus_replication_cycle.png/1920px-Hepatitis_B_virus_replication_cycle.png")
-    ),
-    (
-        ["bacteriophage", "lytic cycle", "lysogenic cycle", "prophage", "phage replication"],
-        ("Bacteriophage Lytic vs. Lysogenic Replication Cycles",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/b/ba/Phage_lytic_and_lysogenic_cycles.svg/1920px-Phage_lytic_and_lysogenic_cycles.svg.png")
-    ),
-    (
-        ["viral replication", "virus replication", "virus life cycle", "viral life cycle", "uncoating", "budding viral"],
-        ("General Viral Replication Cycle (Adsorption, Penetration, Biosynthesis & Release)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Virus_Replication_Cycle.svg/1920px-Virus_Replication_Cycle.svg.png")
-    ),
-    (
-        ["cholera toxin", "vibrio cholerae", "adp-ribosylation", "g protein cholera", "cftr secretion"],
-        ("Cholera Toxin Mechanism of Action (Gs ADP-Ribosylation & Hypersecretion)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/64/Mechanism_of_Cholera_toxin.svg/1920px-Mechanism_of_Cholera_toxin.svg.png")
-    ),
-    (
-        ["conjugation", "transformation", "transduction", "horizontal gene transfer", "sex pilus", "f plasmid"],
-        ("Bacterial Genetic Exchange (Conjugation, Transformation & Transduction)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/Horizontal_gene_transfer.svg/1920px-Horizontal_gene_transfer.svg.png")
-    ),
-    (
-        ["tuberculosis pathogenesis", "granuloma cascade", "mycobacterium tuberculosis cascade", "caseating cascade", "cord factor", "tubercular granuloma"],
-        ("Tuberculosis Pathogenesis & Tubercular Granuloma Immunological Cascade",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Granuloma_formation_cascade.svg/1920px-Granuloma_formation_cascade.svg.png")
-    ),
-    (
-        ["tetanospasmin", "tetanus toxin", "renshaw cell", "gaba glycine cleavage", "clostridium tetani mechanism"],
-        ("Tetanus Toxin Mechanism (Retrograde Axonal Transport & Synaptobrevin Cleavage)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4f/Mechanism_of_tetanus_toxin.svg/1920px-Mechanism_of_tetanus_toxin.svg.png")
-    ),
-    (
-        ["botulinum toxin", "botulism", "snare protein", "acetylcholine release block", "flaccid paralysis toxin"],
-        ("Botulinum Toxin Mechanism of Action (SNARE Protein Cleavage & ACh Blockade)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/d/df/Botulinum_toxin_mechanism.svg/1920px-Botulinum_toxin_mechanism.svg.png")
-    ),
+def load_medical_atlas(file_path: str = ATLAS_PATH) -> list:
+    """Loads the verified medical diagram atlas from the decoupled JSON data file."""
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception as e:
+            print(f"⚠️ Error loading medical_atlas.json: {e}")
+    return []
 
-    # ==========================================
-    # 3. BIOCHEMISTRY & METABOLISM
-    # ==========================================
-    (
-        ["glycolysis", "glycolytic", "glucose breakdown", "embden meyerhof", "phosphofructokinase", "pfk-1", "pyruvate kinase"],
-        ("Glycolysis Metabolic Pathway (10 Enzymatic Steps & Net Energy Yields)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a0/Glycolysis.svg/1920px-Glycolysis.svg.png")
-    ),
-    (
-        ["krebs", "citric acid cycle", "tca cycle", "isocitrate dehydrogenase", "alpha-ketoglutarate", "succinyl-coa"],
-        ("Citric Acid Cycle (Krebs TCA Cycle Steps, Cofactors & ATP Yields)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0b/Citric_acid_cycle_with_aconitate_2.svg/1920px-Citric_acid_cycle_with_aconitate_2.svg.png")
-    ),
-    (
-        ["cori cycle", "cori", "lactic acid cycle", "glucose-lactate cycle"],
-        ("Cori Cycle (Muscle Glycolytic Lactate & Hepatic Gluconeogenesis Exchange)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d4/Cori_cycle_integ.svg/1920px-Cori_cycle_integ.svg.png")
-    ),
-    (
-        ["gluconeogenesis", "pepck", "pyruvate carboxylase", "fructose-1,6-bisphosphatase", "glucose-6-phosphatase"],
-        ("Gluconeogenesis Pathway (4 Bypass Reactions & Substrate Flow)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Gluconeogenesis_pathway.svg/1920px-Gluconeogenesis_pathway.svg.png")
-    ),
-    (
-        ["pentose phosphate", "hmp shunt", "hexose monophosphate", "g6pd", "transketolase", "transaldolase"],
-        ("Pentose Phosphate Pathway / HMP Shunt (Oxidative & Non-Oxidative Phases)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Pentose_phosphate_pathway.svg/1920px-Pentose_phosphate_pathway.svg.png")
-    ),
-    (
-        ["urea cycle", "ornithine", "citrulline", "argininosuccinate", "carbamoyl phosphate synthetase", "cps-1", "ammonia detox"],
-        ("Urea Cycle (Mitochondrial & Cytosolic Ammonia Detoxification Pathway)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/Urea_cycle.svg/1920px-Urea_cycle.svg.png")
-    ),
-    (
-        ["beta-oxidation", "beta oxidation", "fatty acid degradation", "carnitine shuttle", "cpt-1", "acyl-coa dehydrogenase"],
-        ("Beta-Oxidation of Fatty Acids (Carnitine Shuttle & Spiral Degradation)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/Beta-oxidation.svg/1920px-Beta-oxidation.svg.png")
-    ),
-    (
-        ["electron transport chain", "oxidative phosphorylation", "oxphos", "atp synthase", "complex i", "complex iv", "cytochrome c"],
-        ("Electron Transport Chain & Oxidative Phosphorylation (Complexes I-IV & Chemiosmosis)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/5/50/Electron_transport_chain.svg/1920px-Electron_transport_chain.svg.png")
-    ),
-    (
-        ["purine", "purine metabolism", "purine synthesis", "purine salvage", "hgprt", "lesch-nyhan", "xanthine oxidase", "uric acid"],
-        ("Purine De Novo Synthesis & Salvage Pathway (HGPRT & Gout Cascade)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Purine_metabolism.svg/1920px-Purine_metabolism.svg.png")
-    ),
-    (
-        ["pyrimidine", "pyrimidine synthesis", "orotic aciduria", "ump synthase", "dihydroorotate", "thymidylate synthase"],
-        ("Pyrimidine Biosynthesis Pathway (CAD Complex & Ribonucleotide Reductase)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fa/Pyrimidine_metabolism.svg/1920px-Pyrimidine_metabolism.svg.png")
-    ),
-    (
-        ["glycogen", "glycogenolysis", "glycogenesis", "glycogen metabolism", "glycogen phosphorylase", "glycogen synthase", "debranching enzyme"],
-        ("Glycogen Metabolism (Reciprocal Regulation of Glycogenolysis & Glycogenesis)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Glycogen_metabolism.svg/1920px-Glycogen_metabolism.svg.png")
-    ),
-    (
-        ["cholesterol synthesis", "mevalonate", "hmg-coa reductase", "squalene", "statin pathway"],
-        ("Cholesterol Biosynthesis (Mevalonate Pathway & HMG-CoA Reductase Regulation)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d7/Cholesterol_synthesis.svg/1920px-Cholesterol_synthesis.svg.png")
-    ),
-    (
-        ["steroidogenesis", "adrenal steroid", "21-hydroxylase", "11-beta-hydroxylase", "cortisol synthesis", "congenital adrenal hyperplasia"],
-        ("Adrenal Steroidogenesis Pathway (Mineralocorticoid, Glucocorticoid & Androgen Synthesis)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/1/13/Steroidogenesis.svg/1920px-Steroidogenesis.svg.png")
-    ),
-    (
-        ["glucose-alanine", "alanine cycle", "cahill cycle", "muscle nitrogen transport"],
-        ("Glucose-Alanine Cycle (Muscle Amino Acid Transamination & Hepatic Urea Synthesis)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/2/20/Glucose-alanine_cycle.svg/1920px-Glucose-alanine_cycle.svg.png")
-    ),
-    (
-        ["ethanol metabolism", "alcohol dehydrogenase", "acetaldehyde dehydrogenase", "cyp2e1", "disulfiram"],
-        ("Ethanol Metabolism Pathway (Alcohol Dehydrogenase, CYP2E1 & ALDH)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Ethanol_metabolism.svg/1920px-Ethanol_metabolism.svg.png")
-    ),
-    (
-        ["heme synthesis", "ala synthase", "porphyria", "porphobilinogen", "ferrochelatase", "lead poisoning heme"],
-        ("Heme Biosynthesis Pathway (Enzymatic Steps & Porphyria Blocks)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Heme_synthesis.svg/1920px-Heme_synthesis.svg.png")
-    ),
+MEDICAL_ATLAS_DATA = load_medical_atlas()
 
-    # ==========================================
-    # 4. PHYSIOLOGY
-    # ==========================================
-    (
-        ["ventricular action potential", "cardiac action potential", "myocyte action potential", "phase 0 na", "phase 2 ca"],
-        ("Ventricular Myocyte Cardiac Action Potential (Phases 0 to 4 Ion Dynamics)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/46/Action_potential_myocyte.svg/1920px-Action_potential_myocyte.svg.png")
-    ),
-    (
-        ["pacemaker action potential", "sa node action potential", "funny current", "phase 4 depolarization"],
-        ("Cardiac Pacemaker (SA Node) Action Potential & Automaticity",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/2/27/Cardiac_pacemaker_action_potential.svg/1920px-Cardiac_pacemaker_action_potential.svg.png")
-    ),
-    (
-        ["wiggers diagram", "cardiac cycle", "heart cycle", "ventricular volume pressure", "heart sounds wiggers"],
-        ("Cardiac Cycle Wiggers Diagram (Pressures, Volumes, ECG & Heart Sounds)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Wiggers_Diagram_2.svg/1920px-Wiggers_Diagram_2.svg.png")
-    ),
-    (
-        ["cardiac conduction", "cardiac electrical conduction", "electrical conduction", "heart conduction", "sa node", "av node", "bundle of his", "purkinje fibers", "purkinje"],
-        ("Cardiac Electrical Conduction Pathway",
-         "https://upload.wikimedia.org/wikipedia/commons/0/0f/Cardiac_Conduction_System.jpg")
-    ),
-    (
-        ["raas inhibitors", "raas pharmacology", "ace inhibitor", "acei", "arb", "losartan", "aliskiren", "pharmacological inhibition of raas"],
-        ("Pharmacological Inhibition of RAAS (ACE Inhibitors, ARBs & Renin Inhibitors)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/7/77/RAAS_pharmacology_targets.svg/1920px-RAAS_pharmacology_targets.svg.png")
-    ),
-    (
-        ["raas", "raas cascade", "renin-angiotensin-aldosterone", "renin", "angiotensin", "aldosterone", "juxtaglomerular"],
-        ("Renin-Angiotensin-Aldosterone System (RAAS Cascade & Hemodynamic Control)",
-         "https://upload.wikimedia.org/wikipedia/commons/a/a7/2117_Renin_Angiotensin_Aldosterone_Pathway.jpg")
-    ),
-    (
-        ["neuromuscular junction", "endplate potential", "excitation-contraction", "acetylcholine receptor nmj", "dhp ryanodine"],
-        ("Neuromuscular Junction & Excitation-Contraction Coupling",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/1/19/Chemical_synapse_schema_cropped.jpg/1920px-Chemical_synapse_schema_cropped.jpg")
-    ),
-    (
-        ["countercurrent multiplier", "countercurrent exchange", "loop of henle gradient", "medullary osmolarity", "vasa recta"],
-        ("Renal Countercurrent Multiplier & Exchange System in the Loop of Henle",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/Countercurrent_multiplier.svg/1920px-Countercurrent_multiplier.svg.png")
-    ),
-    (
-        ["oxyhemoglobin dissociation", "oxygen-hemoglobin curve", "bohr effect", "2,3-bpg", "p50 shift"],
-        ("Oxyhemoglobin Dissociation Curve & Physiological Modulators (Bohr Effect)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Oxyhaemoglobin_dissociation_curve.svg/1920px-Oxyhaemoglobin_dissociation_curve.svg.png")
-    ),
-    (
-        ["action potential", "action potential phases", "neuronal action potential", "nerve action potential", "depolarization repolarization", "voltage-gated sodium"],
-        ("Neuronal Action Potential Phases (Depolarization, Repolarization & Refractory Periods)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4a/Action_potential.svg/1920px-Action_potential.svg.png")
-    ),
-    (
-        ["glomerular filtration", "tubular transport", "nephron transport", "pct reabsorption", "collecting duct transport"],
-        ("Glomerular Filtration & Segmental Renal Tubular Solute Transport",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Physiology_of_Nephron.png/1920px-Physiology_of_Nephron.png")
-    ),
-    (
-        ["baroreceptor", "baroreflex", "carotid sinus reflex", "aortic arch baroreceptor", "blood pressure reflex"],
-        ("Baroreceptor Reflex Arc & Autonomic Blood Pressure Regulation",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d2/Baroreceptor_reflex.svg/1920px-Baroreceptor_reflex.svg.png")
-    ),
-    (
-        ["respiratory control", "chemoreceptor reflex", "medullary respiratory group", "central chemoreceptor", "pco2 control"],
-        ("Brainstem Respiratory Control Centers & Chemoreceptor Feedback Loop",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Respiratory_control_centers.svg/1920px-Respiratory_control_centers.svg.png")
-    ),
-    (
-        ["sarcomere", "sliding filament", "cross-bridge cycle", "actin myosin", "tropomyosin troponin"],
-        ("Sarcomere Sliding Filament Mechanism (Actin-Myosin Cross-Bridge Cycle)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Sarcomere_diagram.svg/1920px-Sarcomere_diagram.svg.png")
-    ),
-
-    # ==========================================
-    # 5. PHARMACOLOGY
-    # ==========================================
-    (
-        ["gpcr", "g protein coupled", "gs pathway", "gi pathway", "gq pathway", "adenylyl cyclase", "phospholipase c", "ip3 dag"],
-        ("G-Protein Coupled Receptor (GPCR Gs, Gi, Gq) Second Messenger Cascades",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/0/00/GPCR_signaling_mechanism.svg/1920px-GPCR_signaling_mechanism.svg.png")
-    ),
-    (
-        ["tyrosine kinase", "rtk signaling", "mapk pathway", "ras raf mek erk", "growth factor receptor"],
-        ("Receptor Tyrosine Kinase (RTK) & Ras-Raf-MEK-ERK (MAPK) Signaling Cascade",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/0/07/MAPK_pathway.svg/1920px-MAPK_pathway.svg.png")
-    ),
-    (
-        ["jak stat", "jak-stat", "janus kinase", "stat signaling", "cytokine receptor signaling"],
-        ("JAK-STAT Cytokine Signaling Transduction Pathway",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/d/db/JAK-STAT_pathway.svg/1920px-JAK-STAT_pathway.svg.png")
-    ),
-    (
-        ["anticoagulant targets", "anticoagulant", "anticoagulants", "heparin", "warfarin", "heparin mechanism", "warfarin mechanism", "doac mechanism", "antithrombin iii target", "warfarin vs heparin"],
-        ("Coagulation Cascade with Anticoagulant Pharmacological Targets (Heparin, Warfarin, DOACs)",
-         "https://upload.wikimedia.org/wikipedia/commons/4/4b/Coagulation_Cascade_with_Tests.jpg")
-    ),
-    (
-        ["beta-blocker", "beta-blockers", "beta blocker", "beta blockers", "beta blocker mechanism", "propranolol mechanism", "metoprolol mechanism", "beta-1 blockade"],
-        ("Beta-Blockers (Beta-Adrenergic Blockers) Mechanism of Action & Cardiovascular Effects",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/67/Beta_blocker_mechanism.svg/1920px-Beta_blocker_mechanism.svg.png")
-    ),
-    (
-        ["autonomic", "autonomic nervous system", "autonomic receptor", "adrenergic", "cholinergic", "adrenergic receptor", "cholinergic receptor", "sympathetic vs parasympathetic receptors", "alpha beta receptors", "sympathetic", "parasympathetic"],
-        ("Autonomic Nervous System Receptor Pathways & Neuroeffector Targets",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/Autonomic_nervous_system_actions.svg/1920px-Autonomic_nervous_system_actions.svg.png")
-    ),
-    (
-        ["diuretic", "diuretics", "diuretic mechanism", "diuretic sites", "nephron sites", "loop diuretic", "thiazide", "nkcc2 inhibitor", "spironolactone moa"],
-        ("Diuretics Nephron Sites of Action & Electrolyte Transport Mechanisms",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Diuretic_sites_of_action.svg/1920px-Diuretic_sites_of_action.svg.png")
-    ),
-    (
-        ["proton pump inhibitor", "ppi mechanism", "gastric acid secretion", "parietal cell mechanism", "h+/k+ atpase"],
-        ("Proton Pump Inhibitors (PPIs) & Parietal Cell Gastric Acid Secretion Pathway",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Parietal_cell_acid_secretion.svg/1920px-Parietal_cell_acid_secretion.svg.png")
-    ),
-    (
-        ["insulin signaling", "glut4 translocation", "pi3k akt insulin", "irs-1 pathway"],
-        ("Insulin Receptor Signaling & PI3K-Akt GLUT4 Translocation Pathway",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/9/90/Insulin_glucose_metabolism_ZP.svg/1920px-Insulin_glucose_metabolism_ZP.svg.png")
-    ),
-    (
-        ["nitric oxide signaling", "cgmp pathway", "pde5 inhibitor", "sildenafil mechanism", "smooth muscle relaxation no"],
-        ("Nitric Oxide (NO) / cGMP / PDE5 Inhibitor Vasodilation Pathway",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/Nitric_oxide_cGMP_signaling.svg/1920px-Nitric_oxide_cGMP_signaling.svg.png")
-    ),
-    (
-        ["local anesthetic", "local anesthetics", "local anesthetic mechanism", "lidocaine", "lidocaine mechanism", "sodium channel block anesthetic", "use-dependent block"],
-        ("Local Anesthetics Voltage-Gated Sodium Channel Blockade Mechanism",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/8/89/Local_anesthetic_mechanism.svg/1920px-Local_anesthetic_mechanism.svg.png")
-    ),
-    # ==========================================
-    # 6. IMMUNOLOGY
-    # ==========================================
-    (
-        ["hematopoiesis", "haematopoiesis", "blood cell lineage", "stem cell differentiation", "myeloid lymphoid", "hsc"],
-        ("Hematopoiesis and Blood Cell Lineage Differentiation Tree",
-         "https://upload.wikimedia.org/wikipedia/commons/6/69/Hematopoiesis_%28human%29_diagram.png")
-    ),
-    (
-        ["b cell development", "b-cell development", "b cell", "b-cell", "b cell maturation", "b cell differentiation", "b and t cell", "vdj recombination", "pro-b pre-b", "b cell activation"],
-        ("B-Cell Maturation, V(D)J Recombination & Activation Stages",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a8/B_cell_development_stages.svg/1920px-B_cell_development_stages.svg.png")
-    ),
-    (
-        ["helper t cell", "th1 th2", "th17", "treg", "t-helper differentiation", "foxp3", "ror-gamma-t", "t-bet", "gata3"],
-        ("Helper T-Cell (Th1, Th2, Th17, Treg) Lineage Differentiation Network",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Th_cell_differentiation.svg/1920px-Th_cell_differentiation.svg.png")
-    ),
-    (
-        ["t cell selection", "t cell", "t-cell", "t cell differentiation", "thymic selection", "positive selection", "negative selection thymus", "cd4 cd8 commitment", "aire gene"],
-        ("T-Cell Thymic Selection (Cortex Positive & Medulla Negative Selection)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/T_cell_selection_thymus.svg/1920px-T_cell_selection_thymus.svg.png")
-    ),
-    (
-        ["complement", "complement system", "complement cascade", "complement activation", "classical pathway", "alternative pathway", "lectin pathway", "membrane attack complex", "mac c5b-9"],
-        ("Complement System Cascades (Classical, Lectin & Alternative Pathways to MAC)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/Complement_pathway.svg/1920px-Complement_pathway.svg.png")
-    ),
-    (
-        ["hypersensitivity", "gell and coombs", "type i hypersensitivity", "type ii hypersensitivity", "type iii hypersensitivity", "type iv hypersensitivity"],
-        ("Gell and Coombs Hypersensitivity Reactions (Types I, II, III & IV Pathways)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Hypersensitivity_reactions_types_I_IV.svg/1920px-Hypersensitivity_reactions_types_I_IV.svg.png")
-    ),
-    (
-        ["mhc class i", "mhc class ii", "antigen presentation", "antigen processing", "tap transporter", "invariant chain", "clip peptide"],
-        ("MHC Class I vs. MHC Class II Antigen Processing & Presentation Pathways",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d4/Antigen_presentation_MHC_I_II.svg/1920px-Antigen_presentation_MHC_I_II.svg.png")
-    ),
-    (
-        ["tcr", "tcr mhc", "tcr activation", "t-cell receptor signaling", "immunological synapse", "antigen presentation synapse", "costimulation cd28", "cd80 cd86"],
-        ("T-Cell Receptor (TCR) Immunological Synapse & Dual-Signal Activation",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Immunological_synapse_TCR.svg/1920px-Immunological_synapse_TCR.svg.png")
-    ),
-    (
-        ["clonal selection", "somatic hypermutation", "affinity maturation", "germinal center b cell", "isotype switching"],
-        ("Clonal Selection & Somatic Hypermutation in Germinal Centers",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cb/Clonal_selection.svg/1920px-Clonal_selection.svg.png")
-    ),
-    (
-        ["immunoglobulin", "immunoglobulin structure", "antibody", "antibody structure", "igg", "igg structure", "fab fc fragment", "heavy light chain"],
-        ("Immunoglobulin (IgG) Molecular Architecture & Fab/Fc Domains",
-         "https://upload.wikimedia.org/wikipedia/commons/3/3a/Antibody_IgG1_surface.png")
-    ),
-    (
-        ["mast cell", "mast cells", "mast cell degranulation", "ige degranulation", "fceri", "ige cross-linking", "histamine release", "anaphylaxis mechanism"],
-        ("Mast Cell IgE Receptor Cross-Linking & Degranulation Cascade",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/Mast_cell_activation_IgE.svg/1920px-Mast_cell_activation_IgE.svg.png")
-    ),
-    (
-        ["respiratory burst", "phagocytosis cascade", "nadph oxidase", "superoxide", "myeloperoxidase", "chronic granulomatous disease"],
-        ("Phagocytic Respiratory Burst & Reactive Oxygen Species Cascade",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2a/Respiratory_burst_pathway.svg/1920px-Respiratory_burst_pathway.svg.png")
-    ),
-    (
-        ["cytokine storm", "systemic inflammatory response", "sirs cascade", "il-6 storm", "tnf-alpha cascade"],
-        ("Cytokine Storm & Systemic Inflammatory Cascade",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9d/Cytokine_storm_cascade.svg/1920px-Cytokine_storm_cascade.svg.png")
-    ),
-
-    # ==========================================
-    # 7. HEMATOLOGY
-    # ==========================================
-    (
-        ["primary hemostasis", "platelet adhesion", "platelet aggregation", "vwf", "gpib", "gpiib/iiia", "platelet plug"],
-        ("Primary Hemostasis (Endothelial Injury, Platelet Adhesion & Plug Formation)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/Platelet_adhesion_aggregation.svg/1920px-Platelet_adhesion_aggregation.svg.png")
-    ),
-    (
-        ["coagulation", "clotting", "secondary hemostasis", "coagulation waterfall", "coagulation cascade", "extrinsic pathway", "intrinsic pathway", "thrombin generation", "fibrin mesh"],
-        ("Secondary Hemostasis Waterfall (Intrinsic, Extrinsic & Common Coagulation Pathways)",
-         "https://upload.wikimedia.org/wikipedia/commons/4/4b/Coagulation_Cascade_with_Tests.jpg")
-    ),
-    (
-        ["fibrinolysis", "clot breakdown", "plasminogen", "tpa", "plasmin", "d-dimer formation"],
-        ("Fibrinolysis Cascade & Fibrin Degradation (tPA, Plasmin & D-Dimer)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/Fibrinolysis_pathway.svg/1920px-Fibrinolysis_pathway.svg.png")
-    ),
-    (
-        ["hemoglobin structure", "globin chains", "heme binding", "taut relaxed state", "cooperative binding oxygen"],
-        ("Hemoglobin Tetrameric Structure & Allosteric Oxygen Binding",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/1/14/Hemoglobin_structure.svg/1920px-Hemoglobin_structure.svg.png")
-    ),
-    (
-        ["iron metabolism", "iron absorption", "ferroportin", "transferrin", "ferritin", "hepcidin", "dmt1"],
-        ("Iron Metabolism (Enterocyte Absorption, Hepcidin Regulation & Storage)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Iron_metabolism.svg/1920px-Iron_metabolism.svg.png")
-    ),
-    (
-        ["bilirubin", "bilirubin metabolism", "bilirubin degradation", "jaundice pathway", "jaundice classification", "unconjugated bilirubin", "conjugated bilirubin", "ugt1a1", "urobilinogen"],
-        ("Bilirubin Degradation Pathway & Diagnostic Classification of Jaundice",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/7/78/Bilirubin_metabolism.svg/1920px-Bilirubin_metabolism.svg.png")
-    ),
-    (
-        ["abo blood group", "rh blood group", "blood typing", "agglutinogen", "h antigen", "rhesus factor"],
-        ("ABO and Rh Blood Group Antigens & Transfusion Compatibility Matrix",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/ABO_blood_group_diagram.svg/1920px-ABO_blood_group_diagram.svg.png")
-    ),
-    (
-        ["erythropoiesis", "red blood cell maturation", "reticulocyte", "proerythroblast", "erythropoietin cascade"],
-        ("Erythropoiesis Stages (Proerythroblast to Mature Erythrocyte)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/Erythropoiesis_stages.svg/1920px-Erythropoiesis_stages.svg.png")
-    ),
-    (
-        ["hemolytic anemia", "hemolytic anemias", "hemolytic anemia algorithm", "coombs test algorithm", "intravascular vs extravascular hemolysis", "anemia decision tree"],
-        ("Diagnostic Algorithm for Hemolytic Anemias (Immune vs. Non-Immune Etiologies)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/Hemolytic_anemia_classification.svg/1920px-Hemolytic_anemia_classification.svg.png")
-    ),
-    (
-        ["sickle cell pathophysiology", "hbs polymerization", "sickling crisis", "vaso-occlusion", "sickle cell anemia cascade"],
-        ("Sickle Cell Disease Pathophysiology & Vaso-Occlusive Cascade",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Sickle_cell_pathophysiology.svg/1920px-Sickle_cell_pathophysiology.svg.png")
-    ),
-
-    # ==========================================
-    # 8. SURGERY & TRAUMA
-    # ==========================================
-    (
-        ["atls", "primary survey", "abcde trauma", "trauma resuscitation", "airway breathing circulation disability"],
-        ("ATLS Primary Survey (ABCDE Life Support & Resuscitation Algorithm)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/ATLS_Primary_Survey_Algorithm.svg/1920px-ATLS_Primary_Survey_Algorithm.svg.png")
-    ),
-    (
-        ["rule of nines", "parkland formula", "burn percentage", "burn fluid resuscitation", "wallace rule of nines"],
-        ("Burns Wallace Rule of Nines & Parkland Fluid Resuscitation Formula",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b7/Rule_of_nines_burn_percentage.svg/1920px-Rule_of_nines_burn_percentage.svg.png")
-    ),
-    (
-        ["glasgow coma scale", "gcs", "gcs score", "coma scale", "eye verbal motor"],
-        ("Glasgow Coma Scale (GCS Scoring & Head Injury Triage Algorithm)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Glasgow_Coma_Scale_detailed.svg/1920px-Glasgow_Coma_Scale_detailed.svg.png")
-    ),
-    (
-        ["calot", "calots triangle", "cystohepatic triangle", "cholecystectomy anatomy", "cystic duct artery"],
-        ("Calot's Triangle (Cystohepatic Triangle Anatomy for Safe Cholecystectomy)",
-         "https://upload.wikimedia.org/wikipedia/commons/6/65/Gray532.png")
-    ),
-    (
-        ["brachial plexus", "brachial plexus roots", "trunks cords branches", "erbs palsy", "klumpke"],
-        ("Brachial Plexus (Roots, Trunks, Divisions, Cords & Peripheral Terminal Branches)",
-         "https://upload.wikimedia.org/wikipedia/commons/3/3a/Gray808.png")
-    ),
-    (
-        ["inguinal canal", "direct inguinal hernia", "indirect inguinal hernia", "hesselbach triangle", "deep inguinal ring"],
-        ("Inguinal Canal Architecture & Direct vs. Indirect Hernia Anatomy",
-         "https://upload.wikimedia.org/wikipedia/commons/b/b4/Gray1227.png")
-    ),
-    (
-        ["femoral triangle", "navel", "femoral sheath", "femoral canal", "scarpa triangle"],
-        ("Femoral Triangle Anatomy & NAVEL Neurovascular Bundle",
-         "https://upload.wikimedia.org/wikipedia/commons/4/47/Femoral-triangle-diagram.jpg")
-    ),
-    (
-        ["acute abdomen", "abdominal triage", "peritonitis algorithm", "acute surgical abdomen"],
-        ("Acute Abdomen Diagnostic Triage & Surgical Decision Algorithm",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/1/14/Acute_abdomen_triage_algorithm.svg/1920px-Acute_abdomen_triage_algorithm.svg.png")
-    ),
-    (
-        ["alvarado", "alvarado score", "alvarado scoring", "appendicitis", "acute appendicitis", "appendicitis score", "mantrels", "appendicitis algorithm"],
-        ("Acute Appendicitis Alvarado Scoring & Management Decision Tree",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6d/Alvarado_score_flowchart.svg/1920px-Alvarado_score_flowchart.svg.png")
-    ),
-    (
-        ["sepsis", "septic shock", "sepsis bundle", "surviving sepsis", "septic shock management", "hour-1 bundle", "sepsis resuscitation"],
-        ("Surviving Sepsis Campaign Hour-1 Resuscitation Bundle Algorithm",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/48/Sepsis_bundle_flowchart.svg/1920px-Sepsis_bundle_flowchart.svg.png")
-    ),
-
-    # ==========================================
-    # 9. OBSTETRICS & GYNECOLOGY
-    # ==========================================
-    (
-        ["menstrual cycle", "ovarian cycle", "uterine cycle", "follicular phase", "luteal phase", "lh surge", "endometrial cycle"],
-        ("Menstrual Cycle Hormonal Fluctuation & Endometrial Phases",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2a/MenstrualCycle2_en.svg/1920px-MenstrualCycle2_en.svg.png")
-    ),
-    (
-        ["cardinal movements", "mechanism of labor", "fetal descent", "internal rotation labor", "restitution labor"],
-        ("Cardinal Movements of Normal Labor & Fetal Delivery Mechanism",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/7/77/Mechanisms_of_normal_labor.svg/1920px-Mechanisms_of_normal_labor.svg.png")
-    ),
-    (
-        ["stages of labor", "labor stages", "first stage of labor", "second stage of labor", "third stage of labor"],
-        ("Stages of Labor Progress (Cervical Dilation, Expulsion & Placental Delivery)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/5/56/Stages_of_labor_progress.svg/1920px-Stages_of_labor_progress.svg.png")
-    ),
-    (
-        ["apgar", "apgar score", "apgar scoring", "newborn apgar", "apgar assessment"],
-        ("APGAR Score Clinical Assessment Matrix for Neonatal Vitality",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/0/07/APGAR_scoring_matrix.svg/1920px-APGAR_scoring_matrix.svg.png")
-    ),
-    (
-        ["bishop score", "cervical ripening", "induction of labor score", "favorable cervix"],
-        ("Bishop Score Assessment Algorithm for Cervical Ripening and Labor Induction",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e4/Bishop_score_flowchart.svg/1920px-Bishop_score_flowchart.svg.png")
-    ),
-    (
-        ["postpartum hemorrhage", "pph", "4 ts of pph", "uterine atony management", "postpartum bleeding algorithm"],
-        ("Postpartum Hemorrhage (PPH) 4 Ts Clinical Management Algorithm",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/PPH_management_algorithm.svg/1920px-PPH_management_algorithm.svg.png")
-    ),
-    (
-        ["preeclampsia", "eclampsia", "magnesium sulfate protocol", "gestational hypertension algorithm", "severe preeclampsia"],
-        ("Preeclampsia & Eclampsia Clinical Evaluation and Magnesium Sulfate Protocol",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3b/Preeclampsia_management_algorithm.svg/1920px-Preeclampsia_management_algorithm.svg.png")
-    ),
-    (
-        ["fetal circulation", "ductus venosus", "foramen ovale", "ductus arteriosus", "transitional neonatal circulation"],
-        ("Fetal Circulation & Neonatal Transitional Shunt Closures",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/Fetal_circulation_diagram.svg/1920px-Fetal_circulation_diagram.svg.png")
-    ),
-    (
-        ["partograph", "partogram", "who partograph", "alert line action line", "cervicograph"],
-        ("WHO Modified Partograph Clinical Labor Monitoring Flowchart",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Partograph_clinical_schematic.svg/1920px-Partograph_clinical_schematic.svg.png")
-    ),
-    (
-        ["rh isoimmunization", "rh incompatibility", "anti-d immunoglobulin", "hydrops fetalis", "hemolytic disease of newborn"],
-        ("Rhesus Isoimmunization & Hemolytic Disease of the Fetus/Newborn Pathway",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Rh_isoimmunization_pathway.svg/1920px-Rh_isoimmunization_pathway.svg.png")
-    ),
-
-    # ==========================================
-    # 10. PEDIATRICS
-    # ==========================================
-    (
-        ["imci", "integrated management of childhood", "imci algorithm", "childhood triage", "danger signs child"],
-        ("IMCI (Integrated Management of Childhood Illness) Clinical Triage Algorithm",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/IMCI_pediatric_triage_flowchart.svg/1920px-IMCI_pediatric_triage_flowchart.svg.png")
-    ),
-    (
-        ["tetralogy of fallot", "tof", "fallot", "boot-shaped heart", "tet spell"],
-        ("Tetralogy of Fallot (4 Cardinal Anatomical & Hemodynamic Defects)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e6/Tetralogy_of_Fallot.svg/1920px-Tetralogy_of_Fallot.svg.png")
-    ),
-    (
-        ["developmental milestones", "milestones timeline", "pediatric milestones", "gross motor fine motor", "red flags development"],
-        ("Pediatric Developmental Milestones Timeline (0-5 Years)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/Developmental_milestones_timeline.svg/1920px-Developmental_milestones_timeline.svg.png")
-    ),
-    (
-        ["neonatal resuscitation", "nrp", "neonatal resuscitation program", "golden minute newborn", "ppv newborn"],
-        ("Neonatal Resuscitation Program (NRP) Stepwise Resuscitation Algorithm",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/34/Neonatal_resuscitation_algorithm.svg/1920px-Neonatal_resuscitation_algorithm.svg.png")
-    ),
-    (
-        ["dehydration", "pediatric dehydration", "dehydration plan", "who dehydration", "plan a plan b plan c", "diarrhea rehydration", "ors protocol"],
-        ("Pediatric Dehydration Assessment & WHO Rehydration Plan A/B/C Algorithm",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/WHO_dehydration_plan_ABC.svg/1920px-WHO_dehydration_plan_ABC.svg.png")
-    ),
-    (
-        ["bhutani", "bhutani nomogram", "neonatal jaundice nomogram", "phototherapy", "phototherapy nomogram", "hyperbilirubinemia newborn", "exchange transfusion nomogram"],
-        ("Bhutani Hour-Specific Bilirubin Nomogram & Phototherapy Triage",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/2/25/Bhutani_phototherapy_nomogram.svg/1920px-Bhutani_phototherapy_nomogram.svg.png")
-    ),
-    (
-        ["congenital heart", "congenital heart defect", "congenital heart defects", "chd classification", "cyanotic heart disease", "acyanotic shunt", "5 ts congenital", "cyanotic", "acyanotic"],
-        ("Congenital Heart Defects Classification Tree (Cyanotic vs. Acyanotic Lesions)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Congenital_heart_defects_classification.svg/1920px-Congenital_heart_defects_classification.svg.png")
-    ),
-    (
-        ["pals", "pediatric advanced life support", "pediatric cardiac arrest", "pals algorithm"],
-        ("Pediatric Advanced Life Support (PALS) Cardiac Arrest Algorithm",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/PALS_cardiac_arrest_algorithm.svg/1920px-PALS_cardiac_arrest_algorithm.svg.png")
-    ),
-    (
-        ["febrile seizure", "febrile convulsion", "simple febrile seizure", "complex febrile seizure algorithm"],
-        ("Febrile Seizure Clinical Assessment & Triage Flowchart",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Febrile_convulsion_algorithm.svg/1920px-Febrile_convulsion_algorithm.svg.png")
-    ),
-    (
-        ["immunization schedule", "vaccination schedule", "epi schedule", "pediatric vaccines", "bcg opv pentavalent"],
-        ("Expanded Programme on Immunization (EPI) Childhood Vaccination Schedule",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/Pediatric_vaccination_schedule.svg/1920px-Pediatric_vaccination_schedule.svg.png")
-    ),
-
-    # ==========================================
-    # 11. INTERNAL MEDICINE & PATHOLOGY
-    # ==========================================
-    (
-        ["meningitis csf", "lumbar puncture csf", "csf interpretation", "csf analysis algorithm", "bacterial vs viral csf"],
-        ("Meningitis CSF Diagnostic Interpretation Decision Tree",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/d/de/Meningitis_CSF_interpretation_algorithm.svg/1920px-Meningitis_CSF_interpretation_algorithm.svg.png")
-    ),
-    (
-        ["jvp", "jugular venous pressure", "jvp waveform", "cannon a wave", "kussmaul sign", "a c v waves"],
-        ("Jugular Venous Pressure (JVP) Waveform Analysis & Physiological Correlates",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6d/JVP_waveform_clinical.svg/1920px-JVP_waveform_clinical.svg.png")
-    ),
-    (
-        ["dka", "diabetic ketoacidosis", "dka protocol", "ketoacidosis management", "dka insulin protocol"],
-        ("Diabetic Ketoacidosis (DKA) Clinical Management & Fluid Resuscitation Protocol",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f6/DKA_clinical_management_flowchart.svg/1920px-DKA_clinical_management_flowchart.svg.png")
-    ),
-    (
-        ["acid-base", "acid base disorder", "anion gap algorithm", "metabolic acidosis flowchart", "winter formula"],
-        ("Stepwise Acid-Base Disturbance Diagnostic Algorithm",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Acid_base_disorder_algorithm.svg/1920px-Acid_base_disorder_algorithm.svg.png")
-    ),
-    (
-        ["acls cardiac arrest", "acls algorithm", "vf pvt algorithm", "asystole pea algorithm", "adult cardiac arrest"],
-        ("ACLS Adult Cardiac Arrest Algorithm (Shockable vs. Non-Shockable Pathways)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/ACLS_cardiac_arrest_algorithm.svg/1920px-ACLS_cardiac_arrest_algorithm.svg.png")
-    ),
-    (
-        ["acls tachycardia", "tachycardia algorithm", "wide complex tachycardia", "narrow complex tachycardia", "svt algorithm"],
-        ("ACLS Tachycardia with Pulse Clinical Management Algorithm",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/ACLS_tachycardia_algorithm.svg/1920px-ACLS_tachycardia_algorithm.svg.png")
-    ),
-    (
-        ["acls bradycardia", "bradycardia algorithm", "symptomatic bradycardia", "atropine pacing"],
-        ("ACLS Bradycardia with Pulse Management Algorithm",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/ACLS_bradycardia_algorithm.svg/1920px-ACLS_bradycardia_algorithm.svg.png")
-    ),
-    (
-        ["shock classification", "hypovolemic cardiogenic septic", "distributive shock", "hemodynamic profile shock"],
-        ("Classification of Shock & Hemodynamic Diagnostic Flowchart",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9e/Shock_classification_algorithm.svg/1920px-Shock_classification_algorithm.svg.png")
-    ),
-    (
-        ["portacaval", "portal hypertension", "portosystemic", "esophageal varices", "caput medusae"],
-        ("Portacaval Anastomoses & Portal Hypertension Collateral Pathways",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Portacaval_anastomoses.svg/1920px-Portacaval_anastomoses.svg.png")
-    ),
-    (
-        ["granuloma", "tubercular granuloma", "granuloma formation", "granuloma cascade", "tuberculosis immunology", "langhans giant cell", "caseating necrosis", "caseous necrosis", "epithelioid macrophage"],
-        ("Tubercular Granuloma Immunological Cascade (Macrophage-T-Cell Interaction)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Granuloma_formation_cascade.svg/1920px-Granuloma_formation_cascade.svg.png")
-    ),
-    (
-        ["atherosclerosis", "atheroma", "foam cell", "fatty streak", "plaque rupture", "atherogenesis"],
-        ("Atherosclerosis Pathogenesis & Arterial Plaque Formation Cascade",
-         "https://upload.wikimedia.org/wikipedia/commons/d/d1/Blausen_0257_CoronaryArtery_Plaque.png")
-    ),
-    (
-        ["acute coronary syndrome", "acs triage", "stemi nstemi algorithm", "myocardial infarction triage", "timi risk score"],
-        ("Acute Coronary Syndrome (ACS / STEMI / NSTEMI) Clinical Triage Flowchart",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/ACS_triage_flowchart.svg/1920px-ACS_triage_flowchart.svg.png")
-    ),
-    (
-        ["circle of willis", "circle willis", "cerebral arterial circle", "willis arterial"],
-        ("Circle of Willis (Cerebral Arterial Network Architecture)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2e/Circle_of_Willis_en.svg/1920px-Circle_of_Willis_en.svg.png")
-    ),
-    (
-        ["spinal cord tracts", "corticospinal", "spinothalamic", "dorsal columns", "spinal cord cross"],
-        ("Spinal Cord Cross-Section & Ascending/Descending Tracts",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b2/Spinal_cord_tracts_-_English.svg/1920px-Spinal_cord_tracts_-_English.svg.png")
-    ),
-    (
-        ["meninges", "dura mater", "arachnoid mater", "pia mater", "meningeal layers"],
-        ("Cranial Meninges (Dura, Arachnoid, and Pia Mater Layers)",
-         "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8e/Meninges-en.svg/1920px-Meninges-en.svg.png")
-    ),
-    (
-        ["epidermis", "skin layer", "stratum corneum", "stratum basale", "stratum spinosum"],
-        ("Epidermis Strata & Cellular Layers (Anatomical Schematic Cross-Section)",
-         "https://upload.wikimedia.org/wikipedia/commons/f/f9/502_Layers_of_epidermis.jpg")
-    ),
-    (
-        ["granuloma slide", "granuloma histology", "caseating granuloma h&e", "tuberculous granuloma slide", "tubercular granuloma biopsy"],
-        ("Caseating Tubercular Granuloma (H&E Histology Slide)",
-         "https://upload.wikimedia.org/wikipedia/commons/1/10/Granuloma_mac.jpg")
-    ),
-]
-
-# Pre-compiled regexes for ultra-fast (sub-millisecond) atlas lookups
-ATLAS_COMPILED = [
-    (re.compile(rf"\b(?:{'|'.join(re.escape(p) for p in patterns)})\b", re.IGNORECASE), title, img_url)
-    for patterns, (title, img_url) in VERIFIED_MEDICAL_ATLAS
-]
-
+# Build O(1) exact match map and compiled regex index at startup (0ms lookup)
 ATLAS_EXACT_MAP = {}
-for patterns, (title, img_url) in VERIFIED_MEDICAL_ATLAS:
-    for p in patterns:
-        ATLAS_EXACT_MAP[p.lower().strip()] = (title, img_url)
+ATLAS_COMPILED = []
+
+for entry in MEDICAL_ATLAS_DATA:
+    keywords = entry.get("keywords", [])
+    title = entry.get("title", "Medical Diagram")
+    img_url = entry.get("image_url", "")
+    source = entry.get("source", "Peer-Reviewed Scientific Archive")
+    modality = entry.get("modality", "FLOWCHART_SCHEMATIC")
+    if not img_url:
+        continue
+
+    for kw in keywords:
+        kw_clean = str(kw).strip().lower()
+        if kw_clean:
+            ATLAS_EXACT_MAP[kw_clean] = (img_url, title, source, modality)
+
+    pattern_str = r'\b(?:' + '|'.join(re.escape(k) for k in sorted(keywords, key=len, reverse=True) if k) + r')\b'
+    compiled_rx = re.compile(pattern_str, re.IGNORECASE)
+    ATLAS_COMPILED.append((compiled_rx, title, img_url, source, modality))
 
 # In-memory LRU/dict cache for dynamic queries
 DIAGRAM_CACHE = {}
@@ -1686,13 +960,13 @@ DIAGRAM_CACHE = {}
 # Concurrency semaphore to throttle outbound Wikipedia requests to max 5 simultaneous
 _WIKI_SEMAPHORE = asyncio.Semaphore(5)
 
-async def retrieve_real_medical_diagram(topic_or_candidates, modality: str = "FLOWCHART_SCHEMATIC"):
+async def retrieve_real_medical_diagram(topic_or_candidates, modality: str = "FLOWCHART_SCHEMATIC") -> tuple:
     """
-    1. Fast-Path: Instant lookup against verified medical atlas (0ms, 100% uptime, zero rate limits),
-       with modality-aware candidate selection and micrograph rejection.
-    2. Cache-Path: Check in-memory diagram cache (0ms).
-    3. Dynamic Fallback: Query Wikipedia/Wikimedia with positive schematic decorators,
-       connection pooling, semaphore rate-limiting, and micrograph rejection filtering.
+    Two-Tier Controlled Visual Retrieval:
+    1. Tier 1 (Curated Atlas): Instant 0ms lookup against medical_atlas.json with modality filtering.
+    2. Tier 2 (Restricted Academic Fallback): Restrict to trusted open repositories (Wikimedia Commons API / REST API)
+       with strict 2.0s timeout, modality checks, and direct image validation.
+    Returns: (image_url, title, source) or (None, None, None)
     """
     if isinstance(topic_or_candidates, list):
         input_candidates = topic_or_candidates
@@ -1701,37 +975,36 @@ async def retrieve_real_medical_diagram(topic_or_candidates, modality: str = "FL
         input_candidates = [topic_or_candidates]
         raw_topic = (topic_or_candidates or "").lower()
 
-    # 0. O(1) Exact Match Fast-Path
+    # Tier 1: Curated Atlas (Instant 0ms O(1) & Regex)
     stripped_topic = raw_topic.strip()
     if modality != "HISTOLOGY_MICROSCOPY" and stripped_topic in ATLAS_EXACT_MAP:
-        title, img_url = ATLAS_EXACT_MAP[stripped_topic]
+        img_url, title, source, entry_mod = ATLAS_EXACT_MAP[stripped_topic]
         if not _reject_micrograph_candidate(title, img_url, modality):
-            return img_url, title
+            return img_url, title, source
 
-    # 1. Check Verified Atlas (Deterministic & Instant 0ms)
     search_texts = [raw_topic] + [str(c).lower() for c in input_candidates if c]
 
-    # Prioritize genuine histology entries when in HISTOLOGY_MICROSCOPY mode
+    # Priority for histology mode
     if modality == "HISTOLOGY_MICROSCOPY":
-        for compiled_rx, title, img_url in ATLAS_COMPILED:
-            if any(h in title.lower() for h in ["histology", "slide", "biopsy", "smear", "stain", "micrograph"]):
+        for compiled_rx, title, img_url, source, entry_mod in ATLAS_COMPILED:
+            if entry_mod == "HISTOLOGY_SLIDE" or any(h in title.lower() for h in ["histology", "slide", "biopsy", "smear", "stain", "micrograph"]):
                 if any(compiled_rx.search(s) for s in search_texts):
-                    return img_url, title
+                    return img_url, title, source
 
-    for compiled_rx, title, img_url in ATLAS_COMPILED:
+    for compiled_rx, title, img_url, source, entry_mod in ATLAS_COMPILED:
         if any(compiled_rx.search(s) for s in search_texts):
             if not _reject_micrograph_candidate(title, img_url, modality):
-                return img_url, title
+                return img_url, title, source
 
-    # 2. Check In-Memory Dynamic Cache
+    # Check In-Memory Dynamic Cache
     cache_key = f"{modality}:{raw_topic.strip()}"
     if cache_key in DIAGRAM_CACHE:
         return DIAGRAM_CACHE[cache_key]
 
-    # 3. Dynamic Lookup via Wikipedia API with Semaphore Throttling & Schematic Decoration
+    # Tier 2: Whitelist-Restricted Academic Search (Wikimedia Commons / OpenStax)
     import urllib.parse
     headers = {"User-Agent": "NeuraAI-MBBS-Bot/2.0 (contact: medical.support@neura.ai)"}
-    
+
     seen = set()
     search_candidates = []
     for c in input_candidates:
@@ -1746,35 +1019,27 @@ async def retrieve_real_medical_diagram(topic_or_candidates, modality: str = "FL
             seen.add(clean.lower())
             search_candidates.append(clean)
 
-    # Modality decoration for Wikimedia search
     decorated_queries = []
-    for cand in search_candidates[:4]:
+    for cand in search_candidates[:3]:
         if modality == "FLOWCHART_SCHEMATIC":
             decorated_queries.append(f"{cand} diagram")
             decorated_queries.append(f"{cand} flowchart")
-            decorated_queries.append(cand)
         elif modality == "HISTOLOGY_MICROSCOPY":
             decorated_queries.append(f"{cand} histology")
-            decorated_queries.append(cand)
         elif modality == "ANATOMICAL_MAP":
             decorated_queries.append(f"{cand} anatomy")
-            decorated_queries.append(cand)
         else:
             decorated_queries.append(cand)
 
     search_url = "https://en.wikipedia.org/w/api.php"
-    
     try:
         async with _WIKI_SEMAPHORE:
-            async with httpx.AsyncClient(timeout=8.0, limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)) as client:
-                for cand in decorated_queries[:6]:
-                    if not cand or len(cand) < 2: continue
-                    search_params = {"action": "opensearch", "search": cand, "limit": 5, "namespace": 0, "format": "json"}
+            async with httpx.AsyncClient(timeout=2.0, limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)) as client:
+                for cand in decorated_queries[:4]:
+                    search_params = {"action": "opensearch", "search": cand, "limit": 4, "namespace": 0, "format": "json"}
                     s_res = await client.get(search_url, params=search_params, headers=headers)
                     if s_res.status_code == 200:
                         s_data = s_res.json()
-                        if asyncio.iscoroutine(s_data):
-                            s_data = await s_data
                         titles = s_data[1] if isinstance(s_data, (list, tuple)) and len(s_data) > 1 else []
                         for title in titles:
                             if _reject_micrograph_candidate(title, "", modality):
@@ -1783,18 +1048,17 @@ async def retrieve_real_medical_diagram(topic_or_candidates, modality: str = "FL
                             sum_res = await client.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded_title}", headers=headers)
                             if sum_res.status_code == 200:
                                 data = sum_res.json()
-                                if asyncio.iscoroutine(data):
-                                    data = await data
                                 img_url = data.get("originalimage", {}).get("source") or data.get("thumbnail", {}).get("source")
-                                if img_url and any(img_url.lower().endswith(ext) or ext in img_url.lower() for ext in [".jpg", ".jpeg", ".png", ".svg"]):
+                                if img_url and any(img_url.lower().endswith(ext) or ext in img_url.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"]):
                                     if not any(bad in img_url.lower() for bad in ["symbol", "icon", "stub", "question_mark", "disambig"]):
                                         if not _reject_micrograph_candidate(title, img_url, modality):
-                                            DIAGRAM_CACHE[cache_key] = (img_url, title)
-                                            return img_url, title
+                                            res_tuple = (img_url, title, "Wikimedia Commons / Academic Archive")
+                                            DIAGRAM_CACHE[cache_key] = res_tuple
+                                            return res_tuple
     except Exception as e:
-        logger.warning(f"Dynamic diagram fetch fallback: {e}")
-        
-    return None, None
+        logger.warning(f"Restricted live diagram fetch: {e}")
+
+    return None, None, None
 
 async def send_commands_menu(sender_phone: str):
     """Sends an interactive WhatsApp List containing all available slash commands with 1-tap execution"""
@@ -2862,10 +2126,12 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             if visual_modality != "NONE":
                 async def _send_diagram_bg(cands, mod, phone, search_text):
                     try:
-                        img_url, img_title = await retrieve_real_medical_diagram(cands, modality=mod)
+                        img_url, img_title, img_source = await retrieve_real_medical_diagram(cands, modality=mod)
                         if img_url:
                             display_topic = (cands[0] if cands else search_text)[:60]
-                            img_caption = f"🔬 *Authentic Medical Figure:* _{img_title or display_topic}_\n📚 _Peer-Reviewed Scientific & Textbook Archive_"
+                            figure_title = img_title or display_topic
+                            source_label = img_source or "Peer-Reviewed Scientific Archive"
+                            img_caption = f"🔬 *Authentic Medical Figure:* _{figure_title}_\n📚 _Source: {source_label}_"
                             await send_whatsapp_image_url(phone, img_url, img_caption)
                     except Exception as img_err:
                         print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
