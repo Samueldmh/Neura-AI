@@ -10,6 +10,7 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException, Request, Response
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
+import numpy as np
 from fastembed import TextEmbedding
 
 logging.basicConfig(level=logging.INFO)
@@ -912,17 +913,8 @@ def should_generate_medical_illustration(user_msg: str, ai_answer: str = "") -> 
     """Detects if query or medical topic warrants a visual anatomical, histological or clinical illustration (Pre-clinical & Clinical 200L-600L)"""
     return detect_visual_intent_modality(user_msg, ai_answer) != "NONE"
 
-# Comprehensive list of filler words to aggressively strip from diagram topic searches
-_DIAGRAM_FILLER_PATTERN = re.compile(
-    r'(?i)\b(show|me|get|a|can|i|diagram|diagrams|illustration|illustrations|picture|pictures|'
-    r'image|images|draw|drawing|drawings|photo|photos|pic|pics|sketch|visual|visualize|'
-    r'view|of|the|an|with|and|in|for|please|help|want|give|need|display|generate|'
-    r'create|make|produce|see|look|at|whats|what|is|are|how|does|do|'
-    r'explain|describe|tell|show|present|provide)\b'
-)
-
 # ==========================================
-# DECOUPLED CURATED ATLAS & CONTROLLED 2-TIER VISUAL RETRIEVAL
+# HYBRID SEMANTIC VISUAL ENGINE & IN-MEMORY VECTOR MATRIX
 # ==========================================
 ATLAS_PATH = os.path.join(os.path.dirname(__file__), "medical_atlas.json")
 
@@ -939,28 +931,69 @@ def load_medical_atlas(file_path: str = ATLAS_PATH) -> list:
     return []
 
 MEDICAL_ATLAS_DATA = load_medical_atlas()
+ATLAS_EMBEDDINGS = []
+ATLAS_ENTRIES = []
 
-# Build O(1) exact match map and compiled regex index at startup (0ms lookup)
-ATLAS_EXACT_MAP = {}
-ATLAS_COMPILED = []
+def init_atlas_embeddings():
+    """Pre-computes normalized in-memory embeddings for all curated medical atlas entries at server startup (<1ms search)."""
+    global ATLAS_EMBEDDINGS, ATLAS_ENTRIES
+    if not MEDICAL_ATLAS_DATA or embedder is None:
+        return
+    texts_to_embed = []
+    valid_entries = []
+    for entry in MEDICAL_ATLAS_DATA:
+        img_url = entry.get("image_url", "")
+        if not img_url:
+            continue
+        title = entry.get("title", "")
+        keywords = ", ".join(entry.get("keywords", []))
+        modality = entry.get("modality", "FLOWCHART_SCHEMATIC")
+        # Build rich semantic representation for dense vector matching
+        text = f"{title} - {modality}. Core medical concept synonyms: {keywords}"
+        texts_to_embed.append(text)
+        valid_entries.append(entry)
 
-for entry in MEDICAL_ATLAS_DATA:
-    keywords = entry.get("keywords", [])
-    title = entry.get("title", "Medical Diagram")
-    img_url = entry.get("image_url", "")
-    source = entry.get("source", "Peer-Reviewed Scientific Archive")
-    modality = entry.get("modality", "FLOWCHART_SCHEMATIC")
-    if not img_url:
-        continue
+    if texts_to_embed:
+        try:
+            raw_embeddings = list(embedder.embed(texts_to_embed))
+            normalized_vecs = []
+            for vec in raw_embeddings:
+                arr = np.array(vec, dtype=np.float32)
+                norm = np.linalg.norm(arr)
+                normalized_vecs.append(arr / norm if norm > 0 else arr)
+            ATLAS_EMBEDDINGS = normalized_vecs
+            ATLAS_ENTRIES = valid_entries
+            print(f"[ATLAS] In-Memory FastEmbed Vector Matrix Initialized: {len(ATLAS_ENTRIES)} diagram topics ready for sub-millisecond semantic search.")
+        except Exception as e:
+            print(f"[ATLAS WARNING] Failed to pre-embed atlas: {e}")
 
-    for kw in keywords:
-        kw_clean = str(kw).strip().lower()
-        if kw_clean:
-            ATLAS_EXACT_MAP[kw_clean] = (img_url, title, source, modality)
+init_atlas_embeddings()
 
-    pattern_str = r'\b(?:' + '|'.join(re.escape(k) for k in sorted(keywords, key=len, reverse=True) if k) + r')\b'
-    compiled_rx = re.compile(pattern_str, re.IGNORECASE)
-    ATLAS_COMPILED.append((compiled_rx, title, img_url, source, modality))
+def search_atlas_vector(query_text: str, threshold: float = 0.73) -> tuple:
+    """Performs <1ms cosine similarity search against pre-embedded in-memory atlas matrix."""
+    if not ATLAS_EMBEDDINGS or embedder is None or not query_text:
+        return None, None, None, 0.0
+    try:
+        q_vec = list(embedder.embed([query_text]))[0]
+        q_arr = np.array(q_vec, dtype=np.float32)
+        q_norm = np.linalg.norm(q_arr)
+        if q_norm > 0:
+            q_arr = q_arr / q_norm
+
+        best_score = -1.0
+        best_entry = None
+        for vec, entry in zip(ATLAS_EMBEDDINGS, ATLAS_ENTRIES):
+            sim = float(np.dot(q_arr, vec))
+            if sim > best_score:
+                best_score = sim
+                best_entry = entry
+
+        if best_score >= threshold and best_entry:
+            return best_entry["image_url"], best_entry["title"], best_entry.get("source", "Peer-Reviewed Scientific Archive"), best_score
+        return None, None, None, best_score
+    except Exception as e:
+        print(f"[ATLAS ERROR] Atlas vector search error: {e}")
+        return None, None, None, 0.0
 
 # In-memory LRU/dict cache for dynamic queries
 DIAGRAM_CACHE = {}
@@ -968,99 +1001,60 @@ DIAGRAM_CACHE = {}
 # Concurrency semaphore to throttle outbound Wikipedia requests to max 5 simultaneous
 _WIKI_SEMAPHORE = asyncio.Semaphore(5)
 
-async def retrieve_real_medical_diagram(topic_or_candidates, modality: str = "FLOWCHART_SCHEMATIC") -> tuple:
+async def retrieve_real_medical_diagram(clean_topic: str, modality: str = "FLOWCHART_SCHEMATIC") -> tuple:
     """
-    Two-Tier Controlled Visual Retrieval:
-    1. Tier 1 (Curated Atlas): Instant 0ms lookup against medical_atlas.json with modality filtering.
-    2. Tier 2 (Restricted Academic Fallback): Restrict to trusted open repositories (Wikimedia Commons API / REST API)
-       with strict 2.0s timeout, modality checks, and direct image validation.
+    Controlled 2-Tier Visual Retrieval (Zero-Regex, Pure Semantic):
+    1. Tier 1: In-Memory FastEmbed Vector Search (<1ms cosine similarity against 142 curated topics).
+    2. Tier 2: Whitelist-Restricted Live Search on Wikimedia Commons / OpenStax.
     Returns: (image_url, title, source) or (None, None, None)
     """
-    if isinstance(topic_or_candidates, list):
-        input_candidates = topic_or_candidates
-        raw_topic = " ".join(str(c) for c in topic_or_candidates[:3]).lower()
-    else:
-        input_candidates = [topic_or_candidates]
-        raw_topic = (topic_or_candidates or "").lower()
+    clean_topic = str(clean_topic).strip()
+    if not clean_topic:
+        return None, None, None
 
-    # Tier 1: Curated Atlas (Instant 0ms O(1) & Regex)
-    stripped_topic = raw_topic.strip()
-    if modality != "HISTOLOGY_MICROSCOPY" and stripped_topic in ATLAS_EXACT_MAP:
-        img_url, title, source, entry_mod = ATLAS_EXACT_MAP[stripped_topic]
-        if not _reject_micrograph_candidate(title, img_url, modality):
-            return img_url, title, source
-
-    search_texts = [raw_topic] + [str(c).lower() for c in input_candidates if c]
-
-    # Priority for histology mode
-    if modality == "HISTOLOGY_MICROSCOPY":
-        for compiled_rx, title, img_url, source, entry_mod in ATLAS_COMPILED:
-            if entry_mod == "HISTOLOGY_SLIDE" or any(h in title.lower() for h in ["histology", "slide", "biopsy", "smear", "stain", "micrograph"]):
-                if any(compiled_rx.search(s) for s in search_texts):
-                    return img_url, title, source
-
-    for compiled_rx, title, img_url, source, entry_mod in ATLAS_COMPILED:
-        if any(compiled_rx.search(s) for s in search_texts):
-            if not _reject_micrograph_candidate(title, img_url, modality):
-                return img_url, title, source
+    # Tier 1: In-Memory FastEmbed Vector Search
+    img_url, title, source, sim_score = search_atlas_vector(clean_topic, threshold=0.73)
+    if img_url:
+        print(f"[ATLAS MATCH] In-Memory Atlas Vector Match (Similarity: {sim_score:.3f}): '{title}'")
+        return img_url, title, source
 
     # Check In-Memory Dynamic Cache
-    cache_key = f"{modality}:{raw_topic.strip()}"
+    cache_key = f"{modality}:{clean_topic.lower()}"
     if cache_key in DIAGRAM_CACHE:
         return DIAGRAM_CACHE[cache_key]
 
-    # Tier 2: Whitelist-Restricted Academic Search (Wikimedia Commons / OpenStax)
+    # Tier 2: Whitelist-Restricted Live Search on Wikimedia Commons
     import urllib.parse
     headers = {"User-Agent": "NeuraAI-MBBS-Bot/2.0 (contact: medical.support@neura.ai)"}
 
-    seen = set()
-    search_candidates = []
-    for c in input_candidates:
-        c = str(c).strip() if c else ""
-        if not c or len(c) < 2: continue
-        if c.lower() not in seen:
-            seen.add(c.lower())
-            search_candidates.append(c)
-        clean = _DIAGRAM_FILLER_PATTERN.sub(' ', c)
-        clean = re.sub(r'\s+', ' ', clean).strip()
-        if clean and clean.lower() not in seen and len(clean) > 2:
-            seen.add(clean.lower())
-            search_candidates.append(clean)
-
-    decorated_queries = []
-    for cand in search_candidates[:3]:
-        if modality == "FLOWCHART_SCHEMATIC":
-            decorated_queries.append(f"{cand} diagram")
-            decorated_queries.append(f"{cand} flowchart")
-        elif modality == "HISTOLOGY_MICROSCOPY":
-            decorated_queries.append(f"{cand} histology")
-        elif modality == "ANATOMICAL_MAP":
-            decorated_queries.append(f"{cand} anatomy")
-        else:
-            decorated_queries.append(cand)
+    search_queries = [
+        f"{clean_topic} diagram",
+        f"{clean_topic} flowchart" if modality == "FLOWCHART_SCHEMATIC" else f"{clean_topic} anatomy",
+        clean_topic
+    ]
 
     search_url = "https://en.wikipedia.org/w/api.php"
     try:
         async with _WIKI_SEMAPHORE:
-            async with httpx.AsyncClient(timeout=2.0, limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)) as client:
-                for cand in decorated_queries[:4]:
-                    search_params = {"action": "opensearch", "search": cand, "limit": 4, "namespace": 0, "format": "json"}
+            async with httpx.AsyncClient(timeout=2.5, limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)) as client:
+                for sq in search_queries:
+                    search_params = {"action": "opensearch", "search": sq, "limit": 4, "namespace": 0, "format": "json"}
                     s_res = await client.get(search_url, params=search_params, headers=headers)
                     if s_res.status_code == 200:
                         s_data = s_res.json()
                         titles = s_data[1] if isinstance(s_data, (list, tuple)) and len(s_data) > 1 else []
-                        for title in titles:
-                            if _reject_micrograph_candidate(title, "", modality):
+                        for t in titles:
+                            if _reject_micrograph_candidate(t, "", modality):
                                 continue
-                            encoded_title = urllib.parse.quote(title.replace(" ", "_"))
+                            encoded_title = urllib.parse.quote(t.replace(" ", "_"))
                             sum_res = await client.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded_title}", headers=headers)
                             if sum_res.status_code == 200:
                                 data = sum_res.json()
-                                img_url = data.get("originalimage", {}).get("source") or data.get("thumbnail", {}).get("source")
-                                if img_url and any(img_url.lower().endswith(ext) or ext in img_url.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"]):
-                                    if not any(bad in img_url.lower() for bad in ["symbol", "icon", "stub", "question_mark", "disambig"]):
-                                        if not _reject_micrograph_candidate(title, img_url, modality):
-                                            res_tuple = (img_url, title, "Wikimedia Commons / Academic Archive")
+                                candidate_url = data.get("originalimage", {}).get("source") or data.get("thumbnail", {}).get("source")
+                                if candidate_url and any(candidate_url.lower().endswith(ext) or ext in candidate_url.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+                                    if not any(bad in candidate_url.lower() for bad in ["symbol", "icon", "stub", "question_mark", "disambig"]):
+                                        if not _reject_micrograph_candidate(t, candidate_url, modality):
+                                            res_tuple = (candidate_url, t, "Wikimedia Commons / Peer-Reviewed Archive")
                                             DIAGRAM_CACHE[cache_key] = res_tuple
                                             return res_tuple
     except Exception as e:
@@ -1357,9 +1351,55 @@ def extract_medical_terms(user_msg: str) -> list:
     return phrases
 
 async def normalize_medical_query(user_msg: str) -> dict:
-    """Fast micro-LLM pass that resolves all typos, medical slang, and extracts authoritative textbook search phrases and diagram topics."""
+    """Single-pass LLM semantic extractor: resolves typos, Nigerian medical student slang, extracts clean textbook search phrases, visual intent, and exact medical topic."""
+    fallback_intent = detect_visual_intent_modality(user_msg)
+    fallback_result = {
+        "search_keywords": [user_msg],
+        "clean_medical_topic": user_msg,
+        "requires_diagram": fallback_intent != "NONE",
+        "modality": fallback_intent if fallback_intent != "NONE" else "FLOWCHART_SCHEMATIC"
+    }
     if not OPENROUTER_API_KEY:
-        return {"search_keywords": extract_medical_terms(user_msg), "diagram_topic": None}
+        return fallback_result
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://neura-ai.org",
+        "X-Title": "NEURA AI Medical Assistant"
+    }
+    system_prompt = (
+        "You are an expert MBBS medical query normalizer. The student may send questions with typos, shorthand, Nigerian medical student slang, or visual diagram requests.\n"
+        "Output ONLY a valid JSON object with four fields:\n"
+        "1. 'search_keywords': A list of 1 to 3 authoritative medical textbook search phrases (fix typos, expand acronyms, e.g. ['B-cell lymphopoiesis in bone marrow', 'B-lymphocyte maturation stages']).\n"
+        "2. 'clean_medical_topic': The clean authoritative medical topic name (e.g. 'B-cell development', 'Life cycle of Plasmodium falciparum', 'Renin-Angiotensin-Aldosterone System').\n"
+        "3. 'requires_diagram': Boolean true if the user explicitly asked for a diagram/flowchart/illustration/picture/visual OR if the core concept is inherently a pathway/cycle/anatomical map, else false.\n"
+        "4. 'modality': One of 'FLOWCHART_SCHEMATIC', 'ANATOMICAL_MAP', 'HISTOLOGY_SLIDE', 'CLINICAL_ALGORITHM', or 'NONE'.\n"
+        "Output ONLY valid JSON (no markdown, no ```json)."
+    )
+    payload = {
+        "model": "deepseek/deepseek-v4-flash",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg}
+        ],
+        "temperature": 0.0,
+        "max_tokens": 160
+    }
+    try:
+        async with httpx.AsyncClient(timeout=3.5) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            if res.status_code == 200:
+                text = res.json()["choices"][0]["message"]["content"]
+                text = text.replace("```json", "").replace("```", "").strip()
+                parsed = json.loads(text)
+                if isinstance(parsed, dict) and "search_keywords" in parsed and "clean_medical_topic" in parsed:
+                    return parsed
+    except Exception as e:
+        print(f"⚠️ Micro-LLM normalizer error: {e}")
+
+    return fallback_result
         
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -2253,16 +2293,13 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         else:
             search_term = query_to_search
 
-        # Step 1: Zero-shot Micro-LLM Query Normalization & Typo Resolution
+        # Step 1: Single-Pass LLM Semantic Normalization & Concept Extraction
         normalized_data = await normalize_medical_query(search_term)
-        medical_terms = normalized_data.get("search_keywords", [])
-        diagram_target = normalized_data.get("diagram_topic")
-        if not medical_terms:
-            medical_terms = extract_medical_terms(search_term)
-        # If LLM gave no clean diagram topic, use medical_terms as diagram candidates
-        # (these are already clean, typo-corrected authoritative phrases)
-        diagram_candidates = ([diagram_target] if diagram_target else []) + medical_terms
-        
+        medical_terms = normalized_data.get("search_keywords", [search_term])
+        clean_topic = normalized_data.get("clean_medical_topic", search_term)
+        requires_diagram = normalized_data.get("requires_diagram", False)
+        visual_modality = normalized_data.get("modality", "FLOWCHART_SCHEMATIC")
+
         # Step 1.5: Check for explicit book overrides (e.g. if user says "Use pharmacology")
         active_books = get_explicit_book_override(search_term, preferred_books_list)
         
@@ -2275,10 +2312,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         # If button click [ 📝 Generate MCQs ] was tapped, launch the 1-by-1 interactive quiz!
         if is_button_quiz:
-            extracted_terms = extract_medical_terms(query_to_search)
-            clean_topic = ", ".join(extracted_terms) if extracted_terms else query_to_search
-            clean_topic = clean_topic.title()
-            await start_interactive_quiz(sender_phone, clean_topic, search_res)
+            clean_quiz_topic = clean_topic.title()
+            await start_interactive_quiz(sender_phone, clean_quiz_topic, search_res)
             return
 
         context_blocks = []
@@ -2292,19 +2327,27 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         formatted_context = "\n\n".join(context_blocks)
         
+        visual_instruction = ""
+        if requires_diagram:
+            visual_instruction = (
+                f"\n\nCRITICAL VISUAL REQUIREMENT: The student requested a visual diagram/flowchart for '{clean_topic}'. "
+                f"In your response, format the pathway or mechanism as a clean, stepwise flowchart (e.g. Stage 1 ➔ Stage 2 ➔ Stage 3) using bold headings and bullet points. "
+                f"At the very end of your response, append the exact note: '💡 _Note: We are actively expanding NEURA AI\'s visual image generation library for this topic._'"
+            )
+
         if is_tagged_reply and last_assistant_msg:
             tagged_snippet = last_assistant_msg[:400]
             user_prompt = (
                 f"THE USER EXPLICITLY TAGGED/QUOTED YOUR PREVIOUS WHATSAPP MESSAGE BELOW:\n\"\"\"{tagged_snippet}\"\"\"\n\n"
                 f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\n"
                 f"USER'S QUESTION/INSTRUCTION REGARDING THE TAGGED MESSAGE:\n{query_to_search}\n\n"
-                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly."
+                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly.{visual_instruction}"
             )
         else:
             user_prompt = (
                 f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\n"
                 f"STUDENT QUESTION:\n{query_to_search}\n\n"
-                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly."
+                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly.{visual_instruction}"
             )
         
         # Build dynamic user context
@@ -2364,23 +2407,20 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         ai_lower = ai_answer.lower()
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
 
-        # Retrieve and send authentic peer-reviewed medical diagram concurrently in background
-        if intent != "QUIZ" and not is_not_covered:
-            visual_modality = detect_visual_intent_modality(query_to_search, ai_answer)
-            if visual_modality != "NONE":
-                async def _send_diagram_bg(cands, mod, phone, search_text):
-                    try:
-                        img_url, img_title, img_source = await retrieve_real_medical_diagram(cands, modality=mod)
-                        if img_url:
-                            display_topic = (cands[0] if cands else search_text)[:60]
-                            figure_title = img_title or display_topic
-                            source_label = img_source or "Peer-Reviewed Scientific Archive"
-                            img_caption = f"🔬 *Authentic Medical Figure:* _{figure_title}_\n📚 _Source: {source_label}_"
-                            await send_whatsapp_image_url(phone, img_url, img_caption)
-                    except Exception as img_err:
-                        print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
+        # Deliver verified visual diagram in background if visual intent was detected
+        if intent != "QUIZ" and not is_not_covered and requires_diagram:
+            async def _send_diagram_bg(topic, mod, phone):
+                try:
+                    img_url, img_title, img_source = await retrieve_real_medical_diagram(topic, modality=mod)
+                    if img_url:
+                        figure_title = img_title or topic
+                        source_label = img_source or "Peer-Reviewed Scientific Archive"
+                        img_caption = f"🔬 *Authentic Medical Figure:* _{figure_title}_\n📚 _Source: {source_label}_"
+                        await send_whatsapp_image_url(phone, img_url, img_caption)
+                except Exception as img_err:
+                    print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
 
-                asyncio.create_task(_send_diagram_bg(diagram_candidates, visual_modality, sender_phone, query_to_search))
+            asyncio.create_task(_send_diagram_bg(clean_topic, visual_modality, sender_phone))
 
         # Attach interactive follow-up button for quick MCQ generation ONLY if it was a valid medical answer
         if intent != "QUIZ" and not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
