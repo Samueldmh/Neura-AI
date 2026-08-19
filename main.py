@@ -255,15 +255,24 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
                                     full_text += content
                                     current_chunk += content
                                     
-                                    # Send first chunk fast (~220 chars) so student gets instant answer, then larger paragraphs
-                                    threshold = 220 if chunk_sent_count == 0 else 750
-                                    if "\n\n" in current_chunk and len(current_chunk) > threshold:
-                                        parts = current_chunk.rsplit("\n\n", 1)
-                                        send_part = parts[0].strip()
-                                        if send_part:
-                                            await send_whatsapp_cloud_msg(sender_phone, send_part)
-                                            chunk_sent_count += 1
-                                        current_chunk = parts[1] if len(parts) > 1 else ""
+                                    # Fast first-chunk dispatch (<120 chars on newline) so student gets instant answer in <1.5s
+                                    if chunk_sent_count == 0:
+                                        if ("\n" in current_chunk and len(current_chunk) > 90) or len(current_chunk) > 180:
+                                            split_idx = current_chunk.rfind("\n")
+                                            if split_idx == -1: split_idx = len(current_chunk)
+                                            send_part = current_chunk[:split_idx].strip()
+                                            if send_part:
+                                                await send_whatsapp_cloud_msg(sender_phone, send_part)
+                                                chunk_sent_count += 1
+                                                current_chunk = current_chunk[split_idx:].strip()
+                                    else:
+                                        if "\n\n" in current_chunk and len(current_chunk) > 650:
+                                            parts = current_chunk.rsplit("\n\n", 1)
+                                            send_part = parts[0].strip()
+                                            if send_part:
+                                                await send_whatsapp_cloud_msg(sender_phone, send_part)
+                                                chunk_sent_count += 1
+                                            current_chunk = parts[1] if len(parts) > 1 else ""
                         except json.JSONDecodeError:
                             pass
                             
@@ -2146,15 +2155,64 @@ def extract_book_keywords(preferred_books: list) -> list:
             keywords.extend(words)
     return keywords
 
+async def search_single_book(query_vector: list, book: str, limit: int = 4) -> list:
+    if not book or not isinstance(book, str) or book.startswith("Skip"):
+        return []
+    try:
+        res = await qdrant.query_points(
+            collection_name=COLLECTION_NAME,
+            query=query_vector,
+            query_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="book_title",
+                        match=models.MatchValue(value=book)
+                    )
+                ]
+            ),
+            limit=limit
+        )
+        if res.points:
+            return res.points
+    except Exception:
+        pass
+
+    # Fuzzy keyword fallback
+    book_kw = ""
+    b_lower = book.lower()
+    if "lippincott" in b_lower: book_kw = "lippincott"
+    elif "robbins" in b_lower: book_kw = "robbins"
+    elif "haematology" in b_lower or "hoffbrand" in b_lower: book_kw = "haematology"
+    elif "microbiology" in b_lower or "jawetz" in b_lower: book_kw = "microbiology"
+    elif "sembulingam" in b_lower: book_kw = "sembulingam"
+    elif "moore" in b_lower or "anatomy" in b_lower: book_kw = "moore"
+
+    if book_kw:
+        try:
+            res = await qdrant.query_points(
+                collection_name=COLLECTION_NAME,
+                query=query_vector,
+                query_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="book_title",
+                            match=models.MatchText(text=book_kw)
+                        )
+                    ]
+                ),
+                limit=limit
+            )
+            return res.points
+        except Exception:
+            pass
+    return []
+
 async def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None) -> list:
-    """Search Qdrant securely per textbook to guarantee every selected book gets equal representation."""
+    """Search Qdrant in PARALLEL across all selected textbooks for sub-second retrieval."""
     try:
         loop = asyncio.get_running_loop()
         query_vector = await loop.run_in_executor(embedding_pool, get_embedding_sync, query_text)
-        
-        all_points = []
-        
-        # If no preferred books are selected, fall back to a generic global search
+
         if not preferred_books:
             res = await qdrant.query_points(
                 collection_name=COLLECTION_NAME,
@@ -2162,71 +2220,11 @@ async def search_qdrant(query_text: str, limit: int = 4, preferred_books: list =
                 limit=limit
             )
             return res.points
-            
-        # Guarantee equal representation by querying Qdrant for EACH book
-        for book in preferred_books:
-            if not book or not isinstance(book, str) or book.startswith("Skip"):
-                continue
-                
-            hits = []
-            # Attempt 1: Exact Match
-            try:
-                res = await qdrant.query_points(
-                    collection_name=COLLECTION_NAME,
-                    query=query_vector,
-                    query_filter=models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="book_title",
-                                match=models.MatchValue(value=book)
-                            )
-                        ]
-                    ),
-                    limit=limit
-                )
-                hits = res.points
-            except Exception as e:
-                hits = []
 
-            # Attempt 2: Fuzzy keyword match if exact string match returned 0 hits
-            if not hits:
-                book_kw = ""
-                b_lower = book.lower()
-                if "lippincott" in b_lower:
-                    book_kw = "lippincott"
-                elif "robbins" in b_lower:
-                    book_kw = "robbins"
-                elif "haematology" in b_lower or "hoffbrand" in b_lower:
-                    book_kw = "haematology"
-                elif "microbiology" in b_lower or "jawetz" in b_lower:
-                    book_kw = "microbiology"
-                elif "sembulingam" in b_lower:
-                    book_kw = "sembulingam"
-                elif "moore" in b_lower or "anatomy" in b_lower:
-                    book_kw = "moore"
-                
-                if book_kw:
-                    try:
-                        res = await qdrant.query_points(
-                            collection_name=COLLECTION_NAME,
-                            query=query_vector,
-                            query_filter=models.Filter(
-                                must=[
-                                    models.FieldCondition(
-                                        key="book_title",
-                                        match=models.MatchText(text=book_kw)
-                                    )
-                                ]
-                            ),
-                            limit=limit
-                        )
-                        hits = res.points
-                    except Exception as fuzzy_e:
-                        hits = []
-                        
-            all_points.extend(hits)
-                
-        # Sort the combined hits from all books by score
+        # Query all selected textbooks concurrently in parallel!
+        tasks = [search_single_book(query_vector, b, limit=limit) for b in preferred_books if b and not b.startswith("Skip")]
+        book_results = await asyncio.gather(*tasks)
+        all_points = [p for sub in book_results for p in sub]
         all_points.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
         return all_points
 
@@ -3102,18 +3100,21 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         ai_lower = ai_answer.lower()
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
 
-        # Retrieve and send authentic peer-reviewed medical diagram / histology slide if topic is visual or requested
+        # Retrieve and send authentic peer-reviewed medical diagram concurrently in background
         if intent != "QUIZ" and not is_not_covered:
             visual_modality = detect_visual_intent_modality(query_to_search, ai_answer)
             if visual_modality != "NONE":
-                try:
-                    img_url, img_title = await retrieve_real_medical_diagram(diagram_candidates, modality=visual_modality)
-                    if img_url:
-                        display_topic = (diagram_candidates[0] if diagram_candidates else query_to_search)[:60]
-                        img_caption = f"🔬 *Authentic Medical Figure:* _{img_title or display_topic}_\n📚 _Peer-Reviewed Scientific & Textbook Archive_"
-                        await send_whatsapp_image_url(sender_phone, img_url, img_caption)
-                except Exception as img_err:
-                    print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
+                async def _send_diagram_bg(cands, mod, phone, search_text):
+                    try:
+                        img_url, img_title = await retrieve_real_medical_diagram(cands, modality=mod)
+                        if img_url:
+                            display_topic = (cands[0] if cands else search_text)[:60]
+                            img_caption = f"🔬 *Authentic Medical Figure:* _{img_title or display_topic}_\n📚 _Peer-Reviewed Scientific & Textbook Archive_"
+                            await send_whatsapp_image_url(phone, img_url, img_caption)
+                    except Exception as img_err:
+                        print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
+
+                asyncio.create_task(_send_diagram_bg(diagram_candidates, visual_modality, sender_phone, query_to_search))
 
         # Attach interactive follow-up button for quick MCQ generation ONLY if it was a valid medical answer
         if intent != "QUIZ" and not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
