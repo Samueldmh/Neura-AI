@@ -927,37 +927,22 @@ ATLAS_EMBEDDINGS = []
 ATLAS_ENTRIES = []
 
 def init_atlas_embeddings():
-    """Pre-computes normalized in-memory embeddings for all curated medical atlas entries at server startup (<1ms search)."""
+    """Instantly loads pre-computed normalized 384-dim vector embeddings from medical_atlas.json (0ms boot, zero ONNX memory overhead)."""
     global ATLAS_EMBEDDINGS, ATLAS_ENTRIES
-    if not MEDICAL_ATLAS_DATA or embedder is None:
+    if not MEDICAL_ATLAS_DATA:
         return
-    texts_to_embed = []
     valid_entries = []
+    loaded_vecs = []
     for entry in MEDICAL_ATLAS_DATA:
-        img_url = entry.get("image_url", "")
-        if not img_url:
-            continue
-        title = entry.get("title", "")
-        keywords = ", ".join(entry.get("keywords", []))
-        modality = entry.get("modality", "FLOWCHART_SCHEMATIC")
-        # Build rich semantic representation for dense vector matching
-        text = f"{title} - {modality}. Core medical concept synonyms: {keywords}"
-        texts_to_embed.append(text)
-        valid_entries.append(entry)
+        vec = entry.get("embedding")
+        if vec and isinstance(vec, list) and len(vec) == 384:
+            arr = np.array(vec, dtype=np.float32)
+            loaded_vecs.append(arr)
+            valid_entries.append(entry)
 
-    if texts_to_embed:
-        try:
-            raw_embeddings = list(embedder.embed(texts_to_embed))
-            normalized_vecs = []
-            for vec in raw_embeddings:
-                arr = np.array(vec, dtype=np.float32)
-                norm = np.linalg.norm(arr)
-                normalized_vecs.append(arr / norm if norm > 0 else arr)
-            ATLAS_EMBEDDINGS = normalized_vecs
-            ATLAS_ENTRIES = valid_entries
-            print(f"[ATLAS] In-Memory FastEmbed Vector Matrix Initialized: {len(ATLAS_ENTRIES)} diagram topics ready for sub-millisecond semantic search.")
-        except Exception as e:
-            print(f"[ATLAS WARNING] Failed to pre-embed atlas: {e}")
+    ATLAS_EMBEDDINGS = loaded_vecs
+    ATLAS_ENTRIES = valid_entries
+    print(f"[ATLAS] In-Memory Pre-Computed Vector Matrix Loaded: {len(ATLAS_ENTRIES)} topics (0ms boot, zero ONNX memory spike).")
 
 init_atlas_embeddings()
 
