@@ -972,17 +972,17 @@ def search_atlas_vector(query_text: str, threshold: float = 0.73) -> tuple:
         print(f"[ATLAS ERROR] Atlas vector search error: {e}")
         return None, None, None, 0.0
 
-# In-memory LRU/dict cache for dynamic queries
+# In-memory LRU/dict cache for dynamic queries (caches both positive hits and negative misses)
 DIAGRAM_CACHE = {}
 
-# Concurrency semaphore to throttle outbound Wikipedia requests to max 5 simultaneous
-_WIKI_SEMAPHORE = asyncio.Semaphore(5)
+# Concurrency semaphore to throttle outbound Wikipedia requests to max 20 simultaneous
+_WIKI_SEMAPHORE = asyncio.Semaphore(20)
 
 async def retrieve_real_medical_diagram(clean_topic: str, modality: str = "FLOWCHART_SCHEMATIC") -> tuple:
     """
-    Controlled 2-Tier Visual Retrieval (Zero-Regex, Pure Semantic):
+    Controlled 2-Tier Visual Retrieval (Zero-Regex, Pure Semantic, High-Throughput):
     1. Tier 1: In-Memory FastEmbed Vector Search (<1ms cosine similarity against 142 curated topics).
-    2. Tier 2: Whitelist-Restricted Live Search on Wikimedia Commons / OpenStax.
+    2. Tier 2: Whitelist-Restricted Live Search on Wikimedia Commons / OpenStax (20-connection pool with negative caching).
     Returns: (image_url, title, source) or (None, None, None)
     """
     clean_topic = str(clean_topic).strip()
@@ -995,7 +995,7 @@ async def retrieve_real_medical_diagram(clean_topic: str, modality: str = "FLOWC
         print(f"[ATLAS MATCH] In-Memory Atlas Vector Match (Similarity: {sim_score:.3f}): '{title}'")
         return img_url, title, source
 
-    # Check In-Memory Dynamic Cache
+    # Check In-Memory Dynamic Cache (Returns in 0ms for both cached images and cached negative misses)
     cache_key = f"{modality}:{clean_topic.lower()}"
     if cache_key in DIAGRAM_CACHE:
         return DIAGRAM_CACHE[cache_key]
@@ -1013,7 +1013,7 @@ async def retrieve_real_medical_diagram(clean_topic: str, modality: str = "FLOWC
     search_url = "https://en.wikipedia.org/w/api.php"
     try:
         async with _WIKI_SEMAPHORE:
-            async with httpx.AsyncClient(timeout=2.5, limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)) as client:
+            async with httpx.AsyncClient(timeout=2.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=40)) as client:
                 for sq in search_queries:
                     search_params = {"action": "opensearch", "search": sq, "limit": 4, "namespace": 0, "format": "json"}
                     s_res = await client.get(search_url, params=search_params, headers=headers)
@@ -1037,6 +1037,8 @@ async def retrieve_real_medical_diagram(clean_topic: str, modality: str = "FLOWC
     except Exception as e:
         logger.warning(f"Restricted live diagram fetch: {e}")
 
+    # Negative Caching: Remember that no verified diagram exists for this query to prevent repeated outbound lookups
+    DIAGRAM_CACHE[cache_key] = (None, None, None)
     return None, None, None
 
 
@@ -2151,16 +2153,21 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         ai_lower = ai_answer.lower()
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
 
-        # Deliver verified visual diagram in background if visual intent was detected
+        # Deliver verified visual diagram in background if visual intent was detected (with strict 3.5s deadline)
         if intent != "QUIZ" and not is_not_covered and requires_diagram:
             async def _send_diagram_bg(topic, mod, phone):
                 try:
-                    img_url, img_title, img_source = await retrieve_real_medical_diagram(topic, modality=mod)
+                    img_url, img_title, img_source = await asyncio.wait_for(
+                        retrieve_real_medical_diagram(topic, modality=mod),
+                        timeout=3.5
+                    )
                     if img_url:
                         figure_title = img_title or topic
                         source_label = img_source or "Peer-Reviewed Scientific Archive"
                         img_caption = f"🔬 *Authentic Medical Figure:* _{figure_title}_\n📚 _Source: {source_label}_"
                         await send_whatsapp_image_url(phone, img_url, img_caption)
+                except asyncio.TimeoutError:
+                    pass
                 except Exception as img_err:
                     print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
 
