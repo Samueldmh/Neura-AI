@@ -741,313 +741,7 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
     print(f"⚠️ Image could not be fetched server-side from {image_url}. Aborting image delivery to protect WhatsApp delivery status.")
     return
 
-REJECT_MICROGRAPH_REGEX = re.compile(
-    r'(?i)(micrograph|photomicrograph|histolog|histopatholog|biopsy|'
-    r'h&e|h[_\s\-]and[_\s\-]e|h\s*and\s*e|he[_\s\-]stain|hematoxylin|\beosin\b|eosin[_\s\-]stain|giemsa|gram[_\s\-]stain|'
-    r'smear|blood[_\s\-]film|thin[_\s\-]film|thick[_\s\-]film|blood[_\s\-]smear|thin[_\s\-]smear|thick[_\s\-]smear|'
-    r'pap[_\s\-]smear|cytolog|frozen[_\s\-]section|immunohistochem|\bihc\b|ihc[_\s\-]stain|'
-    r'pathology[_\s\-]slide|microscopic[_\s\-]slide|'
-    r'light[_\s\-]microscop|electron[_\s\-]microscop|'
-    r'\b(sem|tem)\b|[_\-](sem|tem)[_\-]|400x|100x|1000x|\b\d{2,4}x\b|magnification|specimen|gross[_\s\-]pathology|'
-    r'macroscopic|autopsy|cadaver|clinical[_\s\-]photo|patient[_\s\-]photo|endoscopy|colonoscopy|'
-    r'single[_\s\-]cell|cell[_\s\-]crop|slide[_\s\-]stain|stained[_\s\-]slide|leishman[_\s\-]stain|wright[_\s\-]stain|'
-    r'fluorescence[_\s\-]microscop|confocal)'
-)
 
-def _reject_micrograph_candidate(title: str, url: str, modality: str) -> bool:
-    """
-    Enforces strict rejection of micrographs, histology stains, blood smears, biopsy slides,
-    single-cell crops, and macroscopic specimen photos when requesting flowcharts, schematics, or anatomical maps.
-    When modality == 'HISTOLOGY_MICROSCOPY', accepts genuine histology/microscopy images.
-    """
-    if modality == "HISTOLOGY_MICROSCOPY":
-        return False
-    
-    text_to_check = f"{title or ''} {url or ''}".lower()
-    if REJECT_MICROGRAPH_REGEX.search(text_to_check):
-        return True
-        
-    return False
-
-def detect_visual_intent_modality(user_msg: str, ai_answer: str = "") -> str:
-    """
-    Detects the visual intent modality from user message (and optional AI answer):
-    Returns one of:
-      - "HISTOLOGY_MICROSCOPY": Biopsy slides, tissue histology, blood films/smears, H&E stains, light/electron micrographs.
-      - "FLOWCHART_SCHEMATIC": Multi-stage life cycles, biochemical pathways, signaling cascades, physiological mechanisms, clinical algorithms, decision trees, scoring systems.
-      - "ANATOMICAL_MAP": Gross anatomical structures, relationships, neurovascular bundles, cross-sections.
-      - "NONE": Non-visual factual/conversational queries.
-    """
-    msg_low = (user_msg or "").lower()
-
-    # 0. Non-visual fast exit: conversational, clinical dosing, definitions, calculations, criteria
-    # (unless an explicit visual keyword like diagram, flowchart, illustration, image is present)
-    visual_explicit = bool(re.search(r'\b(diagram|diagrams|flowchart|flowcharts|illustration|illustrations|schematic|picture|pictures|image|images|draw|drawings|visualize|figure)\b', msg_low))
-    if not visual_explicit:
-        non_visual_regex = (
-            r'\b(dose|dosage|dosing|half[_\s\-]life|side[_\s\-]effect|side[_\s\-]effects|'
-            r'adverse[_\s\-]effect|adverse[_\s\-]effects|contraindication|contraindications|'
-            r'define|definition|definitions|criteria|criterion|history[_\s\-]taking|'
-            r'physical[_\s\-]exam|differential[_\s\-]diagnosis|calculate|calculation|'
-            r'formula|anion[_\s\-]gap|cockcroft|maintenance[_\s\-]fluid)\b'
-        )
-        if re.search(non_visual_regex, msg_low):
-            return "NONE"
-
-        conversational_meta = [
-            "hello", "good morning", "good evening", "hi neura", "hey neura",
-            "thank you", "thanks", "who created you", "what can you do", "can you help me study",
-            "/profile", "/update", "/reset", "/balance", "/wallet", "/deposit"
-        ]
-        if any(msg_low.strip().startswith(c) for c in conversational_meta):
-            return "NONE"
-
-    # 1. Check HISTOLOGY_MICROSCOPY (explicit histology / microscopy / smear / biopsy / stain triggers)
-    histology_pattern = re.compile(
-        r'(?i)\b(histolog\w*|histopatholog\w*|microscop\w*|biopsy|biopsies|'
-        r'h&e|h[_\s\-]and[_\s\-]e|h\s*and\s*e|he[_\s\-]stain|hematoxylin|\beosin\b|giemsa|gram[_\s\-]stain|'
-        r'blood[_\s\-]smear|blood[_\s\-]film|thin[_\s\-]smear|thick[_\s\-]smear|pathology[_\s\-]slide|microscopic[_\s\-]slide|'
-        r'photomicrograph|frozen[_\s\-]section|pap[_\s\-]smear|immunohistochem\w*|ihc[_\s\-]stain|'
-        r'micrograph|stained[_\s\-]slide)\b'
-    )
-    if histology_pattern.search(msg_low):
-        return "HISTOLOGY_MICROSCOPY"
-
-    # 2. Check ANATOMICAL_MAP triggers & topics (gross anatomy, triangles, fossae, relations, tracts)
-    anatomical_triggers = [
-        "anatomy", "anatomical", "cross section", "blood supply", "arterial supply",
-        "venous drainage", "innervation", "lymphatic drainage", "relations of", "parts of",
-        "structure of", "structures of", "circle of willis", "brachial plexus", "inguinal canal",
-        "femoral triangle", "calot", "cystohepatic triangle", "hesselbach", "carotid triangle",
-        "cubital fossa", "popliteal fossa", "cranial nerve", "foramen", "fossa", "sulcus",
-        "spinal cord tracts", "meninges", "tetralogy of fallot", "epidermis layers",
-        "nephron structure", "alveolus structure", "sarcomere structure", "boundaries", "neurovascular"
-    ]
-    if any(t in msg_low for t in anatomical_triggers):
-        return "ANATOMICAL_MAP"
-
-    # 3. Check explicit Flowchart / Pathway / Cycle / Algorithm triggers
-    flowchart_triggers = [
-        "diagram", "illustration", "flowchart", "pathway", "cycle", "cycles",
-        "cascade", "algorithm", "decision tree", "triage", "steps of", "stages of",
-        "mechanism of action", "mechanism of", "moa", "schematic", "draw", "visualize", "chart",
-        "synthesis", "breakdown", "degradation", "replication", "regulation",
-        "signaling", "signal transduction", "action potential", "metabolism",
-        "differentiation", "developmental stages", "life cycle", "lifecycles",
-        "nomogram", "scoring", "resuscitation", "protocol", "guidelines",
-        "sepsis bundle", "resuscitation bundle", "care bundle", "feedback loop", "axis", "transport", "wiggers", "partograph"
-    ]
-    if any(t in msg_low for t in flowchart_triggers):
-        return "FLOWCHART_SCHEMATIC"
-
-    # 4. Check high-yield preclinical & clinical pathway/cycle/mechanism topics across all 11 disciplines
-    flowchart_topics = [
-        # Parasitology & Microbiology
-        "plasmodium", "malaria", "schistosoma", "bilharzia", "leishmania", "kala-azar",
-        "entamoeba", "amoebiasis", "trypanosoma", "sleeping sickness", "chagas",
-        "ascaris", "taenia", "cysticercosis", "echinococcus", "hydatid", "wuchereria",
-        "filariasis", "elephantiasis", "giardia", "giardiasis", "toxoplasma", "toxoplasmosis",
-        "hookworm", "ancylostoma", "necator", "strongyloides", "enterobius", "pinworm",
-        "dracunculus", "guinea worm", "sporulation", "endospore", "spore formation",
-        "viral replication", "hiv replication", "hepatitis b replication", "hbv replication",
-        "bacteriophage", "lytic cycle", "lysogenic cycle", "influenza replication",
-        "cholera toxin", "tetanospasmin", "botulinum toxin", "bacterial conjugation",
-        # Biochemistry & Metabolism
-        "glycolysis", "glycolytic", "krebs", "citric acid cycle", "tca cycle",
-        "gluconeogenesis", "pentose phosphate", "hmp shunt", "urea cycle",
-        "beta-oxidation", "beta oxidation", "fatty acid oxidation", "carnitine shuttle",
-        "electron transport chain", "oxidative phosphorylation", "oxphos", "purine synthesis",
-        "purine salvage", "hgprt", "lesch-nyhan", "pyrimidine synthesis", "glycogenolysis",
-        "glycogenesis", "glycogen metabolism", "cholesterol synthesis", "mevalonate",
-        "steroidogenesis", "cori cycle", "glucose-alanine", "alanine cycle", "cahill cycle",
-        "ethanol metabolism", "heme synthesis", "porphyria",
-        # Physiology & Pharmacology
-        "cardiac action potential", "pacemaker action potential", "sa node action potential",
-        "ventricular action potential", "wiggers diagram", "cardiac cycle", "cardiac conduction",
-        "raas", "renin angiotensin", "renin-angiotensin", "aldosterone cascade",
-        "neuromuscular junction", "excitation-contraction", "countercurrent multiplier",
-        "countercurrent exchange", "oxyhemoglobin dissociation", "bohr effect",
-        "neuronal action potential", "glomerular filtration", "tubular transport",
-        "baroreceptor reflex", "respiratory control", "gpcr", "g-protein", "second messenger",
-        "tyrosine kinase", "mapk", "ras-raf", "jak-stat", "jak stat", "coagulation cascade",
-        "clotting cascade", "hemostasis", "autonomic receptor", "beta-blocker mechanism",
-        "diuretic mechanism", "proton pump inhibitor", "parietal cell acid",
-        "insulin signaling", "nitric oxide signaling", "local anesthetic mechanism",
-        # Immunology & Hematology
-        "hematopoiesis", "haematopoiesis", "b cell development", "b-cell development",
-        "b cell maturation", "t cell development", "t-cell development", "thymic selection",
-        "th1 th2", "th17", "treg", "helper t cell differentiation", "complement cascade",
-        "complement activation", "classical pathway", "alternative pathway", "lectin pathway",
-        "hypersensitivity reaction", "gell and coombs", "mhc class i", "mhc class ii",
-        "antigen presentation", "tcr activation", "immunological synapse", "mast cell degranulation",
-        "respiratory burst", "cytokine storm", "primary hemostasis", "platelet aggregation",
-        "fibrinolysis", "hemoglobin synthesis", "iron metabolism", "hepcidin",
-        "bilirubin metabolism", "erythropoiesis", "hemolytic anemia classification",
-        "sickle cell pathophysiology",
-        # Surgery, O&G, Pediatrics, Internal Medicine
-        "atls", "primary survey", "rule of nines", "parkland formula", "burns resuscitation",
-        "glasgow coma", "gcs", "acute abdomen triage", "alvarado score", "sepsis bundle",
-        "menstrual cycle", "cardinal movements of labor", "stages of labor", "apgar",
-        "bishop score", "postpartum hemorrhage", "pph algorithm", "preeclampsia management",
-        "fetal circulation", "partograph", "rh isoimmunization", "imci", "developmental milestones",
-        "neonatal resuscitation", "nrp", "dehydration plan", "bhutani nomogram",
-        "congenital heart defect", "pals algorithm", "febrile seizure", "pediatric immunization",
-        "meningitis csf", "jvp waveform", "dka protocol", "acid-base disturbance",
-        "acls cardiac arrest", "acls tachycardia", "acls bradycardia", "shock classification",
-        "portacaval anastomosis", "portal hypertension", "granuloma cascade", "atherosclerosis pathogenesis",
-        "acute coronary syndrome triage"
-    ]
-    if any(topic in msg_low for topic in flowchart_topics):
-        return "FLOWCHART_SCHEMATIC"
-
-    # 5. Check generic visual triggers (default to FLOWCHART_SCHEMATIC if general image requested)
-    generic_triggers = [
-        "picture", "image", "show me", "illustrate", "get a", "can i get", "view"
-    ]
-    if any(t in msg_low for t in generic_triggers):
-        return "FLOWCHART_SCHEMATIC"
-
-    return "NONE"
-
-def should_generate_medical_illustration(user_msg: str, ai_answer: str = "") -> bool:
-    """Detects if query or medical topic warrants a visual anatomical, histological or clinical illustration (Pre-clinical & Clinical 200L-600L)"""
-    return detect_visual_intent_modality(user_msg, ai_answer) != "NONE"
-
-# ==========================================
-# HYBRID SEMANTIC VISUAL ENGINE & IN-MEMORY VECTOR MATRIX
-# ==========================================
-ATLAS_PATH = os.path.join(os.path.dirname(__file__), "medical_atlas.json")
-
-def load_medical_atlas(file_path: str = ATLAS_PATH) -> list:
-    """Loads the verified medical diagram atlas from the decoupled JSON data file."""
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-        except Exception as e:
-            print(f"⚠️ Error loading medical_atlas.json: {e}")
-    return []
-
-MEDICAL_ATLAS_DATA = load_medical_atlas()
-ATLAS_EMBEDDINGS = []
-ATLAS_ENTRIES = []
-
-def init_atlas_embeddings():
-    """Instantly loads pre-computed normalized 384-dim vector embeddings from medical_atlas.json (0ms boot, zero ONNX memory overhead)."""
-    global ATLAS_EMBEDDINGS, ATLAS_ENTRIES
-    if not MEDICAL_ATLAS_DATA:
-        return
-    valid_entries = []
-    loaded_vecs = []
-    for entry in MEDICAL_ATLAS_DATA:
-        vec = entry.get("embedding")
-        if vec and isinstance(vec, list) and len(vec) == 384:
-            arr = np.array(vec, dtype=np.float32)
-            loaded_vecs.append(arr)
-            valid_entries.append(entry)
-
-    ATLAS_EMBEDDINGS = loaded_vecs
-    ATLAS_ENTRIES = valid_entries
-    print(f"[ATLAS] In-Memory Pre-Computed Vector Matrix Loaded: {len(ATLAS_ENTRIES)} topics (0ms boot, zero ONNX memory spike).")
-
-init_atlas_embeddings()
-
-def search_atlas_vector(query_text: str, threshold: float = 0.73) -> tuple:
-    """Performs <1ms cosine similarity search against pre-embedded in-memory atlas matrix."""
-    if not ATLAS_EMBEDDINGS or embedder is None or not query_text:
-        return None, None, None, 0.0
-    try:
-        q_vec = list(embedder.embed([query_text]))[0]
-        q_arr = np.array(q_vec, dtype=np.float32)
-        q_norm = np.linalg.norm(q_arr)
-        if q_norm > 0:
-            q_arr = q_arr / q_norm
-
-        best_score = -1.0
-        best_entry = None
-        for vec, entry in zip(ATLAS_EMBEDDINGS, ATLAS_ENTRIES):
-            sim = float(np.dot(q_arr, vec))
-            if sim > best_score:
-                best_score = sim
-                best_entry = entry
-
-        if best_score >= threshold and best_entry:
-            return best_entry["image_url"], best_entry["title"], best_entry.get("source", "Peer-Reviewed Scientific Archive"), best_score
-        return None, None, None, best_score
-    except Exception as e:
-        print(f"[ATLAS ERROR] Atlas vector search error: {e}")
-        return None, None, None, 0.0
-
-# In-memory LRU/dict cache for dynamic queries (caches both positive hits and negative misses)
-DIAGRAM_CACHE = {}
-
-# Concurrency semaphore to throttle outbound Wikipedia requests to max 20 simultaneous
-_WIKI_SEMAPHORE = asyncio.Semaphore(20)
-
-async def retrieve_real_medical_diagram(clean_topic: str, modality: str = "FLOWCHART_SCHEMATIC") -> tuple:
-    """
-    Controlled 2-Tier Visual Retrieval (Zero-Regex, Pure Semantic, High-Throughput):
-    1. Tier 1: In-Memory FastEmbed Vector Search (<1ms cosine similarity against 142 curated topics).
-    2. Tier 2: Whitelist-Restricted Live Search on Wikimedia Commons / OpenStax (20-connection pool with negative caching).
-    Returns: (image_url, title, source) or (None, None, None)
-    """
-    clean_topic = str(clean_topic).strip()
-    if not clean_topic:
-        return None, None, None
-
-    # Tier 1: In-Memory FastEmbed Vector Search
-    img_url, title, source, sim_score = search_atlas_vector(clean_topic, threshold=0.73)
-    if img_url:
-        print(f"[ATLAS MATCH] In-Memory Atlas Vector Match (Similarity: {sim_score:.3f}): '{title}'")
-        return img_url, title, source
-
-    # Check In-Memory Dynamic Cache (Returns in 0ms for both cached images and cached negative misses)
-    cache_key = f"{modality}:{clean_topic.lower()}"
-    if cache_key in DIAGRAM_CACHE:
-        return DIAGRAM_CACHE[cache_key]
-
-    # Tier 2: Whitelist-Restricted Live Search on Wikimedia Commons
-    import urllib.parse
-    headers = {"User-Agent": "NeuraAI-MBBS-Bot/2.0 (contact: medical.support@neura.ai)"}
-
-    search_queries = [
-        f"{clean_topic} diagram",
-        f"{clean_topic} flowchart" if modality == "FLOWCHART_SCHEMATIC" else f"{clean_topic} anatomy",
-        clean_topic
-    ]
-
-    search_url = "https://en.wikipedia.org/w/api.php"
-    try:
-        async with _WIKI_SEMAPHORE:
-            async with httpx.AsyncClient(timeout=2.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=40)) as client:
-                for sq in search_queries:
-                    search_params = {"action": "opensearch", "search": sq, "limit": 4, "namespace": 0, "format": "json"}
-                    s_res = await client.get(search_url, params=search_params, headers=headers)
-                    if s_res.status_code == 200:
-                        s_data = s_res.json()
-                        titles = s_data[1] if isinstance(s_data, (list, tuple)) and len(s_data) > 1 else []
-                        for t in titles:
-                            if _reject_micrograph_candidate(t, "", modality):
-                                continue
-                            encoded_title = urllib.parse.quote(t.replace(" ", "_"))
-                            sum_res = await client.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded_title}", headers=headers)
-                            if sum_res.status_code == 200:
-                                data = sum_res.json()
-                                candidate_url = data.get("originalimage", {}).get("source") or data.get("thumbnail", {}).get("source")
-                                if candidate_url and any(candidate_url.lower().endswith(ext) or ext in candidate_url.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"]):
-                                    if not any(bad in candidate_url.lower() for bad in ["symbol", "icon", "stub", "question_mark", "disambig"]):
-                                        if not _reject_micrograph_candidate(t, candidate_url, modality):
-                                            res_tuple = (candidate_url, t, "Wikimedia Commons / Peer-Reviewed Archive")
-                                            DIAGRAM_CACHE[cache_key] = res_tuple
-                                            return res_tuple
-    except Exception as e:
-        logger.warning(f"Restricted live diagram fetch: {e}")
-
-    # Negative Caching: Remember that no verified diagram exists for this query to prevent repeated outbound lookups
-    DIAGRAM_CACHE[cache_key] = (None, None, None)
-    return None, None, None
 
 async def initialize_flutterwave_transaction(amount_ngn: int, email: str, phone: str, name: str = "Student"):
     """Initializes a Flutterwave payment and returns the hosted checkout URL"""
@@ -1334,18 +1028,12 @@ def extract_medical_terms(user_msg: str) -> list:
     if joined_query and joined_query not in phrases:
         phrases.insert(0, joined_query)
         
-    print(f"🔍 Extracted search keywords: {phrases} (from: '{user_msg}')")
+    print(f"[SEARCH] Extracted search keywords: {phrases} (from: '{user_msg}')")
     return phrases
 
 async def normalize_medical_query(user_msg: str) -> dict:
-    """Single-pass LLM semantic extractor: resolves typos, Nigerian medical student slang, extracts clean textbook search phrases, visual intent, and exact medical topic."""
-    fallback_intent = detect_visual_intent_modality(user_msg)
-    fallback_result = {
-        "search_keywords": [user_msg],
-        "clean_medical_topic": user_msg,
-        "requires_diagram": fallback_intent != "NONE",
-        "modality": fallback_intent if fallback_intent != "NONE" else "FLOWCHART_SCHEMATIC"
-    }
+    """Normalizes medical queries: resolves typos, slang, and extracts authoritative textbook search phrases."""
+    fallback_result = {"search_keywords": extract_medical_terms(user_msg)}
     if not OPENROUTER_API_KEY:
         return fallback_result
 
@@ -1357,12 +1045,9 @@ async def normalize_medical_query(user_msg: str) -> dict:
         "X-Title": "NEURA AI Medical Assistant"
     }
     system_prompt = (
-        "You are an expert MBBS medical query normalizer. The student may send questions with typos, shorthand, Nigerian medical student slang, or visual diagram requests.\n"
-        "Output ONLY a valid JSON object with four fields:\n"
+        "You are an expert MBBS medical query normalizer. The student may send questions with typos, shorthand, or Nigerian medical student slang.\n"
+        "Output ONLY a valid JSON object with one field:\n"
         "1. 'search_keywords': A list of 1 to 3 authoritative medical textbook search phrases (fix typos, expand acronyms, e.g. ['B-cell lymphopoiesis in bone marrow', 'B-lymphocyte maturation stages']).\n"
-        "2. 'clean_medical_topic': The clean authoritative medical topic name (e.g. 'B-cell development', 'Life cycle of Plasmodium falciparum', 'Renin-Angiotensin-Aldosterone System').\n"
-        "3. 'requires_diagram': Boolean true if the user explicitly asked for a diagram/flowchart/illustration/picture/visual OR if the core concept is inherently a pathway/cycle/anatomical map, else false.\n"
-        "4. 'modality': One of 'FLOWCHART_SCHEMATIC', 'ANATOMICAL_MAP', 'HISTOLOGY_SLIDE', 'CLINICAL_ALGORITHM', or 'NONE'.\n"
         "Output ONLY valid JSON (no markdown, no ```json)."
     )
     payload = {
@@ -1372,7 +1057,7 @@ async def normalize_medical_query(user_msg: str) -> dict:
             {"role": "user", "content": user_msg}
         ],
         "temperature": 0.0,
-        "max_tokens": 160
+        "max_tokens": 120
     }
     try:
         async with httpx.AsyncClient(timeout=3.5) as client:
@@ -1381,49 +1066,12 @@ async def normalize_medical_query(user_msg: str) -> dict:
                 text = res.json()["choices"][0]["message"]["content"]
                 text = text.replace("```json", "").replace("```", "").strip()
                 parsed = json.loads(text)
-                if isinstance(parsed, dict) and "search_keywords" in parsed and "clean_medical_topic" in parsed:
+                if isinstance(parsed, dict) and "search_keywords" in parsed:
                     return parsed
     except Exception as e:
         print(f"⚠️ Micro-LLM normalizer error: {e}")
 
     return fallback_result
-        
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://neura-ai.org",
-        "X-Title": "NEURA AI Medical Assistant"
-    }
-    system_prompt = (
-        "You are an expert MBBS medical query normalizer. The student may send questions with typos, shorthand, Nigerian medical student slang, or visual requests (e.g. 'can I get diagram of b cel dev in body').\n"
-        "Output ONLY a JSON object with two fields:\n"
-        "1. 'search_keywords': A list of 1 to 3 authoritative medical textbook search phrases. Fix all typos and expand abbreviations (e.g. ['B-cell development and maturation', 'B-lymphocyte lymphopoiesis in bone marrow']). Strip visual words like 'diagram', 'picture', 'show me'.\n"
-        "2. 'diagram_topic': The clean medical anatomical/pathological subject if a visual/diagram was requested or appropriate (e.g. 'B-cell development'), else null.\n"
-        "Output ONLY valid JSON (no markdown, no ```json)."
-    )
-    payload = {
-        "model": "deepseek/deepseek-v4-flash",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_msg}
-        ],
-        "temperature": 0.0,
-        "max_tokens": 140
-    }
-    try:
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            res = await client.post(url, headers=headers, json=payload)
-            if res.status_code == 200:
-                text = res.json()["choices"][0]["message"]["content"]
-                text = text.replace("```json", "").replace("```", "").strip()
-                parsed = json.loads(text)
-                if isinstance(parsed, dict) and "search_keywords" in parsed:
-                    return parsed
-    except Exception as e:
-        print(f"⚠️ Micro-LLM normalizer error (using fallback): {e}")
-        
-    return {"search_keywords": extract_medical_terms(user_msg), "diagram_topic": None}
 
 def extract_book_keywords(preferred_books: list) -> list:
     """Extract core textbook keywords for matching (e.g., 'lippincott', 'robbins', 'moore', 'hoffbrand')"""
@@ -2280,12 +1928,9 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         else:
             search_term = query_to_search
 
-        # Step 1: Single-Pass LLM Semantic Normalization & Concept Extraction
+        # Step 1: LLM Semantic Normalization (extract authoritative textbook keywords)
         normalized_data = await normalize_medical_query(search_term)
         medical_terms = normalized_data.get("search_keywords", [search_term])
-        clean_topic = normalized_data.get("clean_medical_topic", search_term)
-        requires_diagram = normalized_data.get("requires_diagram", False)
-        visual_modality = normalized_data.get("modality", "FLOWCHART_SCHEMATIC")
 
         # Step 1.5: Check for explicit book overrides (e.g. if user says "Use pharmacology")
         active_books = get_explicit_book_override(search_term, preferred_books_list)
@@ -2299,7 +1944,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         # If button click [ 📝 Generate MCQs ] was tapped, launch the 1-by-1 interactive quiz!
         if is_button_quiz:
-            clean_quiz_topic = clean_topic.title()
+            clean_quiz_topic = query_to_search.title()
             await start_interactive_quiz(sender_phone, clean_quiz_topic, search_res)
             return
 
@@ -2313,14 +1958,6 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             context_blocks.append(block)
 
         formatted_context = "\n\n".join(context_blocks)
-        
-        visual_instruction = ""
-        if requires_diagram:
-            visual_instruction = (
-                f"\n\nCRITICAL VISUAL REQUIREMENT: The student requested a visual diagram/flowchart for '{clean_topic}'. "
-                f"In your response, format the pathway or mechanism as a clean, stepwise flowchart (e.g. Stage 1 ➔ Stage 2 ➔ Stage 3) using bold headings and bullet points. "
-                f"At the very end of your response, append the exact note: '💡 _Note: We are actively expanding NEURA AI\'s visual image generation library for this topic._'"
-            )
 
         if is_tagged_reply and last_assistant_msg:
             tagged_snippet = last_assistant_msg[:400]
@@ -2328,13 +1965,13 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 f"THE USER EXPLICITLY TAGGED/QUOTED YOUR PREVIOUS WHATSAPP MESSAGE BELOW:\n\"\"\"{tagged_snippet}\"\"\"\n\n"
                 f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\n"
                 f"USER'S QUESTION/INSTRUCTION REGARDING THE TAGGED MESSAGE:\n{query_to_search}\n\n"
-                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly.{visual_instruction}"
+                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly."
             )
         else:
             user_prompt = (
                 f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\n"
                 f"STUDENT QUESTION:\n{query_to_search}\n\n"
-                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly.{visual_instruction}"
+                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly."
             )
         
         # Build dynamic user context
@@ -2393,26 +2030,6 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Check if the answer indicates information is missing from textbooks
         ai_lower = ai_answer.lower()
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
-
-        # Deliver verified visual diagram in background if visual intent was detected (with strict 3.5s deadline)
-        if intent != "QUIZ" and not is_not_covered and requires_diagram:
-            async def _send_diagram_bg(topic, mod, phone):
-                try:
-                    img_url, img_title, img_source = await asyncio.wait_for(
-                        retrieve_real_medical_diagram(topic, modality=mod),
-                        timeout=3.5
-                    )
-                    if img_url:
-                        figure_title = img_title or topic
-                        source_label = img_source or "Peer-Reviewed Scientific Archive"
-                        img_caption = f"🔬 *Authentic Medical Figure:* _{figure_title}_\n📚 _Source: {source_label}_"
-                        await send_whatsapp_image_url(phone, img_url, img_caption)
-                except asyncio.TimeoutError:
-                    pass
-                except Exception as img_err:
-                    print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
-
-            asyncio.create_task(_send_diagram_bg(clean_topic, visual_modality, sender_phone))
 
         # Attach interactive follow-up button for quick MCQ generation ONLY if it was a valid medical answer
         if intent != "QUIZ" and not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
