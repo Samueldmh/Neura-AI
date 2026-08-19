@@ -4,6 +4,9 @@ import json
 import logging
 import traceback
 import httpx
+import hmac
+import hashlib
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, Request, Response
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
@@ -24,6 +27,10 @@ QDRANT_URL = os.getenv("QDRANT_URL", "https://76ce5d85-4701-4671-8c3f-02bcc741b0
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
+PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
+FLUTTERWAVE_SECRET_KEY = os.getenv("FLUTTERWAVE_SECRET_KEY", "")
+FLUTTERWAVE_SECRET_HASH = os.getenv("FLUTTERWAVE_SECRET_HASH", "neura_flw_hash_2026")
+BASE_URL = os.getenv("BASE_URL", "https://neura-ai-df6q.onrender.com")
 
 # Official Meta WhatsApp Cloud API credentials
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAM3F01f3nYBSKwpMPZAU2Nhgdvr7b4481UQ2sCTosr3Hu6UIL3U5BTBiN8I5932PfnEx6GzDWiUfwMYiFok4eZCaMrLPNhhMvnAQ27fVsxxqpxIvES3SYhSi6speeab3FaBq8anZCoPVXS2f9LXA7b7ZA2kWrZBRA8zmBv03cBe2yTR3OWAAhgEh0lEk3ULqfAZDZD")
@@ -248,15 +255,24 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
                                     full_text += content
                                     current_chunk += content
                                     
-                                    # Send first chunk fast (~220 chars) so student gets instant answer, then larger paragraphs
-                                    threshold = 220 if chunk_sent_count == 0 else 750
-                                    if "\n\n" in current_chunk and len(current_chunk) > threshold:
-                                        parts = current_chunk.rsplit("\n\n", 1)
-                                        send_part = parts[0].strip()
-                                        if send_part:
-                                            await send_whatsapp_cloud_msg(sender_phone, send_part)
-                                            chunk_sent_count += 1
-                                        current_chunk = parts[1] if len(parts) > 1 else ""
+                                    # Fast first-chunk dispatch (<120 chars on newline) so student gets instant answer in <1.5s
+                                    if chunk_sent_count == 0:
+                                        if ("\n" in current_chunk and len(current_chunk) > 90) or len(current_chunk) > 180:
+                                            split_idx = current_chunk.rfind("\n")
+                                            if split_idx == -1: split_idx = len(current_chunk)
+                                            send_part = current_chunk[:split_idx].strip()
+                                            if send_part:
+                                                await send_whatsapp_cloud_msg(sender_phone, send_part)
+                                                chunk_sent_count += 1
+                                                current_chunk = current_chunk[split_idx:].strip()
+                                    else:
+                                        if "\n\n" in current_chunk and len(current_chunk) > 650:
+                                            parts = current_chunk.rsplit("\n\n", 1)
+                                            send_part = parts[0].strip()
+                                            if send_part:
+                                                await send_whatsapp_cloud_msg(sender_phone, send_part)
+                                                chunk_sent_count += 1
+                                            current_chunk = parts[1] if len(parts) > 1 else ""
                         except json.JSONDecodeError:
                             pass
                             
@@ -603,7 +619,8 @@ async def send_whatsapp_interactive_button(to_number: str, body_text: str, butto
         print(f"Meta Graph API Button Send Status {res.status_code}: {res.text}")
 
 async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_label: str, url_target: str):
-    """Sends an interactive Call-To-Action (CTA) URL button to open In-App WebViews"""
+    """Sends an Interactive CTA URL Button that opens directly in WhatsApp's in-app webview"""
+    body_text = format_whatsapp_text(body_text)
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
@@ -1787,6 +1804,157 @@ async def retrieve_real_medical_diagram(topic_or_candidates, modality: str = "FL
         
     return None, None
 
+async def initialize_flutterwave_transaction(amount_ngn: int, email: str, phone: str, name: str = "Student"):
+    """Initializes a Flutterwave payment and returns the hosted checkout URL"""
+    import uuid
+    url = "https://api.flutterwave.com/v3/payments"
+    headers = {
+        "Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY.strip()}",
+        "Content-Type": "application/json"
+    }
+    reference = f"NEURA_{phone}_{uuid.uuid4().hex[:8]}"
+    payload = {
+        "tx_ref": reference,
+        "amount": str(amount_ngn),
+        "currency": "NGN",
+        "payment_options": "banktransfer,card",
+        "redirect_url": f"{BASE_URL}/api/payment-complete",
+        "customer": {
+            "email": email,
+            "phonenumber": phone,
+            "name": name
+        },
+        "customizations": {
+            "title": "NEURA AI Wallet Top-Up",
+            "description": f"NEURA AI MBBS Study Assistant (₦{amount_ngn:,})",
+            "logo": "https://raw.githubusercontent.com/Samueldmh/Neura-AI/main/assets/logo.png"
+        }
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            data = res.json()
+            if data.get("status") == "success" and "data" in data and "link" in data["data"]:
+                return data["data"]["link"]
+            print(f"Flutterwave init response: {data}")
+    except Exception as e:
+        print(f"Error initializing Flutterwave: {e}")
+    return None
+
+async def initialize_paystack_transaction(amount_ngn: int, email: str, phone: str):
+    """Initializes a Paystack transaction and returns the checkout URL (Fallback)"""
+    import uuid
+    url = "https://api.paystack.co/transaction/initialize"
+    headers = {
+        "Authorization": f"Bearer {PAYSTACK_SECRET_KEY.strip()}",
+        "Content-Type": "application/json"
+    }
+    reference = f"NEURA_{phone}_{uuid.uuid4().hex[:8]}"
+    payload = {
+        "amount": amount_ngn * 100,
+        "email": email,
+        "reference": reference,
+        "callback_url": f"{BASE_URL}/api/payment-complete",
+        "metadata": {
+            "phone_number": phone,
+            "custom_fields": [
+                {
+                    "display_name": "Phone Number",
+                    "variable_name": "phone_number",
+                    "value": phone
+                },
+                {
+                    "display_name": "Product",
+                    "variable_name": "NEURA AI Wallet Credit"
+                }
+            ]
+        }
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            data = res.json()
+            if data.get("status"):
+                return data["data"]["authorization_url"]
+            print(f"Paystack init failed: {data}")
+    except Exception as e:
+        print(f"Error initializing Paystack: {e}")
+    return None
+
+async def send_deposit_menu(sender_phone: str, current_balance: float):
+    """Sends the hybrid deposit menu with quick presets and custom amount prompt"""
+    body_text = (
+        f"💳 *NEURA AI Wallet Top-Up*\n\n"
+        f"• Current Balance: *₦{current_balance:.2f}*\n"
+        f"• Minimum Deposit: *₦500*\n\n"
+        f"Tap a quick tier below, or reply with any custom amount (e.g. *500*, *1000*, *1500*, or */deposit 500*):"
+    )
+    options = [
+        {"id": "DEPOSIT_500", "title": "₦500 Deposit", "description": "~180 In-Depth Medical Explanations"},
+        {"id": "DEPOSIT_1500", "title": "₦1,500 Deposit", "description": "~550 In-Depth Medical Explanations"},
+        {"id": "DEPOSIT_3000", "title": "₦3,000 Deposit", "description": "~1,200 In-Depth Medical Explanations"},
+    ]
+    await send_whatsapp_interactive_list(sender_phone, body_text, "Select Deposit", options)
+
+async def handle_deposit_request(sender_phone: str, user_msg: str) -> bool:
+    """Parses deposit selection or custom typed amount and sends an In-App Flutterwave CTA button"""
+    msg_trim = user_msg.strip().upper()
+    amount_ngn = None
+    if msg_trim == "DEPOSIT_500":
+        amount_ngn = 500
+    elif msg_trim == "DEPOSIT_1500":
+        amount_ngn = 1500
+    elif msg_trim == "DEPOSIT_3000":
+        amount_ngn = 3000
+    elif msg_trim == "DEPOSIT_5000":
+        amount_ngn = 5000
+    elif msg_trim == "DEPOSIT_10000":
+        amount_ngn = 10000
+    elif msg_trim == "DEPOSIT_20000":
+        amount_ngn = 20000
+    else:
+        m = re.match(r'^(?:/deposit\s+)?(?:₦|NGN\s*)?(\d{1,3}(?:,\d{3})*|\d+)(?:\.00)?$', user_msg.strip(), re.IGNORECASE)
+        if m:
+            try:
+                amount_ngn = int(m.group(1).replace(',', ''))
+            except:
+                pass
+
+    if amount_ngn is None:
+        return False
+
+    if amount_ngn < 500:
+        await send_whatsapp_cloud_msg(
+            sender_phone,
+            "⚠️ Minimum deposit amount is *₦500*.\n\nPlease choose ₦500 or more (e.g. *500*, *1000*, *2000*, *5000*)."
+        )
+        return True
+
+    email = f"user_{sender_phone.replace('+', '')}@neura.ai"
+    
+    # Try Flutterwave first, fallback to Paystack if configured
+    auth_url = None
+    if FLUTTERWAVE_SECRET_KEY:
+        auth_url = await initialize_flutterwave_transaction(amount_ngn, email, sender_phone)
+    elif PAYSTACK_SECRET_KEY:
+        auth_url = await initialize_paystack_transaction(amount_ngn, email, sender_phone)
+
+    if auth_url:
+        card_body = (
+            f"💳 *NEURA AI In-App Checkout*\n\n"
+            f"• Amount: *₦{amount_ngn:,}*\n"
+            f"• Payment Gateway: *Flutterwave*\n"
+            f"• Status: *Ready*\n\n"
+            f"Tap the button below to complete your deposit directly inside WhatsApp (Supports all Nigerian Cards, Bank Transfer & USSD):"
+        )
+        await send_whatsapp_cta_url_button(sender_phone, card_body, f"Pay ₦{amount_ngn:,} Now", auth_url)
+    else:
+        await send_whatsapp_cloud_msg(
+            sender_phone,
+            "Sorry, we couldn't generate the payment link right now. Please verify your payment gateway setup or try again in a moment!"
+        )
+    return True
+
 async def send_commands_menu(sender_phone: str):
     """Sends an interactive WhatsApp List containing all available slash commands with 1-tap execution"""
     body_text = (
@@ -1794,10 +1962,13 @@ async def send_commands_menu(sender_phone: str):
         "Tap a command below to execute it instantly, or type any of them directly into the chat:"
     )
     options = [
+        {"id": "/wallet", "title": "💳 /wallet", "description": "Check balance, total spent & queries remaining"},
+        {"id": "/deposit", "title": "💰 /deposit", "description": "Top up your study wallet (min ₦500)"},
         {"id": "/profile", "title": "👤 /profile", "description": "View your class, level & active textbooks"},
         {"id": "/update books", "title": "📚 /update books", "description": "Change or add your preferred medical textbooks"},
         {"id": "/update level", "title": "🎓 /update level", "description": "Update your current class/level (e.g. 400L)"},
         {"id": "/update name", "title": "✏️ /update name", "description": "Update your student display name"},
+        {"id": "/clearwallet", "title": "🗑️ /clearwallet", "description": "Reset wallet balance to ₦0.00 (for testing)"},
         {"id": "/reset", "title": "🔄 /reset", "description": "Reset full profile & chat history to start over"},
         {"id": "/feedback", "title": "📝 /feedback", "description": "Share anonymous feedback on NEURA AI"},
     ]
@@ -1984,15 +2155,64 @@ def extract_book_keywords(preferred_books: list) -> list:
             keywords.extend(words)
     return keywords
 
+async def search_single_book(query_vector: list, book: str, limit: int = 4) -> list:
+    if not book or not isinstance(book, str) or book.startswith("Skip"):
+        return []
+    try:
+        res = await qdrant.query_points(
+            collection_name=COLLECTION_NAME,
+            query=query_vector,
+            query_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="book_title",
+                        match=models.MatchValue(value=book)
+                    )
+                ]
+            ),
+            limit=limit
+        )
+        if res.points:
+            return res.points
+    except Exception:
+        pass
+
+    # Fuzzy keyword fallback
+    book_kw = ""
+    b_lower = book.lower()
+    if "lippincott" in b_lower: book_kw = "lippincott"
+    elif "robbins" in b_lower: book_kw = "robbins"
+    elif "haematology" in b_lower or "hoffbrand" in b_lower: book_kw = "haematology"
+    elif "microbiology" in b_lower or "jawetz" in b_lower: book_kw = "microbiology"
+    elif "sembulingam" in b_lower: book_kw = "sembulingam"
+    elif "moore" in b_lower or "anatomy" in b_lower: book_kw = "moore"
+
+    if book_kw:
+        try:
+            res = await qdrant.query_points(
+                collection_name=COLLECTION_NAME,
+                query=query_vector,
+                query_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="book_title",
+                            match=models.MatchText(text=book_kw)
+                        )
+                    ]
+                ),
+                limit=limit
+            )
+            return res.points
+        except Exception:
+            pass
+    return []
+
 async def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None) -> list:
-    """Search Qdrant securely per textbook to guarantee every selected book gets equal representation."""
+    """Search Qdrant in PARALLEL across all selected textbooks for sub-second retrieval."""
     try:
         loop = asyncio.get_running_loop()
         query_vector = await loop.run_in_executor(embedding_pool, get_embedding_sync, query_text)
-        
-        all_points = []
-        
-        # If no preferred books are selected, fall back to a generic global search
+
         if not preferred_books:
             res = await qdrant.query_points(
                 collection_name=COLLECTION_NAME,
@@ -2000,71 +2220,11 @@ async def search_qdrant(query_text: str, limit: int = 4, preferred_books: list =
                 limit=limit
             )
             return res.points
-            
-        # Guarantee equal representation by querying Qdrant for EACH book
-        for book in preferred_books:
-            if not book or not isinstance(book, str) or book.startswith("Skip"):
-                continue
-                
-            hits = []
-            # Attempt 1: Exact Match
-            try:
-                res = await qdrant.query_points(
-                    collection_name=COLLECTION_NAME,
-                    query=query_vector,
-                    query_filter=models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="book_title",
-                                match=models.MatchValue(value=book)
-                            )
-                        ]
-                    ),
-                    limit=limit
-                )
-                hits = res.points
-            except Exception as e:
-                hits = []
 
-            # Attempt 2: Fuzzy keyword match if exact string match returned 0 hits
-            if not hits:
-                book_kw = ""
-                b_lower = book.lower()
-                if "lippincott" in b_lower:
-                    book_kw = "lippincott"
-                elif "robbins" in b_lower:
-                    book_kw = "robbins"
-                elif "haematology" in b_lower or "hoffbrand" in b_lower:
-                    book_kw = "haematology"
-                elif "microbiology" in b_lower or "jawetz" in b_lower:
-                    book_kw = "microbiology"
-                elif "sembulingam" in b_lower:
-                    book_kw = "sembulingam"
-                elif "moore" in b_lower or "anatomy" in b_lower:
-                    book_kw = "moore"
-                
-                if book_kw:
-                    try:
-                        res = await qdrant.query_points(
-                            collection_name=COLLECTION_NAME,
-                            query=query_vector,
-                            query_filter=models.Filter(
-                                must=[
-                                    models.FieldCondition(
-                                        key="book_title",
-                                        match=models.MatchText(text=book_kw)
-                                    )
-                                ]
-                            ),
-                            limit=limit
-                        )
-                        hits = res.points
-                    except Exception as fuzzy_e:
-                        hits = []
-                        
-            all_points.extend(hits)
-                
-        # Sort the combined hits from all books by score
+        # Query all selected textbooks concurrently in parallel!
+        tasks = [search_single_book(query_vector, b, limit=limit) for b in preferred_books if b and not b.startswith("Skip")]
+        book_results = await asyncio.gather(*tasks)
+        all_points = [p for sub in book_results for p in sub]
         all_points.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
         return all_points
 
@@ -2654,60 +2814,104 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 level = user_doc.get("level", "Unknown Level")
                 preferred_books_list = user_doc.get("preferred_books_list", [])
 
-        # Check for profile commands or menu first
+        # Check for profile and wallet commands first
         msg_lower = user_msg.strip().lower()
-        if msg_lower in ["/", "/help", "help", "menu", "commands", "/menu", "/commands", "/start"]:
-            await send_commands_menu(sender_phone)
-            return
+        if (msg_lower.startswith("/") or msg_lower in ["topup_wallet", "start_deposit", "clearwallet", "deposit", "wallet", "balance", "clear wallet", "help", "menu", "commands"]):
+            if msg_lower in ["/", "/help", "help", "menu", "commands", "/menu", "/commands", "/start"]:
+                await send_commands_menu(sender_phone)
+                return
 
-        if msg_lower.startswith("/") and users_col is not None:
-            if msg_lower == "/reset":
-                await users_col.delete_one({"user_id": sender_phone})
-                if chat_history_col is not None:
-                    await chat_history_col.delete_one({"user_id": sender_phone})
+            if msg_lower in ["/clearwallet", "/clear_wallet", "/clear wallet", "/resetwallet", "/reset_wallet", "/emptywallet", "/empty_wallet", "clearwallet"]:
+                if users_col is not None:
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"wallet_balance_ngn": 0.0}}, upsert=True)
+                await send_whatsapp_cloud_msg(
+                    sender_phone,
+                    "🗑️ *Wallet Cleared!*\n\nYour wallet balance has been reset to *₦0.00* for testing.\n\nType */deposit* to test depositing funds again, or ask a question to test the low-balance prompt!"
+                )
+                return
+
+            if msg_lower in ["/wallet", "/balance", "wallet", "balance"]:
+                balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
+                spent = user_doc.get("total_spent_ngn", 0.0) if user_doc else 0.0
+                est_queries = int(balance // 2.75)
+                wallet_msg = (
+                    f"💳 *NEURA AI Wallet*\n\n"
+                    f"• Available Balance: *₦{balance:.2f}*\n"
+                    f"• Total Spent: *₦{spent:.2f}*\n"
+                    f"• Estimated Queries Remaining: *~{est_queries}*\n\n"
+                    f"Type */deposit* to top up your wallet with any custom amount (min ₦500)!"
+                )
                 await send_whatsapp_interactive_button(
                     sender_phone,
-                    "✅ Your profile and chat history have been completely reset!\n\nTap the button below to set up your profile:",
-                    [{"id": "START_ONBOARDING", "title": "🚀 Start Setup"}]
+                    wallet_msg,
+                    [{"id": "TOPUP_WALLET", "title": "💳 Deposit ₦500+"}]
                 )
                 return
-            elif msg_lower == "/profile":
-                books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
-                await send_whatsapp_cloud_msg(
-                    sender_phone, 
-                    f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Books:\n  - {books_str}\n\n"
-                    f"📝 *Feedback Survey:* https://forms.gle/dNr7SV5EUiqiFySx5"
-                )
+
+            if msg_lower in ["/deposit", "/topup", "topup_wallet", "start_deposit", "deposit", "topup"]:
+                balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
+                await send_deposit_menu(sender_phone, balance)
                 return
-            elif msg_lower == "/feedback":
-                feedback_msg = (
-                    "📝 *NEURA AI Beta Feedback Survey*\n\n"
-                    "Your feedback helps us make NEURA AI 10x better for medical students!\n\n"
-                    "This survey is 100% anonymous (takes under 2 minutes):\n"
-                    "👉 https://forms.gle/dNr7SV5EUiqiFySx5\n\n"
-                    "Thank you for beta testing NEURA AI! 🧠⚡"
-                )
-                await send_whatsapp_cloud_msg(sender_phone, feedback_msg)
-                return
-            elif msg_lower == "/update name":
-                await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_NAME"}})
-                await send_whatsapp_cloud_msg(sender_phone, "What would you like to change your name to?")
-                return
-            elif msg_lower == "/update level":
-                await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_LEVEL"}})
-                await send_whatsapp_interactive_list(
-                    sender_phone, 
-                    "What is your new medical class/level?",
-                    "Select Level",
-                    ["200L", "300L", "400L", "500L", "600L"]
-                )
-                return
-            elif msg_lower == "/update books":
-                await users_col.update_one({"user_id": sender_phone}, {"$set": {"preferred_books_list": []}})
-                has_subjects = await send_next_subject_menu(sender_phone, level)
-                if not has_subjects:
-                    await complete_onboarding(sender_phone)
-                return
+
+            if msg_lower.startswith("/deposit ") or msg_lower.startswith("deposit "):
+                handled = await handle_deposit_request(sender_phone, user_msg)
+                if handled:
+                    return
+
+            if users_col is not None:
+                if msg_lower == "/reset":
+                    await users_col.delete_one({"user_id": sender_phone})
+                    if chat_history_col is not None:
+                        await chat_history_col.delete_one({"user_id": sender_phone})
+                    await send_whatsapp_interactive_button(
+                        sender_phone,
+                        "✅ Your profile and chat history have been completely reset!\n\nTap the button below to set up your profile:",
+                        [{"id": "START_ONBOARDING", "title": "🚀 Start Setup"}]
+                    )
+                    return
+                elif msg_lower == "/profile":
+                    books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
+                    balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
+                    await send_whatsapp_cloud_msg(
+                        sender_phone, 
+                        f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Wallet Balance: ₦{balance:.2f}\n• Books:\n  - {books_str}\n\n"
+                        f"📝 *Feedback Survey:* https://forms.gle/dNr7SV5EUiqiFySx5"
+                    )
+                    return
+                elif msg_lower == "/feedback":
+                    feedback_msg = (
+                        "📝 *NEURA AI Beta Feedback Survey*\n\n"
+                        "Your feedback helps us make NEURA AI 10x better for medical students!\n\n"
+                        "This survey is 100% anonymous (takes under 2 minutes):\n"
+                        "👉 https://forms.gle/dNr7SV5EUiqiFySx5\n\n"
+                        "Thank you for beta testing NEURA AI! 🧠⚡"
+                    )
+                    await send_whatsapp_cloud_msg(sender_phone, feedback_msg)
+                    return
+                elif msg_lower == "/update name":
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_NAME"}})
+                    await send_whatsapp_cloud_msg(sender_phone, "What would you like to change your name to?")
+                    return
+                elif msg_lower == "/update level":
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_LEVEL"}})
+                    await send_whatsapp_interactive_list(
+                        sender_phone, 
+                        "What is your new medical class/level?",
+                        "Select Level",
+                        ["200L", "300L", "400L", "500L", "600L"]
+                    )
+                    return
+                elif msg_lower == "/update books":
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"preferred_books_list": []}})
+                    has_subjects = await send_next_subject_menu(sender_phone, level)
+                    if not has_subjects:
+                        await complete_onboarding(sender_phone)
+                    return
+
+        # Handle deposit menu selection (e.g. DEPOSIT_500) or custom amount entry
+        handled_deposit = await handle_deposit_request(sender_phone, user_msg)
+        if handled_deposit:
+            return
 
         # Handle active interactive quiz answer if student is answering an MCQ
         if user_doc and "active_quiz" in user_doc:
@@ -2718,6 +2922,21 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Handle onboarding state machine
         is_onboarding = await handle_onboarding(sender_phone, user_msg)
         if is_onboarding:
+            return
+
+        # Low balance guard (< ₦20)
+        wallet_balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
+        if wallet_balance < 20.0:
+            low_bal_card = (
+                f"⚠️ *Insufficient Wallet Balance (₦{wallet_balance:.2f})*\n\n"
+                f"To continue asking clinical questions and practicing MBBS MCQs, please top up your wallet (minimum deposit is ₦500).\n\n"
+                f"Tap below to deposit:"
+            )
+            await send_whatsapp_interactive_button(
+                sender_phone,
+                low_bal_card,
+                [{"id": "TOPUP_WALLET", "title": "💳 Deposit ₦500+"}]
+            )
             return
 
         query_to_search = user_msg
@@ -2777,6 +2996,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         if not medical_terms:
             medical_terms = extract_medical_terms(search_term)
         # If LLM gave no clean diagram topic, use medical_terms as diagram candidates
+        # (these are already clean, typo-corrected authoritative phrases)
         diagram_candidates = ([diagram_target] if diagram_target else []) + medical_terms
         
         # Step 1.5: Check for explicit book overrides (e.g. if user says "Use pharmacology")
@@ -2854,22 +3074,47 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 upsert=True
             )
 
+        # Dynamic Token Billing Deduction (2.5x Markup ~ 60% Margin)
+        if users_col is not None:
+            try:
+                est_prompt_tokens = 1500 + len(user_prompt) // 4
+                est_compl_tokens = len(ai_answer) // 4
+                raw_cost_usd = (est_prompt_tokens * 0.00000014) + (est_compl_tokens * 0.00000028)
+                cost_ngn = max(2.00, raw_cost_usd * 1550.0 * 2.5)
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {
+                        "$inc": {"wallet_balance_ngn": -cost_ngn, "total_spent_ngn": cost_ngn},
+                        "$push": {"transactions": {
+                            "amount_ngn": cost_ngn,
+                            "type": "query_deduction",
+                            "description": "Medical Query / RAG Explanation",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }}
+                    }
+                )
+            except Exception as bill_err:
+                print(f"⚠️ Billing deduction error: {bill_err}")
+
         # Check if the answer indicates information is missing from textbooks
         ai_lower = ai_answer.lower()
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
 
-        # Retrieve and send authentic peer-reviewed medical diagram / histology slide if topic is visual or requested
+        # Retrieve and send authentic peer-reviewed medical diagram concurrently in background
         if intent != "QUIZ" and not is_not_covered:
             visual_modality = detect_visual_intent_modality(query_to_search, ai_answer)
             if visual_modality != "NONE":
-                try:
-                    img_url, img_title = await retrieve_real_medical_diagram(diagram_candidates, modality=visual_modality)
-                    if img_url:
-                        display_topic = (diagram_candidates[0] if diagram_candidates else query_to_search)[:60]
-                        img_caption = f"🔬 *Authentic Medical Figure:* _{img_title or display_topic}_\n📚 _Peer-Reviewed Scientific & Textbook Archive_"
-                        await send_whatsapp_image_url(sender_phone, img_url, img_caption)
-                except Exception as img_err:
-                    print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
+                async def _send_diagram_bg(cands, mod, phone, search_text):
+                    try:
+                        img_url, img_title = await retrieve_real_medical_diagram(cands, modality=mod)
+                        if img_url:
+                            display_topic = (cands[0] if cands else search_text)[:60]
+                            img_caption = f"🔬 *Authentic Medical Figure:* _{img_title or display_topic}_\n📚 _Peer-Reviewed Scientific & Textbook Archive_"
+                            await send_whatsapp_image_url(phone, img_url, img_caption)
+                    except Exception as img_err:
+                        print(f"⚠️ Non-critical error sending medical illustration: {img_err}")
+
+                asyncio.create_task(_send_diagram_bg(diagram_candidates, visual_modality, sender_phone, query_to_search))
 
         # Attach interactive follow-up button for quick MCQ generation ONLY if it was a valid medical answer
         if intent != "QUIZ" and not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
@@ -2900,8 +3145,150 @@ def root():
         "status": "online",
         "system": "NEURA AI Official WhatsApp Cloud API Backend v2.0",
         "phone_number_id": PHONE_NUMBER_ID,
-        "openrouter_configured": bool(OPENROUTER_API_KEY)
+        "openrouter_configured": bool(OPENROUTER_API_KEY),
+        "billing": "Flutterwave In-App WebView + Dynamic Token Multiplier"
     }
+
+@app.post("/webhook/flutterwave")
+async def flutterwave_webhook(request: Request):
+    """Flutterwave Webhook Endpoint to credit student wallets upon successful charge"""
+    try:
+        signature = request.headers.get("verif-hash", "")
+        if FLUTTERWAVE_SECRET_HASH and signature != FLUTTERWAVE_SECRET_HASH:
+            print("❌ Flutterwave secret hash mismatch!")
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
+        body = await request.json()
+        print(f"💳 Flutterwave Webhook: {json.dumps(body)}")
+        
+        event = body.get("event")
+        data = body.get("data", {})
+        status = data.get("status")
+        
+        if event == "charge.completed" and status == "successful":
+            amount_ngn = float(data.get("amount", 0.0))
+            tx_ref = data.get("tx_ref", "")
+            flw_ref = str(data.get("flw_ref") or tx_ref)
+            customer = data.get("customer", {})
+            phone = customer.get("phone_number") or customer.get("phonenumber")
+            
+            if not phone and "NEURA_" in tx_ref:
+                parts = tx_ref.split("_")
+                if len(parts) >= 2:
+                    phone = parts[1]
+
+            if phone and amount_ngn > 0 and users_col is not None:
+                # Idempotent credit
+                res = await users_col.update_one(
+                    {"user_id": phone, "transactions.reference": {"$ne": flw_ref}},
+                    {
+                        "$inc": {"wallet_balance_ngn": amount_ngn},
+                        "$push": {"transactions": {
+                            "amount_ngn": amount_ngn,
+                            "reference": flw_ref,
+                            "tx_ref": tx_ref,
+                            "type": "deposit",
+                            "description": f"Flutterwave Wallet Deposit (₦{amount_ngn:,.2f})",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }}
+                    },
+                    upsert=True
+                )
+                if res.modified_count > 0 or res.upserted_id:
+                    u = await users_col.find_one({"user_id": phone})
+                    bal = u.get("wallet_balance_ngn", amount_ngn) if u else amount_ngn
+                    receipt = (
+                        f"🎉 *PAYMENT RECEIVED!*\n\n"
+                        f"• Amount Credited: *₦{amount_ngn:,.2f}*\n"
+                        f"• New Wallet Balance: *₦{bal:,.2f}*\n"
+                        f"• Ref: _{flw_ref}_\n\n"
+                        f"You can now continue asking medical questions with full textbook grounding! 🧠⚡"
+                    )
+                    await send_whatsapp_cloud_msg(phone, receipt)
+        return {"status": "success"}
+    except Exception as e:
+        print(f"Error handling Flutterwave webhook: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/webhook/paystack")
+async def paystack_webhook(request: Request):
+    """Paystack Webhook Endpoint to credit student wallets upon successful charge (Fallback)"""
+    try:
+        body_bytes = await request.body()
+        signature = request.headers.get("x-paystack-signature", "")
+        if PAYSTACK_SECRET_KEY:
+            expected = hmac.new(PAYSTACK_SECRET_KEY.strip().encode(), body_bytes, hashlib.sha512).hexdigest()
+            if expected.lower() != signature.lower():
+                print("❌ Paystack signature mismatch!")
+                raise HTTPException(status_code=401, detail="Invalid signature")
+
+        data = json.loads(body_bytes.decode())
+        if data.get("event") == "charge.success":
+            tx_data = data.get("data", {})
+            amount_kobo = tx_data.get("amount", 0)
+            ref = tx_data.get("reference", "")
+            metadata = tx_data.get("metadata", {})
+            phone = metadata.get("phone_number") or tx_data.get("customer", {}).get("phone")
+
+            if phone and amount_kobo > 0 and users_col is not None:
+                amount_ngn = amount_kobo / 100.0
+                # Idempotent credit
+                res = await users_col.update_one(
+                    {"user_id": phone, "transactions.reference": {"$ne": ref}},
+                    {
+                        "$inc": {"wallet_balance_ngn": amount_ngn},
+                        "$push": {"transactions": {
+                            "amount_ngn": amount_ngn,
+                            "reference": ref,
+                            "type": "deposit",
+                            "description": f"Paystack Wallet Deposit (₦{amount_ngn:,.2f})",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }}
+                    },
+                    upsert=True
+                )
+                if res.modified_count > 0 or res.upserted_id:
+                    u = await users_col.find_one({"user_id": phone})
+                    bal = u.get("wallet_balance_ngn", amount_ngn) if u else amount_ngn
+                    receipt = (
+                        f"🎉 *PAYMENT RECEIVED!*\n\n"
+                        f"• Amount Credited: *₦{amount_ngn:,.2f}*\n"
+                        f"• New Wallet Balance: *₦{bal:,.2f}*\n"
+                        f"• Ref: _{ref}_\n\n"
+                        f"You can now continue asking medical questions with full textbook grounding! 🧠⚡"
+                    )
+                    await send_whatsapp_cloud_msg(phone, receipt)
+        return {"status": "success"}
+    except Exception as e:
+        print(f"Error handling Paystack webhook: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/payment-complete")
+async def payment_complete_page(request: Request):
+    status = request.query_params.get("status", "").lower()
+    
+    is_successful = status in ["successful", "success", "completed"]
+    
+    if is_successful:
+        html_content = """
+        <!DOCTYPE html>
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Confirmed - NEURA AI</title>
+        <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#0f172a;text-align:center;}
+        .card{background:white;padding:32px;border-radius:16px;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);max-width:400px;margin:20px;}
+        .icon{font-size:48px;margin-bottom:16px;}h1{font-size:24px;margin:0 0 8px;color:#16a34a;}p{color:#64748b;font-size:16px;line-height:1.5;}</style></head>
+        <body><div class="card"><div class="icon">✅</div><h1>Payment Confirmed!</h1><p>Your NEURA AI wallet has been successfully credited. You can return to WhatsApp.</p></div></body></html>
+        """
+    else:
+        html_content = """
+        <!DOCTYPE html>
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Cancelled - NEURA AI</title>
+        <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#0f172a;text-align:center;}
+        .card{background:white;padding:32px;border-radius:16px;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);max-width:400px;margin:20px;}
+        .icon{font-size:48px;margin-bottom:16px;}h1{font-size:24px;margin:0 0 8px;color:#dc2626;}p{color:#64748b;font-size:16px;line-height:1.5;}</style></head>
+        <body><div class="card"><div class="icon">❌</div><h1>Payment Cancelled</h1><p>The transaction was not completed and your wallet was not charged. You can return to WhatsApp and try again anytime with <b>/deposit</b>.</p></div></body></html>
+        """
+    return Response(content=html_content, media_type="text/html")
+
 
 @app.get("/api/books")
 def get_books():
