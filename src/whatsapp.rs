@@ -506,6 +506,10 @@ pub async fn send_whatsapp_image_url(
     image_url: &str,
     caption: &str,
 ) {
+    if image_url.is_empty() || config.whatsapp_token.is_empty() {
+        return;
+    }
+
     let url = format!(
         "https://graph.facebook.com/v19.0/{}/messages",
         config.phone_number_id
