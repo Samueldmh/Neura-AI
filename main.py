@@ -137,22 +137,28 @@ RULES FOR MCQs:
    - For every answer, explain why the correct option is right AND why the key distractor options are wrong, citing the specific textbook title. Never include fabricated figure numbers or page numbers in explanations or citations.
 """
 
-SYSTEM_INTERACTIVE_QUIZ_PROMPT = """You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate 5 rigorous, medical-school standard (MBBS / USMLE style) Multiple Choice Questions.
+SYSTEM_INTERACTIVE_QUIZ_PROMPT = """You are NEURA AI, an elite medical study assistant and co-pilot for MBBS students.
+Your task is to generate exactly 5 rigorous, high-yield, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions that test the student DIRECTLY and EXCLUSIVELY on the TARGET MEDICAL TOPIC and RETRIEVED TEXTBOOK CONTEXT provided in the prompt.
 
-CRITICAL INSTRUCTION: You MUST output ONLY valid JSON without any markdown formatting, code block backticks (no ```json), or outside conversational text.
+CRITICAL RULES:
+1. STRICT TOPIC COHESION: Every single question (all 5) MUST test core concepts, clinical presentations, physiological mechanisms, or pharmacotherapies of the specified TARGET MEDICAL TOPIC. Never generate questions about unrelated conditions.
+2. VIGNETTES & MECHANISMS: Provide realistic clinical vignettes or mechanism-of-action questions appropriate for medical students.
+3. 4 DISTINCT OPTIONS: Provide 4 options (A, B, C, D) with exactly 1 unambiguous correct answer and 3 clinically plausible distractors.
+4. TEXTBOOK RATIONALE: Provide a clear explanation of why the correct option is right and why key distractors are wrong based on the textbook context.
+5. STRICT JSON OUTPUT ONLY: Output ONLY a valid JSON array of 5 question objects. No markdown formatting, no code block backticks (no ```json), and no introductory or concluding commentary.
 
-Output JSON structure:
+JSON Schema format:
 [
   {
     "q_num": 1,
-    "vignette": "A 55-year-old male with hypertension and BPH is prescribed prazosin...",
-    "option_a": "Alpha-1 adrenergic receptor antagonist",
-    "option_b": "Beta-1 adrenergic receptor antagonist",
-    "option_c": "ACE inhibitor",
-    "option_d": "Calcium channel blocker",
+    "vignette": "A clinical vignette or mechanism question specifically testing the target topic...",
+    "option_a": "First option",
+    "option_b": "Second option",
+    "option_c": "Third option",
+    "option_d": "Fourth option",
     "correct_option": "A",
-    "explanation": "Prazosin selectively blocks alpha-1 receptors on vascular smooth muscle...",
-    "book_source": "Lippincott Illustrated Reviews: Pharmacology"
+    "explanation": "Clear explanation of the correct mechanism and why distractors are incorrect based on the textbook context.",
+    "book_source": "Textbook Title"
   }
 ]
 """
@@ -1347,17 +1353,22 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
         await send_subject_book_menu(sender_phone, level, current_subject)
         return True
         
-async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list):
+async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list = None, context_text: str = ""):
     """Generates 5 structured MCQs as JSON and starts the 1-by-1 interactive quiz flow"""
-    context_blocks = []
-    for idx, point in enumerate(search_res[:10], 1):
-        p = point.payload
-        book_str = p.get('book_title', 'Textbook')
-        text_str = p.get('text', '')
-        context_blocks.append(f"[Chunk {idx} | Book: {book_str}]\n{text_str}")
+    if not context_text:
+        context_blocks = []
+        for idx, point in enumerate((search_res or [])[:10], 1):
+            p = point.payload
+            book_str = p.get('book_title', 'Textbook')
+            text_str = p.get('text', '')
+            context_blocks.append(f"[Chunk {idx} | Book: {book_str}]\n{text_str}")
+        context_text = "\n\n".join(context_blocks)
 
-    formatted_context = "\n\n".join(context_blocks)
-    user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nTOPIC TO TEST: {topic}"
+    user_prompt = (
+        f"TARGET MEDICAL TOPIC TO TEST:\n{topic}\n\n"
+        f"RETRIEVED TEXTBOOK CONTEXT:\n{context_text}\n\n"
+        f"CRITICAL INSTRUCTION: Generate exactly 5 medical-school standard MCQs (with options A, B, C, D) that test the student DIRECTLY and EXCLUSIVELY on the concepts, mechanisms, pathology, and clinical management of '{topic}' based on the textbook context above. Do not ask questions about unrelated topics. Return ONLY the valid JSON array of 5 objects."
+    )
 
     try:
         json_raw = await call_openrouter_llm(SYSTEM_INTERACTIVE_QUIZ_PROMPT, user_prompt)
@@ -1375,16 +1386,17 @@ async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list
             "current_idx": 0,
             "score": 0
         }
-        await users_col.update_one(
-            {"user_id": sender_phone},
-            {"$set": {"active_quiz": quiz_state}}
-        )
+        if users_col is not None:
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$set": {"active_quiz": quiz_state}}
+            )
 
         await send_quiz_question(sender_phone, quiz_state)
 
     except Exception as e:
         print(f"❌ Error starting interactive quiz: {e}")
-        await send_whatsapp_cloud_msg(sender_phone, "Sorry, I had trouble creating the interactive quiz questions. Please try tapping Generate MCQs again!")
+        await send_whatsapp_cloud_msg(sender_phone, "Sorry, I had trouble creating the interactive practice questions. Please tap *📝 Practice MCQs* again!")
 
 async def send_quiz_question(sender_phone: str, quiz_state: dict):
     """Sends the current question with a WhatsApp Interactive List dropdown for options A, B, C, D"""
@@ -1655,13 +1667,59 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         if is_onboarding:
             return
 
+        msg_clean_for_quiz = user_msg.strip()
+        msg_lower_quiz = msg_clean_for_quiz.lower()
+        
+        is_quiz_trigger = (
+            msg_clean_for_quiz.startswith("GENERATE_QUIZ") or
+            msg_lower_quiz in [
+                "📝 practice mcqs", "practice mcqs", "practice mcq", "start quiz", "test me", 
+                "quiz on this", "quiz me on this", "quiz me", "mcqs", "practice questions", "generate mcqs"
+            ]
+        )
+
+        if is_quiz_trigger:
+            quiz_topic = ""
+            if msg_clean_for_quiz.startswith("GENERATE_QUIZ:"):
+                quiz_topic = msg_clean_for_quiz.replace("GENERATE_QUIZ:", "").strip()
+            
+            # If quiz_topic is missing, vague, or a button label, retrieve from user_doc["last_medical_topic"]
+            if (not quiz_topic or 
+                check_is_followup_query(quiz_topic) or 
+                len(quiz_topic) < 3 or 
+                quiz_topic.lower() in ["practice mcqs", "quiz", "test me", "mcqs"]):
+                quiz_topic = user_doc.get("last_medical_topic", "") if user_doc else ""
+                
+            if not quiz_topic:
+                # Check chat history for last user medical message
+                if chat_history_col is not None:
+                    user_hist = await chat_history_col.find_one({"user_id": sender_phone})
+                    if user_hist and "messages" in user_hist:
+                        for m in reversed(user_hist["messages"]):
+                            content = m.get("content", "")
+                            if m.get("role") == "user" and not content.startswith("GENERATE_QUIZ") and not check_is_followup_query(content):
+                                quiz_topic = content
+                                break
+                                
+            if not quiz_topic:
+                quiz_topic = "High-Yield Clinical Concepts"
+
+            # Check if we have cached context matching this topic
+            cached_context = user_doc.get("last_context_text", "") if (user_doc and user_doc.get("last_medical_topic") == quiz_topic) else ""
+            
+            if cached_context:
+                search_res = []
+            else:
+                normalized_data = await normalize_medical_query(quiz_topic)
+                medical_terms = normalized_data.get("search_keywords", [quiz_topic])
+                active_books = get_explicit_book_override(quiz_topic, preferred_books_list)
+                search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
+
+            await start_interactive_quiz(sender_phone, quiz_topic.title(), search_res, context_text=cached_context)
+            return
+
         query_to_search = user_msg
-        is_button_quiz = user_msg.startswith("GENERATE_QUIZ:")
-        if is_button_quiz:
-            query_to_search = user_msg.replace("GENERATE_QUIZ:", "").strip()
-            intent = "QUIZ"
-        else:
-            intent = classify_intent(user_msg)
+        intent = classify_intent(user_msg)
         
         if intent == "GREETING":
             books_formatted = "\n• ".join(preferred_books_list) if preferred_books_list else "Your selected medical textbooks"
@@ -1719,10 +1777,9 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question in your selected textbooks. Try rephrasing or updating your preferred books using /update books!")
             return
 
-        # If button click [ 📝 Generate MCQs ] was tapped, launch the 1-by-1 interactive quiz!
-        if is_button_quiz:
-            clean_quiz_topic = query_to_search.title()
-            await start_interactive_quiz(sender_phone, clean_quiz_topic, search_res)
+        # If user explicitly asked for a quiz on a topic via text, launch the interactive quiz directly!
+        if intent == "QUIZ":
+            await start_interactive_quiz(sender_phone, search_term.title(), search_res)
             return
 
         context_blocks = []
@@ -1755,7 +1812,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         books_str = ", ".join(preferred_books_list) if preferred_books_list else "None"
         user_context_str = f"The student asking this question is {name}, a {level} medical student. Their preferred textbooks are: {books_str}. Tailor your explanation to their level.\n\n"
 
-        prompt_to_use = SYSTEM_QUIZ_PROMPT if intent == "QUIZ" else SYSTEM_MEDICAL_PROMPT
+        prompt_to_use = SYSTEM_MEDICAL_PROMPT
         prompt_to_use = prompt_to_use.replace("{user_context}", user_context_str)
 
         # Chat memory
@@ -1765,11 +1822,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             if user_doc and "messages" in user_doc:
                 chat_history = user_doc["messages"][-6:]
 
-        if intent == "QUIZ":
-            ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
-            await send_whatsapp_cloud_msg(sender_phone, ai_answer)
-        else:
-            ai_answer = await stream_openrouter_llm_to_whatsapp(prompt_to_use, user_prompt, sender_phone, chat_history)
+        ai_answer = await stream_openrouter_llm_to_whatsapp(prompt_to_use, user_prompt, sender_phone, chat_history)
 
         if chat_history_col is not None:
             new_msgs = [
@@ -1782,17 +1835,34 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 upsert=True
             )
 
+        if users_col is not None:
+            try:
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {
+                        "$set": {
+                            "last_medical_topic": search_term,
+                            "last_context_text": formatted_context
+                        }
+                    }
+                )
+            except Exception as bill_err:
+                print(f"⚠️ Topic persistence error: {bill_err}")
+
         # Check if the answer indicates information is missing from textbooks
         ai_lower = ai_answer.lower()
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
 
         # Attach interactive follow-up button for quick MCQ generation ONLY if it was a valid medical answer
-        if intent != "QUIZ" and not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
+        if not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
             try:
-                topic_snippet = query_to_search[:50]
+                clean_topic_label = search_term.title()
+                if len(clean_topic_label) > 40:
+                    clean_topic_label = clean_topic_label[:37] + "..."
+                topic_snippet = search_term[:100]
                 await send_whatsapp_interactive_button(
                     sender_phone,
-                    "Ready to practice MCQs on this topic?",
+                    f"Ready to test your knowledge on *{clean_topic_label}*?",
                     [
                         {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice MCQs"}
                     ]
