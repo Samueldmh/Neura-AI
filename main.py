@@ -153,9 +153,10 @@ Your goal is to engage students in an intelligent, conversational, back-and-fort
 CLINICAL EXPLANATION & SIMPLIFICATION RULES:
 1. STRICT TEXTBOOK GROUNDING: Answer ONLY using facts explicitly present in the RETRIEVED TEXTBOOK CONTEXT. If the requested medical topic is not covered in the retrieved context, state: "I'm sorry, but this topic is not covered in your currently selected textbooks." Do NOT use outside AI memory, and NEVER output notes about using outside knowledge.
 2. NO ROBOT TALK & NO PREAMBLES: Never use opening filler, greetings, or announcements (e.g., "Certainly Samuel!", "Certainly!", "Absolutely!", "Sure thing!", "Here is the figure you requested", "I have attached the authentic textbook figure below", "Based on the retrieved context...", "According to this textbook..."). Jump DIRECTLY into the medical explanation starting immediately with 📖 *IN-DEPTH EXPLANATION*. Zero conversational filler.
-3. SIMPLIFY COMPLEX WORDS: Whenever you use complex medical jargon or high-level pathology terms, immediately simplify and explain them in clear, intuitive terms so students can grasp the underlying concepts effortlessly.
-4. HIGHLIGHT IMPORTANT TERMS: Bold key terms, mechanisms, and diagnostic criteria so the text is visually clear and easy to read.
-5. CONVERSATIONAL SOCRATIC CO-PILOT: Engage students naturally. When they ask hypothetical "what if" questions or follow-ups, synthesize textbook principles with common-sense medical reasoning.
+3. NO QUOTATION BLOCKS OR CITATION LISTS: Do NOT output raw verbatim quotation excerpts or citation footers (e.g. do NOT output '📚 CITATIONS' or quote raw text). Explain the core medical facts directly, clearly, and authoritatively in your own words.
+4. SIMPLIFY COMPLEX WORDS: Whenever you use complex medical jargon or high-level pathology terms, immediately simplify and explain them in clear, intuitive terms so students can grasp the underlying concepts effortlessly.
+5. HIGHLIGHT IMPORTANT TERMS: Bold key terms, mechanisms, and diagnostic criteria so the text is visually clear and easy to read.
+6. CONVERSATIONAL SOCRATIC CO-PILOT: Engage students naturally. When they ask hypothetical "what if" questions or follow-ups, synthesize textbook principles with common-sense medical reasoning.
 
 CRITICAL FORMATTING & LAYOUT RULES FOR WHATSAPP:
 1. DOUBLE-LINE SPACING: Every section heading, sub-heading, bullet item, and paragraph MUST be separated by a full blank line (`\n\n`). Never stack bullet items or headers back-to-back on consecutive single lines.
@@ -167,14 +168,12 @@ CRITICAL FORMATTING & LAYOUT RULES FOR WHATSAPP:
    - *Main Section:* Clear explanation.
    
      - *Sub-detail:* Properly indented supporting detail.
-6. ZERO FABRICATED FIGURE CITATIONS & CLEAN CITATIONS: Absolutely NEVER invent, cite, or mention specific figure numbers, diagram numbers, plate numbers, or table numbers (e.g., NEVER write "Figure 46-9", "Fig 12.8", "Figure 43.5", "Plate 3-1", "Table 14.2", "Robbins p. 787"). The attached diagrams and flowcharts are automatically delivered by the system; do NOT fabricate or cite figure numbers in your response text. All textbook citations MUST appear strictly at the very end under 📚 CITATIONS listing ONLY the authentic textbook title (e.g. "- Robbins Basic Pathology" or "- Lippincott Illustrated Reviews: Pharmacology"). Never include page numbers, figure numbers, or conversational commentary in citations.
+6. ZERO FABRICATED FIGURE CITATIONS: Absolutely NEVER invent, cite, or mention specific figure numbers, diagram numbers, plate numbers, or table numbers (e.g., NEVER write "Figure 46-9", "Fig 12.8", "Figure 43.5", "Plate 3-1", "Table 14.2", "Robbins p. 787").
 7. NO SMASHED WORDS: Ensure flawless spacing between words, punctuation, and hyphens. Always put a space after colons, periods, and bold words (e.g. write "*Prazosin* is" instead of "*Prazosin*is").
 8. Structure responses into clear sections separated by blank lines:
    📖 *IN-DEPTH EXPLANATION*
    
    💡 *KEY CLINICAL PEARLS*
-   
-   📚 *CITATIONS*
 9. NO RAW MARKDOWN TABLES: WhatsApp does NOT render markdown tables. NEVER output pipes or table headers (| Col 1 | Col 2 | or |---|---|). Always structure comparisons and summary tables as clean bulleted list cards (e.g. - *Category:* followed by indented • *Detail:* bullets).
 10. WHEN ASKED FOR DIAGRAMS/ILLUSTRATIONS: NEVER apologize or say 'I cannot generate or display diagrams' or 'I am only a text AI'. You ARE fully equipped with a real medical diagram and flowchart retrieval system that automatically delivers the authentic textbook schematic below your explanation. Confidently provide the structured textbook breakdown with clear headings and bullet cards. Do NOT announce or refer to figure numbers (e.g. do NOT say "I've attached Figure X-Y below" or "refer to the figure below") — the system delivers the visual asset seamlessly.
 """
@@ -217,14 +216,14 @@ JSON Schema format:
 ]
 """
 
-def classify_intent(message: str) -> str:
+async def classify_intent(message: str) -> str:
     msg_clean = message.strip().lower()
     
-    # 1. Quizzes & Exam Testing Intent
-    if any(k in msg_clean for k in ["mcq", "quiz", "practice question", "test me", "exam question", "questions on", "generate_quiz"]):
+    # 1. Quizzes & Exam Testing Intent (Instant Fast-Path)
+    if any(k in msg_clean for k in ["mcq", "quiz", "practice question", "test me", "exam question", "generate_quiz", "practice mcqs"]):
         return "QUIZ"
 
-    # 2. Gratitude & Compliments (Check first so 'thanks boss' is GRATITUDE)
+    # 2. Obvious Gratitude / Acknowledgment / Nigerian Slang Fast-Path (<0.05ms)
     gratitude_patterns = [
         r"\b(thank\s*(you|u)|thanks|thx|ty|tysm|appreciate|god\s*bless(\s*you)?|nice\s*one|well\s*done|welldone|good\s*job|great\s*job)\b",
         r"\byou('re|\s*are)?\s*(smart|good|the\s*best|great|awesome|helpful)\b"
@@ -232,24 +231,82 @@ def classify_intent(message: str) -> str:
     if any(re.search(pat, msg_clean) for pat in gratitude_patterns):
         return "GRATITUDE"
 
-    # 3. Short Acknowledgments & Affirmations
     if msg_clean in ["ok", "okay", "k", "alright", "cool", "noted", "got it", "understood", "makes sense", "i see", "nice", "great", "awesome", "perfect", "good", "fine", "correct", "yes", "yep", "yeah"]:
         return "ACKNOWLEDGMENT"
 
-    # 4. Nigerian Slang, Greetings & Chit-chat
     greeting_patterns = [
         r"\b(hi|hello|hey|heya|yo|sup|wassup|what'?s\s*up|good\s*(morning|afternoon|evening|day)|greetings)\b",
         r"\b(how\s*far|wetin\s*dey|how\s*body|how\s*you\s*dey|how\s*things|kedu|bawo|sannu)\b",
         r"\b(boss\s*man|senior\s*man|chief|my\s*guy|boss)\b",
         r"\b(how\s*(are\s*you|r\s*u|is\s*it\s*going|you\s*doing|are\s*you\s*doing|everything))\b",
-        r"\b(who\s*are\s*you|what\s*is\s*neura(\s*ai)?|what\s*can\s*you\s*do|introduce\s*yourself)\b"
+        r"\b(who\s*are\s*you|what\s*is\s*neura(\s*ai)?|what\s*can\s*you\s*do|introduce\s*yourself)\b",
+        r"\b(hallo|wie\s*geht'?s|guten\s*tag|servus|moin|bonjour|salut|cava|comment\s*ca\s*va|hola|buenos\s*dias)\b"
     ]
-    if any(re.search(pat, msg_clean) for pat in greeting_patterns):
-        words = [w for w in msg_clean.split() if w not in SEARCH_STOP_WORDS and len(w) > 2]
-        is_pure_greeting = not any(w in words for w in ["furosemide", "malaria", "pathology", "pharmacology", "syndrome", "disease", "treatment", "mechanism", "pathophysiology", "symptoms", "diagnosis", "anatomy", "physiology"])
-        if is_pure_greeting or len(msg_clean.split()) <= 4:
-            return "GREETING"
-    
+    if any(re.search(pat, msg_clean) for pat in greeting_patterns) and len(msg_clean.split()) <= 4:
+        return "GREETING"
+
+    # 3. Unambiguous Medical Questions (Fast-Path to vector search)
+    terms = extract_medical_terms(message)
+    known_medical_indicators = ["syndrome", "disease", "treatment", "pathology", "pharmacology", "anatomy", "physiology", "symptoms", "diagnosis", "mechanism", "pathophysiology", "infection", "bacteria", "virus", "artery", "nerve", "muscle", "bone", "cell", "receptor", "drug", "inhibitor", "agonist", "antagonist", "furosemide", "prazosin", "malaria", "pneumonia", "diabetes", "hypertension", "anemia", "carcinoid", "hypersensitivity"]
+    if any(ind in msg_clean for ind in known_medical_indicators) and len(msg_clean.split()) >= 2:
+        return "MEDICAL"
+
+    # 4. Deterministic Gibberish & Noise Filter (y is treated as vowel)
+    clean_alpha = re.sub(r'[^a-zA-Z]', '', msg_clean)
+    has_long_consonants = bool(re.search(r'[bcdfghjklmnpqrstvwxz]{5,}', msg_clean))
+    is_gibberish_pattern = bool(
+        not clean_alpha or
+        re.match(r'^[^a-zA-Z0-9\s]+$', msg_clean) or
+        re.match(r'^[0-9\s.,]+$', msg_clean) or
+        (len(clean_alpha) >= 4 and not any(v in clean_alpha for v in "aeiouy")) or
+        has_long_consonants or
+        re.search(r'(.)\1{3,}', msg_clean)
+    )
+    if msg_clean and is_gibberish_pattern:
+        return "GIBBERISH"
+
+    # 4. LLM Universal Intent Classifier (Handles ANY language: German, French, Arabic, slang, gibberish, vague chatter)
+    if OPENROUTER_API_KEY:
+        try:
+            router_prompt = (
+                "You are an intent classifier for NEURA AI, a medical study co-pilot.\n"
+                "Analyze the user's message (which could be English, Nigerian Pidgin/slang, German, French, Arabic, Yoruba, Igbo, Hausa, or any language) and classify it into EXACTLY ONE label:\n"
+                "- GREETING: Greetings, hello, how are you, Nigerian slang (e.g. 'how far', 'boss man', 'wetin dey'), foreign greetings (e.g. German 'wie gehts', French 'bonjour', 'kedu'), introductions ('who are you', 'what can you do').\n"
+                "- GRATITUDE: Thank you, thanks, nice one, well done, praise, appreciation in any language.\n"
+                "- ACKNOWLEDGMENT: Short confirmations (ok, cool, noted, got it, understood, alright).\n"
+                "- GIBBERISH: Random keyboard mash, nonsense characters (e.g. 'asdfgh', '12345', '????'), meaningless noise.\n"
+                "- QUIZ: Explicit requests for MCQs, practice questions, quizzes, tests.\n"
+                "- MEDICAL: Any question, concept, disease, pharmacology, physiology, anatomy, or medical topic query in any language.\n\n"
+                "Output ONLY the category name in uppercase with no punctuation."
+            )
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://neura-ai.org",
+                "X-Title": "NEURA AI Intent Router"
+            }
+            payload = {
+                "model": "deepseek/deepseek-v4-flash",
+                "messages": [
+                    {"role": "system", "content": router_prompt},
+                    {"role": "user", "content": message}
+                ],
+                "temperature": 0.0,
+                "max_tokens": 10
+            }
+            resp = await shared_http_client.post(url, headers=headers, json=payload)
+            if resp.status_code == 200:
+                cat = resp.json()["choices"][0]["message"]["content"].strip().upper()
+                for valid in ["GREETING", "GRATITUDE", "ACKNOWLEDGMENT", "GIBBERISH", "QUIZ", "MEDICAL"]:
+                    if valid in cat:
+                        return valid
+        except Exception as e:
+            print(f"LLM Intent Classifier fallback error: {e}")
+
+    # Default fallback
+    if len(msg_clean) <= 4 or not terms:
+        return "GIBBERISH"
     return "MEDICAL"
 
 async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history: list = None) -> str:
@@ -2013,11 +2070,13 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             return
 
         query_to_search = user_msg
-        intent = classify_intent(user_msg)
+        intent = await classify_intent(user_msg)
         
         if intent == "GREETING":
             clean_msg = user_msg.strip().lower()
-            is_intro = any(w in clean_msg for w in ["who are you", "what is neura", "what can you do", "introduce yourself"])
+            is_intro = any(w in clean_msg for w in ["who are you", "what is neura", "what can you do", "introduce yourself", "wer bist du", "qui es-tu"])
+            is_german = any(w in clean_msg for w in ["wie geht", "hallo", "guten tag", "servus", "moin", "alles gut"])
+            is_french = any(w in clean_msg for w in ["bonjour", "salut", "ca va", "comment ca va"])
             is_slang = any(w in clean_msg for w in ["how far", "boss man", "wetin", "my guy", "chief", "senior man", "yo", "wassup", "sup", "boss", "kedu", "bawo", "sannu"])
             
             if is_intro:
@@ -2030,6 +2089,20 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     f"What medical topic or clinical case are we mastering today?"
                 )
                 await send_whatsapp_cloud_msg(sender_phone, intro_msg)
+                return
+            elif is_german:
+                greeting_msg = (
+                    f"Hallo *{name}*! 👋 Ich bin *NEURA AI* 🧠⚡ — dein medizinischer Lernassistent und Co-Pilot für dein Medizinstudium!\n\n"
+                    f"Welches medizinische Thema oder welchen klinischen Fall möchtest du heute aus deinen Lehrbüchern durchgehen?"
+                )
+                await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
+                return
+            elif is_french:
+                greeting_msg = (
+                    f"Bonjour *{name}*! 👋 Je suis *NEURA AI* 🧠⚡ — ton assistant d'études médicales et co-pilote pour tes études de médecine!\n\n"
+                    f"Quel sujet médical ou cas clinique veux-tu explorer aujourd'hui?"
+                )
+                await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
                 return
             elif is_slang:
                 greeting_msg = (
@@ -2063,6 +2136,14 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 f"Whenever you want to explore the next topic, ask a follow-up, or practice some MCQs, I'm right here."
             )
             await send_whatsapp_cloud_msg(sender_phone, ack_msg)
+            return
+
+        if intent == "GIBBERISH":
+            gibberish_msg = (
+                f"I didn't quite catch that, *{name}*! 🧐\n\n"
+                f"Type a medical condition, drug mechanism, anatomical structure, or clinical case (e.g. *Carcinoid Syndrome*, *Prazosin*, *Lobar Pneumonia*, *Tetralogy of Fallot*), and I will pull exact details from your textbooks!"
+            )
+            await send_whatsapp_cloud_msg(sender_phone, gibberish_msg)
             return
 
         # Check if the user query is a tagged reply OR a conversational follow-up
@@ -2511,7 +2592,7 @@ async def chat_endpoint(req: QueryRequest):
     """API endpoint for direct HTTP queries (e.g. testing or web frontends)"""
     try:
         user_msg = req.message.strip()
-        intent = classify_intent(user_msg)
+        intent = await classify_intent(user_msg)
         
         if intent == "GREETING":
             return {
