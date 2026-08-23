@@ -218,13 +218,37 @@ JSON Schema format:
 """
 
 def classify_intent(message: str) -> str:
-    msg_lower = message.strip().lower()
+    msg_clean = message.strip().lower()
     
-    if msg_lower in ["hi", "hello", "hey", "good morning", "good afternoon", "good evening", "who are you", "what is neura ai"]:
-        return "GREETING"
-    
-    if any(k in msg_lower for k in ["mcq", "quiz", "practice question", "test me", "exam question", "questions on", "generate_quiz"]):
+    # 1. Quizzes & Exam Testing Intent
+    if any(k in msg_clean for k in ["mcq", "quiz", "practice question", "test me", "exam question", "questions on", "generate_quiz"]):
         return "QUIZ"
+
+    # 2. Gratitude & Compliments (Check first so 'thanks boss' is GRATITUDE)
+    gratitude_patterns = [
+        r"\b(thank\s*(you|u)|thanks|thx|ty|tysm|appreciate|god\s*bless(\s*you)?|nice\s*one|well\s*done|welldone|good\s*job|great\s*job)\b",
+        r"\byou('re|\s*are)?\s*(smart|good|the\s*best|great|awesome|helpful)\b"
+    ]
+    if any(re.search(pat, msg_clean) for pat in gratitude_patterns):
+        return "GRATITUDE"
+
+    # 3. Short Acknowledgments & Affirmations
+    if msg_clean in ["ok", "okay", "k", "alright", "cool", "noted", "got it", "understood", "makes sense", "i see", "nice", "great", "awesome", "perfect", "good", "fine", "correct", "yes", "yep", "yeah"]:
+        return "ACKNOWLEDGMENT"
+
+    # 4. Nigerian Slang, Greetings & Chit-chat
+    greeting_patterns = [
+        r"\b(hi|hello|hey|heya|yo|sup|wassup|what'?s\s*up|good\s*(morning|afternoon|evening|day)|greetings)\b",
+        r"\b(how\s*far|wetin\s*dey|how\s*body|how\s*you\s*dey|how\s*things|kedu|bawo|sannu)\b",
+        r"\b(boss\s*man|senior\s*man|chief|my\s*guy|boss)\b",
+        r"\b(how\s*(are\s*you|r\s*u|is\s*it\s*going|you\s*doing|are\s*you\s*doing|everything))\b",
+        r"\b(who\s*are\s*you|what\s*is\s*neura(\s*ai)?|what\s*can\s*you\s*do|introduce\s*yourself)\b"
+    ]
+    if any(re.search(pat, msg_clean) for pat in greeting_patterns):
+        words = [w for w in msg_clean.split() if w not in SEARCH_STOP_WORDS and len(w) > 2]
+        is_pure_greeting = not any(w in words for w in ["furosemide", "malaria", "pathology", "pharmacology", "syndrome", "disease", "treatment", "mechanism", "pathophysiology", "symptoms", "diagnosis", "anatomy", "physiology"])
+        if is_pure_greeting or len(msg_clean.split()) <= 4:
+            return "GREETING"
     
     return "MEDICAL"
 
@@ -1992,14 +2016,53 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         intent = classify_intent(user_msg)
         
         if intent == "GREETING":
-            books_formatted = "\n• ".join(preferred_books_list) if preferred_books_list else "Your selected medical textbooks"
-            greeting_msg = (
-                f"Welcome to *NEURA AI* — Your Personal Medical Co-Pilot! 🧠⚡\n\n"
-                f"I am engineered to transform your medical textbooks into high-yield exam insights, clinical breakdowns, and interactive MBBS practice quizzes!\n\n"
-                f"📚 *Your Active Study Library:*\n• {books_formatted}\n\n"
-                f"What medical topic, clinical case, or concept are we mastering today?"
+            clean_msg = user_msg.strip().lower()
+            is_intro = any(w in clean_msg for w in ["who are you", "what is neura", "what can you do", "introduce yourself"])
+            is_slang = any(w in clean_msg for w in ["how far", "boss man", "wetin", "my guy", "chief", "senior man", "yo", "wassup", "sup", "boss", "kedu", "bawo", "sannu"])
+            
+            if is_intro:
+                intro_msg = (
+                    f"Hello *{name}*! 👋 I am *NEURA AI* 🧠⚡ — your elite medical study co-pilot engineered specifically for MBBS students!\n\n"
+                    f"📚 *What I do:*\n"
+                    f"• Provide instant, in-depth clinical breakdowns grounded 100% in your authentic textbooks (*Robbins Pathology*, *Lippincott Pharmacology*, *Moore Anatomy*, *Jawetz Microbiology*, *Hoffbrand Haematology*).\n"
+                    f"• Drill you with interactive 1-by-1 USMLE/MBBS practice MCQs with instant feedback.\n"
+                    f"• Simplify complex mechanisms without robot talk or hallucinated citations.\n\n"
+                    f"What medical topic or clinical case are we mastering today?"
+                )
+                await send_whatsapp_cloud_msg(sender_phone, intro_msg)
+                return
+            elif is_slang:
+                greeting_msg = (
+                    f"Boss man! I dey sharp and ready. 🧠⚡\n\n"
+                    f"How is study / clinical postings going today, *{name}*?\n\n"
+                    f"What medical topic, clinical case, or drug mechanism are we breaking down from your textbooks right now?"
+                )
+                await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
+                return
+            else:
+                books_formatted = "\n• ".join(preferred_books_list) if preferred_books_list else "Your selected medical textbooks"
+                greeting_msg = (
+                    f"Hello *{name}*! 👋 Welcome to *NEURA AI* — Your Personal Medical Co-Pilot! 🧠⚡\n\n"
+                    f"📚 *Your Active Study Library:*\n• {books_formatted}\n\n"
+                    f"What medical topic, clinical case, or concept are we mastering today?"
+                )
+                await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
+                return
+
+        if intent == "GRATITUDE":
+            gratitude_msg = (
+                f"You're very welcome, *{name}*! 🩺 Happy to help you master this concept.\n\n"
+                f"Whenever you're ready for the next topic, clinical scenario, or MCQ drill, just drop it here!"
             )
-            await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
+            await send_whatsapp_cloud_msg(sender_phone, gratitude_msg)
+            return
+
+        if intent == "ACKNOWLEDGMENT":
+            ack_msg = (
+                f"Awesome, *{name}*! 💡\n\n"
+                f"Whenever you want to explore the next topic, ask a follow-up, or practice some MCQs, I'm right here."
+            )
+            await send_whatsapp_cloud_msg(sender_phone, ack_msg)
             return
 
         # Check if the user query is a tagged reply OR a conversational follow-up
