@@ -72,9 +72,12 @@ print(f"QDRANT_API_KEY Present: {bool(QDRANT_API_KEY)}")
 print(f"OPENROUTER_API_KEY Present: {bool(OPENROUTER_API_KEY)}")
 print(f"PHONE_NUMBER_ID: {PHONE_NUMBER_ID}")
 
+from collections import OrderedDict
+import time
+
 embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-shared_http_client = httpx.AsyncClient(timeout=30.0)
+shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=30, max_connections=60))
 embedding_pool = ThreadPoolExecutor(max_workers=4)
 
 def get_embedding_sync(text: str):
@@ -97,6 +100,45 @@ mongo_client = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
 db = mongo_client.neura_db if mongo_client else None
 chat_history_col = db.chat_history if db is not None else None
 users_col = db.users if db is not None else None
+
+class LRUTopicCache:
+    """High-speed in-memory 24-hour LRU cache for authoritative textbook explanations (~4KB per topic, max 1000 topics = ~4MB RAM)."""
+    def __init__(self, maxsize=1000, ttl_seconds=86400):
+        self.cache = OrderedDict()
+        self.maxsize = maxsize
+        self.ttl = ttl_seconds
+
+    def _make_key(self, query: str, preferred_books: list = None) -> str:
+        clean_q = re.sub(r'[^\w\s]', '', query.strip().lower())
+        books_key = "_".join(sorted([b.lower()[:12] for b in (preferred_books or []) if b and not b.startswith("Skip")]))
+        return f"{clean_q}::{books_key}"
+
+    def get(self, query: str, preferred_books: list = None):
+        key = self._make_key(query, preferred_books)
+        if key in self.cache:
+            entry = self.cache[key]
+            if time.time() - entry["timestamp"] < self.ttl:
+                self.cache.move_to_end(key)
+                return entry["answer"], entry.get("context", "")
+            else:
+                del self.cache[key]
+        return None, None
+
+    def set(self, query: str, answer: str, context: str = "", preferred_books: list = None):
+        if not answer or len(answer) < 50:
+            return
+        key = self._make_key(query, preferred_books)
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        elif len(self.cache) >= self.maxsize:
+            self.cache.popitem(last=False)
+        self.cache[key] = {
+            "answer": answer,
+            "context": context,
+            "timestamp": time.time()
+        }
+
+TOPIC_CACHE = LRUTopicCache(maxsize=1000, ttl_seconds=86400)
 
 class QueryRequest(BaseModel):
     user_id: str
@@ -1991,15 +2033,60 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         else:
             search_term = query_to_search
 
-        # Step 1: LLM Semantic Normalization (extract authoritative textbook keywords)
-        normalized_data = await normalize_medical_query(search_term)
-        medical_terms = normalized_data.get("search_keywords", [search_term])
+        # ⚡ Step 0: Instant In-Memory Cache Check (<1ms lookup for repeat high-yield questions)
+        if intent != "QUIZ" and not is_followup:
+            cached_answer, cached_context = TOPIC_CACHE.get(search_term, preferred_books=preferred_books_list)
+            if cached_answer:
+                print(f"[CACHE HIT ⚡] Returning instant cached textbook explanation for '{search_term}'")
+                await send_whatsapp_cloud_msg(sender_phone, cached_answer)
+                
+                if chat_history_col is not None:
+                    new_msgs = [
+                        {"role": "user", "content": query_to_search},
+                        {"role": "assistant", "content": cached_answer}
+                    ]
+                    await chat_history_col.update_one(
+                        {"user_id": sender_phone},
+                        {"$push": {"messages": {"$each": new_msgs}}},
+                        upsert=True
+                    )
+                if users_col is not None:
+                    await users_col.update_one(
+                        {"user_id": sender_phone},
+                        {
+                            "$set": {
+                                "last_medical_topic": search_term,
+                                "last_context_text": cached_context or cached_answer[:2000]
+                            }
+                        }
+                    )
+                
+                clean_topic_label = search_term.title()
+                if len(clean_topic_label) > 40:
+                    clean_topic_label = clean_topic_label[:37] + "..."
+                topic_snippet = search_term[:100]
+                await send_whatsapp_interactive_button(
+                    sender_phone,
+                    f"Ready to test your knowledge on *{clean_topic_label}*?",
+                    [
+                        {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice MCQs"}
+                    ]
+                )
+                return
 
-        # Step 1.5: Check for explicit book overrides (e.g. if user says "Use pharmacology")
+        # Step 1: 1ms Instant Local Keyword Extraction (Optimistic search)
+        medical_terms = extract_medical_terms(search_term)
         active_books = get_explicit_book_override(search_term, preferred_books_list)
         
         # Step 2: Multi-search Qdrant with clean medical terms, filtered by active books
         search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
+
+        # Step 2.5: Fallback Micro-LLM Normalization (ONLY if initial search returned 0 chunks)
+        if not search_res:
+            print(f"[SEARCH FALLBACK] 0 chunks found with local keywords. Invoking Micro-LLM normalizer for: '{search_term}'")
+            normalized_data = await normalize_medical_query(search_term)
+            medical_terms = normalized_data.get("search_keywords", [search_term])
+            search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
 
         if not search_res:
             await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question in your selected textbooks. Try rephrasing or updating your preferred books using /update books!")
@@ -2050,7 +2137,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             if user_doc and "messages" in user_doc:
                 chat_history = user_doc["messages"][-6:]
 
-        ai_answer = await stream_openrouter_llm_to_whatsapp(prompt_to_use, user_prompt, sender_phone, chat_history)
+        ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
+        await send_whatsapp_cloud_msg(sender_phone, ai_answer)
 
         if chat_history_col is not None:
             new_msgs = [
@@ -2092,6 +2180,10 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Check if the answer indicates information is missing from textbooks
         ai_lower = ai_answer.lower()
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
+
+        # Save in 24-hour LRU Cache for instant 0.05s delivery for other students
+        if not is_not_covered and len(ai_answer) > 100:
+            TOPIC_CACHE.set(search_term, ai_answer, formatted_context, preferred_books=preferred_books_list)
 
         # Attach interactive follow-up button for quick MCQ generation ONLY if it was a valid medical answer
         if not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
