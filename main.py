@@ -83,6 +83,10 @@ mongo_client = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
 db = mongo_client.neura_db if mongo_client else None
 chat_history_col = db.chat_history if db is not None else None
 users_col = db.users if db is not None else None
+broadcasts_col = db.broadcasts if db is not None else None
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neura2026admin")
+ADMIN_SESSIONS = set()
 
 async def update_user_study_streak(user_id: str) -> int:
     """Updates user's daily study streak based on calendar date (WAT / UTC+1)."""
@@ -1044,6 +1048,39 @@ async def mark_message_as_read(message_id: str):
             await shared_http_client.post(url, headers=headers, json=fallback_payload)
     except Exception as e:
         print(f"⚠️ Read/Typing status error: {e}")
+
+async def send_whatsapp_template_msg(to_number: str, template_name: str, parameters: list, language_code: str = "en") -> bool:
+    """Sends a Meta Pre-Approved Template Message (Utility / Marketing) to a student."""
+    if not to_number or not WHATSAPP_TOKEN:
+        return False
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
+        "Content-Type": "application/json"
+    }
+    body_parameters = [{"type": "text", "text": str(p)} for p in parameters]
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language_code},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": body_parameters
+                }
+            ]
+        }
+    }
+    try:
+        res = await shared_http_client.post(url, headers=headers, json=payload)
+        return res.status_code == 200
+    except Exception as e:
+        print(f"⚠️ Template send error to {to_number}: {e}")
+        return False
 
 async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str = ""):
     """Sends an image to WhatsApp via Meta Cloud API using direct binary media upload (guaranteeing zero 404/429 hotlink failures)"""
@@ -2304,6 +2341,26 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             return
 
         if (msg_lower.startswith("/") or msg_lower in ["reminders on", "reminders off"]) and users_col is not None:
+            if msg_lower.startswith("/broadcast ") or msg_lower.startswith("broadcast "):
+                admin_phones = [p.strip() for p in os.getenv("ADMIN_PHONES", "2348109839187,2349021292141").split(",")]
+                if sender_phone in admin_phones or sender_phone == os.getenv("ADMIN_PHONE", "2348109839187"):
+                    parts = user_msg.split(" ", 1)
+                    broadcast_text = parts[1].strip() if len(parts) > 1 else ""
+                    if broadcast_text:
+                        await send_whatsapp_cloud_msg(sender_phone, "📣 *Broadcasting Started!*\n\nDelivering your announcement to all registered students in the background...")
+                        asyncio.create_task(execute_broadcast_task(
+                            broadcast_id=str(uuid.uuid4()),
+                            message=broadcast_text,
+                            target_level="ALL",
+                            template_name="neura_announcement",
+                            mode="smart",
+                            admin_notify_phone=sender_phone
+                        ))
+                        return
+                    else:
+                        await send_whatsapp_cloud_msg(sender_phone, "⚠️ Usage: */broadcast [your announcement text]*")
+                        return
+
             if msg_lower == "/reset":
                 await users_col.delete_one({"user_id": sender_phone})
                 if chat_history_col is not None:
@@ -2920,3 +2977,661 @@ async def chat_endpoint(req: QueryRequest):
         return {
             "response": f"NEURA AI encountered an error processing your query: {str(e)}. Please check backend API configuration!"
         }
+
+# ==========================================
+# 4. ADMIN BROADCAST & ANALYTICS DASHBOARD
+# ==========================================
+
+class BroadcastRequest(BaseModel):
+    message: str
+    target_level: str = "ALL"
+    template_name: str = "neura_announcement"
+    mode: str = "smart" # "smart", "direct_only", "template_only"
+
+class AdminLoginRequest(BaseModel):
+    password: str
+
+async def execute_broadcast_task(broadcast_id: str, message: str, target_level: str, template_name: str, mode: str, admin_notify_phone: str = None):
+    """Asynchronous background task that delivers broadcast messages with safety pacing."""
+    if users_col is None:
+        return
+        
+    query = {}
+    if target_level and target_level != "ALL":
+        query["level"] = target_level
+        
+    cursor = users_col.find(query)
+    students = await cursor.to_list(length=10000)
+    
+    total = len(students)
+    sent_count = 0
+    failed_count = 0
+    
+    log_doc = {
+        "broadcast_id": broadcast_id,
+        "message": message,
+        "target_level": target_level,
+        "mode": mode,
+        "template_name": template_name,
+        "total_targets": total,
+        "sent_count": 0,
+        "failed_count": 0,
+        "status": "RUNNING",
+        "started_at": datetime.utcnow().isoformat(),
+        "completed_at": None
+    }
+    if broadcasts_col is not None:
+        await broadcasts_col.insert_one(log_doc)
+        
+    for student in students:
+        phone = student.get("user_id")
+        if not phone or len(phone) < 8:
+            failed_count += 1
+            continue
+            
+        student_name = student.get("name", "Student")
+        success = False
+        
+        try:
+            if mode == "template_only":
+                success = await send_whatsapp_template_msg(phone, template_name, [student_name, message])
+            elif mode == "direct_only":
+                await send_whatsapp_cloud_msg(phone, message)
+                success = True
+            else: # smart hybrid
+                direct_delivered = await send_whatsapp_cloud_msg(phone, message)
+                if direct_delivered:
+                    success = True
+                else:
+                    success = await send_whatsapp_template_msg(phone, template_name, [student_name, message])
+        except Exception as err:
+            print(f"Broadcast error for {phone}: {err}")
+            success = False
+            
+        if success:
+            sent_count += 1
+        else:
+            failed_count += 1
+            
+        await asyncio.sleep(0.04) # Safe pacing (~25 msgs/sec)
+        
+    if broadcasts_col is not None:
+        await broadcasts_col.update_one(
+            {"broadcast_id": broadcast_id},
+            {
+                "$set": {
+                    "sent_count": sent_count,
+                    "failed_count": failed_count,
+                    "status": "COMPLETED",
+                    "completed_at": datetime.utcnow().isoformat()
+                }
+            }
+        )
+        
+    if admin_notify_phone:
+        summary_card = (
+            f"📢 *BROADCAST REPORT*\n\n"
+            f"🎯 *Audience:* {target_level}\n"
+            f"👥 *Total Targets:* {total}\n"
+            f"✅ *Successfully Delivered:* {sent_count}\n"
+            f"⚠️ *Failed / Unreachable:* {failed_count}\n\n"
+            f"📝 *Message:* _{message[:60]}..._"
+        )
+        await send_whatsapp_cloud_msg(admin_notify_phone, summary_card)
+
+@app.post("/admin/api/login")
+async def admin_login(req: AdminLoginRequest):
+    if req.password == ADMIN_PASSWORD:
+        token = hashlib.sha256(f"{ADMIN_PASSWORD}_{datetime.utcnow().strftime('%Y-%m-%d')}".encode()).hexdigest()
+        ADMIN_SESSIONS.add(token)
+        return {"status": "success", "token": token}
+    raise HTTPException(status_code=401, detail="Invalid admin credentials")
+
+@app.get("/admin/api/stats")
+async def admin_stats(request: Request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    if token not in ADMIN_SESSIONS:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    total_students = 0
+    active_24h = 0
+    total_wallet = 0.0
+    level_dist = {"200L": 0, "300L": 0, "400L": 0, "500L": 0, "600L": 0, "Other": 0}
+    
+    if users_col is not None:
+        total_students = await users_col.count_documents({})
+        cutoff = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%d")
+        active_24h = await users_col.count_documents({"last_study_date": {"$gte": cutoff}})
+        
+        pipeline = [
+            {"$group": {"_id": "$level", "count": {"$sum": 1}, "wallet": {"$sum": "$wallet_balance_ngn"}}}
+        ]
+        results = await users_col.aggregate(pipeline).to_list(length=100)
+        for r in results:
+            lvl = r.get("_id") or "Other"
+            if lvl in level_dist:
+                level_dist[lvl] = r.get("count", 0)
+            else:
+                level_dist["Other"] += r.get("count", 0)
+            total_wallet += r.get("wallet", 0.0)
+            
+    recent_broadcasts = []
+    if broadcasts_col is not None:
+        cursor = broadcasts_col.find().sort("started_at", -1).limit(10)
+        async for doc in cursor:
+            recent_broadcasts.append({
+                "broadcast_id": doc.get("broadcast_id"),
+                "message": doc.get("message", "")[:80],
+                "target_level": doc.get("target_level", "ALL"),
+                "total_targets": doc.get("total_targets", 0),
+                "sent_count": doc.get("sent_count", 0),
+                "failed_count": doc.get("failed_count", 0),
+                "status": doc.get("status", "COMPLETED"),
+                "started_at": doc.get("started_at", "")[:19].replace("T", " ")
+            })
+            
+    return {
+        "total_students": total_students,
+        "active_24h": active_24h,
+        "total_wallet_balance_ngn": round(total_wallet, 2),
+        "level_distribution": level_dist,
+        "recent_broadcasts": recent_broadcasts
+    }
+
+@app.post("/admin/api/broadcast")
+async def admin_broadcast(req: BroadcastRequest, request: Request, background_tasks: BackgroundTasks):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    if token not in ADMIN_SESSIONS:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    if not req.message or len(req.message.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+        
+    broadcast_id = str(uuid.uuid4())
+    background_tasks.add_task(
+        execute_broadcast_task,
+        broadcast_id,
+        req.message.strip(),
+        req.target_level,
+        req.template_name,
+        req.mode
+    )
+    return {"status": "started", "broadcast_id": broadcast_id}
+
+@app.get("/admin")
+async def admin_dashboard_page():
+    html_content = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEURA AI - Admin Broadcast Hub</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #0B1120; color: #E2E8F0; }
+    .whatsapp-bg { background-color: #0b141a; background-image: radial-gradient(#1e293b 1px, transparent 1px); background-size: 16px 16px; }
+    .glass-card { background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .glass-card-hover:hover { border-color: rgba(56, 189, 248, 0.3); transform: translateY(-2px); transition: all 0.2s ease; }
+    .wa-bubble { background: #005c4b; color: #e9edef; border-radius: 12px 12px 2px 12px; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- LOGIN MODAL -->
+  <div id="login-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+    <div class="glass-card w-full max-w-md p-8 rounded-2xl shadow-2xl border border-sky-500/20 text-center">
+      <div class="w-16 h-16 bg-gradient-to-tr from-sky-500 to-indigo-600 rounded-2xl mx-auto flex items-center justify-center text-white text-2xl shadow-lg shadow-sky-500/30 mb-6">
+        🧠
+      </div>
+      <h2 class="text-2xl font-bold text-white tracking-tight">NEURA AI Admin</h2>
+      <p class="text-slate-400 text-sm mt-1 mb-6">Enter master password to access broadcast hub</p>
+      
+      <div class="space-y-4 text-left">
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Master Password</label>
+          <div class="relative">
+            <input type="password" id="admin-pass" placeholder="••••••••••••" 
+                   class="w-full px-4 py-3 bg-slate-900/90 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-sky-500 transition-colors">
+            <button onclick="togglePass()" type="button" class="absolute right-3 top-3.5 text-slate-400 hover:text-white">
+              <i id="pass-icon" class="fa-regular fa-eye"></i>
+            </button>
+          </div>
+        </div>
+        <p id="login-err" class="text-rose-400 text-xs font-medium hidden">⚠️ Invalid password. Please check your credentials.</p>
+        <button onclick="performLogin()" id="login-btn"
+                class="w-full py-3.5 px-4 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-semibold rounded-xl shadow-lg shadow-sky-500/25 transition-all flex items-center justify-center gap-2">
+          <span>Unlock Admin Hub</span>
+          <i class="fa-solid fa-arrow-right text-xs"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN DASHBOARD -->
+  <div id="dashboard-content" class="hidden flex-1 flex flex-col">
+    <!-- TOP NAVBAR -->
+    <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 bg-gradient-to-tr from-sky-500 to-indigo-600 rounded-xl flex items-center justify-center text-white text-lg font-bold shadow-md shadow-sky-500/20">
+          🧠
+        </div>
+        <div>
+          <h1 class="text-lg font-bold text-white leading-none">NEURA AI</h1>
+          <span class="text-xs text-sky-400 font-medium tracking-wide flex items-center gap-1.5 mt-1">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Broadcast & Student Analytics Hub
+          </span>
+        </div>
+      </div>
+      
+      <div class="flex items-center gap-3">
+        <button onclick="loadDashboardData()" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 flex items-center gap-2 transition-colors">
+          <i class="fa-solid fa-arrows-rotate"></i> Refresh
+        </button>
+        <button onclick="performLogout()" class="px-3.5 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-semibold rounded-lg border border-rose-500/20 flex items-center gap-2 transition-colors">
+          <i class="fa-solid fa-arrow-right-from-bracket"></i> Logout
+        </button>
+      </div>
+    </header>
+
+    <!-- CONTENT WRAPPER -->
+    <main class="max-w-7xl w-full mx-auto p-6 space-y-6 flex-1">
+      <!-- STATS KPI ROW -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="glass-card p-5 rounded-2xl glass-card-hover flex items-center justify-between">
+          <div>
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Registered Students</p>
+            <h3 id="stat-total-students" class="text-2xl font-extrabold text-white mt-1">--</h3>
+          </div>
+          <div class="w-12 h-12 bg-sky-500/10 text-sky-400 rounded-xl flex items-center justify-center text-xl">
+            <i class="fa-solid fa-user-graduate"></i>
+          </div>
+        </div>
+
+        <div class="glass-card p-5 rounded-2xl glass-card-hover flex items-center justify-between">
+          <div>
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active in Last 24 Hours</p>
+            <h3 id="stat-active-24h" class="text-2xl font-extrabold text-emerald-400 mt-1">--</h3>
+          </div>
+          <div class="w-12 h-12 bg-emerald-500/10 text-emerald-400 rounded-xl flex items-center justify-center text-xl">
+            <i class="fa-solid fa-bolt"></i>
+          </div>
+        </div>
+
+        <div class="glass-card p-5 rounded-2xl glass-card-hover flex items-center justify-between">
+          <div>
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Student Wallets</p>
+            <h3 id="stat-wallets" class="text-2xl font-extrabold text-amber-400 mt-1">₦--</h3>
+          </div>
+          <div class="w-12 h-12 bg-amber-500/10 text-amber-400 rounded-xl flex items-center justify-center text-xl">
+            <i class="fa-solid fa-wallet"></i>
+          </div>
+        </div>
+
+        <div class="glass-card p-5 rounded-2xl glass-card-hover flex items-center justify-between">
+          <div>
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Top Class Level</p>
+            <h3 id="stat-top-level" class="text-2xl font-extrabold text-indigo-400 mt-1">--</h3>
+          </div>
+          <div class="w-12 h-12 bg-indigo-500/10 text-indigo-400 rounded-xl flex items-center justify-center text-xl">
+            <i class="fa-solid fa-award"></i>
+          </div>
+        </div>
+      </div>
+
+      <!-- MAIN COMPOSER + PREVIEW GRID -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <!-- COMPOSER (7 cols) -->
+        <div class="lg:col-span-7 glass-card p-6 rounded-2xl space-y-5">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+            <div>
+              <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-bullhorn text-sky-400"></i> New WhatsApp Broadcast
+              </h2>
+              <p class="text-xs text-slate-400 mt-0.5">Send real-time announcements directly to students' WhatsApp</p>
+            </div>
+            <span class="text-xs font-semibold px-2.5 py-1 bg-sky-500/10 text-sky-400 border border-sky-500/20 rounded-full">
+              Meta Cloud API v19.0
+            </span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Target Audience</label>
+              <select id="broadcast-target" class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-sky-500">
+                <option value="ALL">🌟 All Registered Students (100%)</option>
+                <option value="200L">🩺 200 Level Students</option>
+                <option value="300L">🩺 300 Level Students</option>
+                <option value="400L">🩺 400 Level Students</option>
+                <option value="500L">🩺 500 Level Students</option>
+                <option value="600L">🩺 600 Level (Finals)</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Delivery Strategy</label>
+              <select id="broadcast-mode" class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-sky-500">
+                <option value="smart">⚡ Smart Hybrid (Direct + Template Fallback)</option>
+                <option value="direct_only">💬 Direct Message Only (Active 24h Window)</option>
+                <option value="template_only">📋 Template Only (neura_announcement)</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-1.5">
+              <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Announcement Message</label>
+              <div class="flex items-center gap-1">
+                <button type="button" onclick="insertFormatting('*', '*')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-bold border border-slate-700">B</button>
+                <button type="button" onclick="insertFormatting('_', '_')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs italic border border-slate-700">I</button>
+                <button type="button" onclick="insertEmoji('🧠')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs border border-slate-700">🧠</button>
+                <button type="button" onclick="insertEmoji('⚡')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs border border-slate-700">⚡</button>
+              </div>
+            </div>
+            <textarea id="broadcast-msg" rows="7" oninput="updateLivePreview()" placeholder="Type your broadcast announcement here... Use *bold* for emphasis."
+                      class="w-full p-4 bg-slate-900 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-sky-500 transition-colors leading-relaxed"></textarea>
+            <div class="flex items-center justify-between text-xs text-slate-500 mt-1">
+              <span>Supports WhatsApp bold (*text*) and italics (_text_)</span>
+              <span id="char-count">0 characters</span>
+            </div>
+          </div>
+
+          <div class="pt-2">
+            <button onclick="confirmBroadcast()" id="send-broadcast-btn"
+                    class="w-full py-3.5 px-6 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2">
+              <i class="fa-solid fa-paper-plane"></i>
+              <span>Dispatch Broadcast Announcement</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- WHATSAPP PREVIEW (5 cols) -->
+        <div class="lg:col-span-5 glass-card p-6 rounded-2xl flex flex-col">
+          <div class="border-b border-slate-800 pb-3 mb-4 flex items-center justify-between">
+            <h3 class="text-sm font-bold text-slate-300 flex items-center gap-2">
+              <i class="fa-brands fa-whatsapp text-emerald-400 text-lg"></i> Live WhatsApp Screen Preview
+            </h3>
+            <span class="text-[11px] text-slate-400">Recipient View</span>
+          </div>
+
+          <!-- PHONE MOCKUP -->
+          <div class="flex-1 whatsapp-bg rounded-2xl p-4 border border-slate-800 flex flex-col justify-end min-h-[340px] shadow-inner relative overflow-hidden">
+            <!-- WA CHAT BUBBLE -->
+            <div class="wa-bubble p-3.5 max-w-[90%] self-start shadow-md text-sm space-y-1.5">
+              <div class="text-xs font-bold text-emerald-300 flex items-center gap-1 mb-1">
+                <span>🧠 NEURA AI Broadcast</span>
+              </div>
+              <div id="preview-text" class="text-slate-100 text-xs sm:text-sm whitespace-pre-wrap leading-relaxed">
+                Hello Samuel! 👋
+                
+Type your announcement on the left to see how it renders live on students' WhatsApp screens in real-time.
+              </div>
+              <div class="text-[10px] text-slate-300 text-right mt-1 flex items-center justify-end gap-1">
+                <span id="preview-time">12:00</span>
+                <i class="fa-solid fa-check-double text-sky-300 text-[10px]"></i>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BROADCAST HISTORY TABLE -->
+      <div class="glass-card p-6 rounded-2xl space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+          <h3 class="text-base font-bold text-white flex items-center gap-2">
+            <i class="fa-solid fa-clock-rotate-left text-slate-400"></i> Recent Broadcast History
+          </h3>
+          <span class="text-xs text-slate-400">Last 10 Dispatches</span>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-slate-900/80 text-slate-400 uppercase font-semibold border-b border-slate-800">
+              <tr>
+                <th class="py-3 px-4">Date & Time</th>
+                <th class="py-3 px-4">Target Audience</th>
+                <th class="py-3 px-4">Message Snippet</th>
+                <th class="py-3 px-4">Delivered</th>
+                <th class="py-3 px-4">Failed</th>
+                <th class="py-3 px-4">Status</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody" class="divide-y divide-slate-800/60 text-slate-300">
+              <tr>
+                <td colspan="6" class="py-6 text-center text-slate-500">No previous broadcasts recorded yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- CONFIRMATION MODAL -->
+  <div id="confirm-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 hidden">
+    <div class="glass-card w-full max-w-md p-6 rounded-2xl text-center space-y-4 border border-emerald-500/30">
+      <div class="w-14 h-14 bg-emerald-500/10 text-emerald-400 rounded-2xl mx-auto flex items-center justify-center text-2xl">
+        📢
+      </div>
+      <h3 class="text-lg font-bold text-white">Confirm Broadcast Dispatch</h3>
+      <p id="confirm-details" class="text-slate-300 text-xs leading-relaxed">
+        Are you sure you want to send this broadcast announcement to all registered students?
+      </p>
+      <div class="flex items-center gap-3 pt-2">
+        <button onclick="closeConfirmModal()" class="flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-xs border border-slate-700">Cancel</button>
+        <button onclick="executeConfirmedBroadcast()" id="modal-confirm-btn" class="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs shadow-lg shadow-emerald-500/20">Yes, Send Now 🚀</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let authToken = localStorage.getItem("neura_admin_token") || "";
+
+    function togglePass() {
+      const p = document.getElementById("admin-pass");
+      const icon = document.getElementById("pass-icon");
+      if (p.type === "password") {
+        p.type = "text";
+        icon.classList.replace("fa-eye", "fa-eye-slash");
+      } else {
+        p.type = "password";
+        icon.classList.replace("fa-eye-slash", "fa-eye");
+      }
+    }
+
+    document.getElementById("admin-pass").addEventListener("keyup", function(e) {
+      if (e.key === "Enter") performLogin();
+    });
+
+    async function performLogin() {
+      const pass = document.getElementById("admin-pass").value;
+      const err = document.getElementById("login-err");
+      const btn = document.getElementById("login-btn");
+      
+      err.classList.add("hidden");
+      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Checking...';
+      
+      try {
+        const res = await fetch("/admin/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: pass })
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          authToken = data.token;
+          localStorage.setItem("neura_admin_token", authToken);
+          showDashboard();
+        } else {
+          err.classList.remove("hidden");
+          btn.innerHTML = '<span>Unlock Admin Hub</span> <i class="fa-solid fa-arrow-right text-xs"></i>';
+        }
+      } catch (e) {
+        err.innerText = "Network error. Please try again.";
+        err.classList.remove("hidden");
+        btn.innerHTML = '<span>Unlock Admin Hub</span>';
+      }
+    }
+
+    function showDashboard() {
+      document.getElementById("login-modal").classList.add("hidden");
+      document.getElementById("dashboard-content").classList.remove("hidden");
+      loadDashboardData();
+    }
+
+    function performLogout() {
+      authToken = "";
+      localStorage.removeItem("neura_admin_token");
+      document.getElementById("dashboard-content").classList.add("hidden");
+      document.getElementById("login-modal").classList.remove("hidden");
+      document.getElementById("admin-pass").value = "";
+    }
+
+    async function loadDashboardData() {
+      if (!authToken) return;
+      try {
+        const res = await fetch("/admin/api/stats", {
+          headers: { "Authorization": "Bearer " + authToken }
+        });
+        if (res.status === 401) {
+          performLogout();
+          return;
+        }
+        const data = await res.json();
+        document.getElementById("stat-total-students").innerText = data.total_students || "0";
+        document.getElementById("stat-active-24h").innerText = data.active_24h || "0";
+        document.getElementById("stat-wallets").innerText = "₦" + (data.total_wallet_balance_ngn || 0).toLocaleString();
+        
+        // Find top class
+        const dist = data.level_distribution || {};
+        let topLvl = "None";
+        let maxCount = -1;
+        for (let [lvl, count] of Object.entries(dist)) {
+          if (count > maxCount && lvl !== "Other") {
+            maxCount = count;
+            topLvl = lvl;
+          }
+        }
+        document.getElementById("stat-top-level").innerText = topLvl;
+
+        // Render history table
+        const tbody = document.getElementById("history-tbody");
+        if (data.recent_broadcasts && data.recent_broadcasts.length > 0) {
+          tbody.innerHTML = data.recent_broadcasts.map(b => `
+            <tr class="hover:bg-slate-800/40 transition-colors">
+              <td class="py-3 px-4 font-mono text-slate-400">${b.started_at || "Recent"}</td>
+              <td class="py-3 px-4"><span class="px-2 py-0.5 bg-sky-500/10 text-sky-300 rounded font-semibold">${b.target_level}</span></td>
+              <td class="py-3 px-4 text-slate-300 max-w-xs truncate">${b.message}</td>
+              <td class="py-3 px-4 font-bold text-emerald-400">${b.sent_count}</td>
+              <td class="py-3 px-4 text-slate-400">${b.failed_count}</td>
+              <td class="py-3 px-4"><span class="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full font-semibold">${b.status}</span></td>
+            </tr>
+          `).join("");
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function updateLivePreview() {
+      const raw = document.getElementById("broadcast-msg").value;
+      document.getElementById("char-count").innerText = raw.length + " characters";
+      
+      let formatted = raw
+        .replace(/\*(.*?)\*/g, '<b class="font-bold text-white">$1</b>')
+        .replace(/_(.*?)_/g, '<i class="italic text-slate-200">$1</i>');
+        
+      if (!formatted.trim()) {
+        formatted = "Hello Samuel! 👋\\n\\nType your announcement on the left to see how it renders live on students' WhatsApp screens.";
+      }
+      document.getElementById("preview-text").innerHTML = formatted;
+      
+      const now = new Date();
+      document.getElementById("preview-time").innerText = now.getHours().toString().padStart(2, '0') + ":" + now.getMinutes().toString().padStart(2, '0');
+    }
+
+    function insertFormatting(prefix, suffix) {
+      const textarea = document.getElementById("broadcast-msg");
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const selected = text.substring(start, end) || "highlighted text";
+      textarea.value = text.substring(0, start) + prefix + selected + suffix + text.substring(end);
+      textarea.focus();
+      updateLivePreview();
+    }
+
+    function insertEmoji(emoji) {
+      const textarea = document.getElementById("broadcast-msg");
+      textarea.value += " " + emoji + " ";
+      textarea.focus();
+      updateLivePreview();
+    }
+
+    function confirmBroadcast() {
+      const msg = document.getElementById("broadcast-msg").value.trim();
+      const target = document.getElementById("broadcast-target").value;
+      if (!msg) {
+        alert("Please enter a message to broadcast!");
+        return;
+      }
+      document.getElementById("confirm-details").innerText = `You are about to dispatch this announcement to target audience: ${target}. Are you ready?`;
+      document.getElementById("confirm-modal").classList.remove("hidden");
+    }
+
+    function closeConfirmModal() {
+      document.getElementById("confirm-modal").classList.add("hidden");
+    }
+
+    async function executeConfirmedBroadcast() {
+      const msg = document.getElementById("broadcast-msg").value.trim();
+      const target = document.getElementById("broadcast-target").value;
+      const mode = document.getElementById("broadcast-mode").value;
+      const btn = document.getElementById("modal-confirm-btn");
+      
+      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Dispatching...';
+      btn.disabled = true;
+      
+      try {
+        const res = await fetch("/admin/api/broadcast", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + authToken
+          },
+          body: JSON.stringify({
+            message: msg,
+            target_level: target,
+            mode: mode
+          })
+        });
+        
+        if (res.ok) {
+          closeConfirmModal();
+          alert("🎉 Broadcast initiated successfully! The system is delivering the messages in the background.");
+          document.getElementById("broadcast-msg").value = "";
+          updateLivePreview();
+          setTimeout(loadDashboardData, 1500);
+        } else {
+          alert("Broadcast failed to initialize. Please check connection.");
+        }
+      } catch (e) {
+        alert("Error sending broadcast: " + e.message);
+      } finally {
+        btn.innerHTML = 'Yes, Send Now 🚀';
+        btn.disabled = false;
+      }
+    }
+
+    // Auto-login on load if token exists
+    if (authToken) {
+      showDashboard();
+    }
+  </script>
+</body>
+</html>
+"""
+    return HTMLResponse(content=html_content)
+
