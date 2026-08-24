@@ -11,7 +11,8 @@ import traceback
 import httpx
 import hmac
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 from fastapi import FastAPI, HTTPException, Request, Response
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
@@ -83,6 +84,158 @@ embedding_pool = ThreadPoolExecutor(max_workers=4)
 def get_embedding_sync(text: str):
     return list(embedder.embed(text))[0]
 
+print(f"MONGO_URI Present: {bool(MONGO_URI)}")
+mongo_client = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
+db = mongo_client.neura_db if mongo_client else None
+chat_history_col = db.chat_history if db is not None else None
+users_col = db.users if db is not None else None
+
+async def update_user_study_streak(user_id: str) -> int:
+    """Updates user's daily study streak based on calendar date (WAT / UTC+1)."""
+    if users_col is None:
+        return 1
+    
+    try:
+        now_wat = datetime.utcnow() + timedelta(hours=1)
+        today_str = now_wat.strftime("%Y-%m-%d")
+        yesterday_str = (now_wat - timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        user = await users_col.find_one({"user_id": user_id})
+        if not user:
+            await users_col.update_one(
+                {"user_id": user_id},
+                {
+                    "$set": {
+                        "study_streak_days": 1,
+                        "last_study_date": today_str,
+                        "last_active_timestamp": time.time()
+                    }
+                },
+                upsert=True
+            )
+            return 1
+            
+        last_study_date = user.get("last_study_date", "")
+        current_streak = user.get("study_streak_days", 0)
+        
+        if last_study_date == today_str:
+            await users_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"last_active_timestamp": time.time()}}
+            )
+            return current_streak or 1
+        elif last_study_date == yesterday_str:
+            new_streak = current_streak + 1
+        else:
+            new_streak = 1
+            
+        await users_col.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "study_streak_days": new_streak,
+                    "last_study_date": today_str,
+                    "last_active_timestamp": time.time()
+                }
+            },
+            upsert=True
+        )
+        return new_streak
+    except Exception as e:
+        print(f"Error updating study streak: {e}")
+        return 1
+
+async def check_and_send_inactivity_reminders(force_ignore_quiet_hours: bool = False):
+    """Background worker to send Duolingo-style study streak reminders to users inactive for 8-12 hours between 6am and 11pm WAT."""
+    if users_col is None:
+        return
+        
+    try:
+        now_wat = datetime.utcnow() + timedelta(hours=1)
+        current_hour = now_wat.hour
+        
+        # Only send between 6:00 AM and 11:00 PM WAT unless force_ignore_quiet_hours is True
+        if not force_ignore_quiet_hours and (current_hour < 6 or current_hour >= 23):
+            return
+            
+        today_str = now_wat.strftime("%Y-%m-%d")
+        now_ts = time.time()
+        min_inactive_sec = 8 * 3600   # 8 hours
+        max_inactive_sec = 13 * 3600  # 13 hours (safely within 24h Meta service window)
+        
+        cursor = users_col.find({
+            "last_active_timestamp": {
+                "$gte": now_ts - max_inactive_sec,
+                "$lte": now_ts - min_inactive_sec
+            },
+            "last_reminder_sent_date": {"$ne": today_str},
+            "reminders_enabled": {"$ne": False}
+        })
+        
+        async for user in cursor:
+            phone = user.get("user_id")
+            if not phone:
+                continue
+                
+            name = user.get("name", "Student")
+            streak = user.get("study_streak_days", 0)
+            last_study = user.get("last_study_date", "")
+            last_topic = user.get("last_medical_topic", "High-Yield Clinical Concepts")
+            
+            # Formulate streak nudge message
+            if streak > 1 and last_study != today_str:
+                streak_msg = (
+                    f"🔥 *{streak}-DAY STUDY STREAK AT RISK!* 🧊\n\n"
+                    f"Hey *{name}*, don't let your study streak freeze today! Complete a quick 2-minute review or MCQ drill to keep your momentum alive for MBBS exams.\n\n"
+                    f"Ready to conquer your next clinical topic?"
+                )
+            elif streak == 1 and last_study != today_str:
+                streak_msg = (
+                    f"🔥 *KEEP YOUR 1-DAY STREAK ALIVE!* ⚡\n\n"
+                    f"Hey *{name}*, consistency is what turns good students into top clinicians! Review 1 concept today to grow your streak to *2 Days*.\n\n"
+                    f"What medical topic are we breaking down right now?"
+                )
+            else:
+                streak_msg = (
+                    f"🔥 *START YOUR STUDY STREAK TODAY!* 🩺\n\n"
+                    f"Hey *{name}*, time for your quick daily study check-in! Ask a question or complete a practice quiz to kickstart your Daily Streak.\n\n"
+                    f"What medical topic from your textbooks should we tackle?"
+                )
+            
+            topic_snippet = last_topic[:100] if last_topic else "High-Yield Clinical Concepts"
+            
+            # Send message with 1-tap interactive practice buttons
+            await send_whatsapp_interactive_button(
+                phone,
+                streak_msg,
+                [
+                    {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice Daily MCQs"},
+                    {"id": "START_STUDY_SESSION", "title": "📚 Start Study Session"}
+                ]
+            )
+            
+            # Mark reminder sent date to ensure strict 1-per-day cap
+            await users_col.update_one(
+                {"user_id": phone},
+                {"$set": {"last_reminder_sent_date": today_str}}
+            )
+            print(f"[NUDGE] Sent streak reminder to {phone} (Streak: {streak} days)")
+            
+    except Exception as e:
+        print(f"Error in inactivity reminder worker: {e}")
+
+async def start_inactivity_reminder_loop():
+    """Background periodic loop running every 30 minutes."""
+    while True:
+        try:
+            await asyncio.sleep(1800) # 30 minutes
+            await check_and_send_inactivity_reminders()
+        except asyncio.CancelledError:
+            break
+        except Exception as loop_err:
+            print(f"Error in reminder loop: {loop_err}")
+            await asyncio.sleep(60)
+
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -94,12 +247,9 @@ async def startup_event():
         print("✅ Created/verified Qdrant payload index for 'book_title'")
     except Exception as idx_err:
         print(f"ℹ️ Payload index info: {idx_err}")
-
-print(f"MONGO_URI Present: {bool(MONGO_URI)}")
-mongo_client = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
-db = mongo_client.neura_db if mongo_client else None
-chat_history_col = db.chat_history if db is not None else None
-users_col = db.users if db is not None else None
+        
+    # Launch inactivity streak reminder worker in the background
+    asyncio.create_task(start_inactivity_reminder_loop())
 
 class LRUTopicCache:
     """High-speed in-memory 24-hour LRU cache for authoritative textbook explanations (~4KB per topic, max 1000 topics = ~4MB RAM)."""
@@ -1037,7 +1187,8 @@ async def send_commands_menu(sender_phone: str):
     options = [
         {"id": "/wallet", "title": "💳 /wallet", "description": "Check balance, total spent & queries remaining"},
         {"id": "/deposit", "title": "💰 /deposit", "description": "Top up your study wallet (min ₦500)"},
-        {"id": "/profile", "title": "👤 /profile", "description": "View your class, level & active textbooks"},
+        {"id": "/profile", "title": "👤 /profile", "description": "View study streak, class, balance & textbooks"},
+        {"id": "/reminders on", "title": "🔔 /reminders on", "description": "Toggle daily study streak reminders on/off"},
         {"id": "/update books", "title": "📚 /update books", "description": "Change or add your preferred medical textbooks"},
         {"id": "/update level", "title": "🎓 /update level", "description": "Update your current class/level (e.g. 400L)"},
         {"id": "/update name", "title": "✏️ /update name", "description": "Update your student display name"},
@@ -1893,9 +2044,21 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 level = user_doc.get("level", "Unknown Level")
                 preferred_books_list = user_doc.get("preferred_books_list", [])
 
+        # Update daily study streak and activity timestamp
+        streak = await update_user_study_streak(sender_phone)
+
+        # Handle Start Study Session button from reminder
+        if user_msg == "START_STUDY_SESSION":
+            study_prompt = (
+                f"Welcome back to your study session, *{name}*! 🧠⚡\n\n"
+                f"What medical topic, clinical case, or drug mechanism from your textbooks are we mastering right now?"
+            )
+            await send_whatsapp_cloud_msg(sender_phone, study_prompt)
+            return
+
         # Check for profile and wallet commands first
         msg_lower = user_msg.strip().lower()
-        if (msg_lower.startswith("/") or msg_lower in ["topup_wallet", "start_deposit", "clearwallet", "deposit", "wallet", "balance", "clear wallet", "help", "menu", "commands"]):
+        if (msg_lower.startswith("/") or msg_lower in ["topup_wallet", "start_deposit", "clearwallet", "deposit", "wallet", "balance", "clear wallet", "help", "menu", "commands", "reminders on", "reminders off"]):
             if msg_lower in ["/", "/help", "help", "menu", "commands", "/menu", "/commands", "/start"]:
                 await send_commands_menu(sender_phone)
                 return
@@ -1951,10 +2114,26 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 elif msg_lower == "/profile":
                     books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
                     balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
+                    streak_count = user_doc.get("study_streak_days", streak) if user_doc else streak
+                    reminders_status = "Enabled 🔔" if (user_doc and user_doc.get("reminders_enabled", True)) else "Disabled 🔕"
                     await send_whatsapp_cloud_msg(
                         sender_phone, 
-                        f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Wallet Balance: ₦{balance:.2f}\n• Books:\n  - {books_str}\n\n"
+                        f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Study Streak: 🔥 {streak_count} Days\n• Reminders: {reminders_status}\n• Wallet Balance: ₦{balance:.2f}\n• Books:\n  - {books_str}\n\n"
                         f"📝 *Feedback Survey:* https://forms.gle/dNr7SV5EUiqiFySx5"
+                    )
+                    return
+                elif msg_lower in ["/reminders on", "/reminder on", "reminders on"]:
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"reminders_enabled": True}}, upsert=True)
+                    await send_whatsapp_cloud_msg(
+                        sender_phone,
+                        "🔔 *Study Streak Reminders Enabled!*\n\nNEURA AI will gently safeguard your streak if you're inactive for 8–12 hours (between 6:00 AM and 11:00 PM WAT)."
+                    )
+                    return
+                elif msg_lower in ["/reminders off", "/reminder off", "reminders off"]:
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"reminders_enabled": False}}, upsert=True)
+                    await send_whatsapp_cloud_msg(
+                        sender_phone,
+                        "🔕 *Study Streak Reminders Paused.*\n\nYou can re-enable them anytime by typing */reminders on*."
                     )
                     return
                 elif msg_lower == "/feedback":
