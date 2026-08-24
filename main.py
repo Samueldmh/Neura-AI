@@ -2563,43 +2563,6 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         await send_whatsapp_cloud_msg(sender_phone, "⚠️ Usage: */broadcast [your announcement text]*")
                         return
 
-            if msg_lower in ["/clearwallet", "/clear_wallet", "/clear wallet", "/resetwallet", "/reset_wallet", "/emptywallet", "/empty_wallet", "clearwallet"]:
-                if users_col is not None:
-                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"wallet_balance_ngn": 0.0}}, upsert=True)
-                await send_whatsapp_cloud_msg(
-                    sender_phone,
-                    "🗑️ *Wallet Cleared!*\n\nYour wallet balance has been reset to *₦0.00* for testing.\n\nType */deposit* to test depositing funds again, or ask a question to test the low-balance prompt!"
-                )
-                return
-
-            if msg_lower in ["/wallet", "/balance", "wallet", "balance"]:
-                balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
-                spent = user_doc.get("total_spent_ngn", 0.0) if user_doc else 0.0
-                est_queries = int(balance // 2.75)
-                wallet_msg = (
-                    f"💳 *NEURA AI Wallet*\n\n"
-                    f"• Available Balance: *₦{balance:.2f}*\n"
-                    f"• Total Spent: *₦{spent:.2f}*\n"
-                    f"• Estimated Queries Remaining: *~{est_queries}*\n\n"
-                    f"Type */deposit* to top up your wallet with any custom amount (min ₦500)!"
-                )
-                await send_whatsapp_interactive_button(
-                    sender_phone,
-                    wallet_msg,
-                    [{"id": "TOPUP_WALLET", "title": "💳 Deposit ₦500+"}]
-                )
-                return
-
-            if msg_lower in ["/deposit", "/topup", "topup_wallet", "start_deposit", "deposit", "topup"]:
-                balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
-                await send_deposit_menu(sender_phone, balance)
-                return
-
-            if msg_lower.startswith("/deposit ") or msg_lower.startswith("deposit "):
-                handled = await handle_deposit_request(sender_phone, user_msg)
-                if handled:
-                    return
-
             if users_col is not None:
                 if msg_lower == "/reset":
                     await users_col.delete_one({"user_id": sender_phone})
@@ -2613,12 +2576,11 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     return
                 elif msg_lower == "/profile":
                     books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
-                    balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
                     streak_count = user_doc.get("study_streak_days", streak) if user_doc else streak
                     reminders_status = "Enabled 🔔" if (user_doc and user_doc.get("reminders_enabled", True)) else "Disabled 🔕"
                     await send_whatsapp_cloud_msg(
                         sender_phone, 
-                        f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Study Streak: 🔥 {streak_count} Days\n• Reminders: {reminders_status}\n• Wallet Balance: ₦{balance:.2f}\n• Books:\n  - {books_str}\n\n"
+                        f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Study Streak: 🔥 {streak_count} Days\n• Reminders: {reminders_status}\n• Books:\n  - {books_str}\n\n"
                         f"📝 *Feedback Survey:* https://forms.gle/dNr7SV5EUiqiFySx5"
                     )
                     return
@@ -2666,11 +2628,6 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         await complete_onboarding(sender_phone)
                     return
 
-        # Handle deposit menu selection (e.g. DEPOSIT_500) or custom amount entry
-        handled_deposit = await handle_deposit_request(sender_phone, user_msg)
-        if handled_deposit:
-            return
-
         # Handle active interactive quiz answer if student is answering an MCQ
         if user_doc and "active_quiz" in user_doc:
             handled = await handle_quiz_answer(sender_phone, user_msg, user_doc)
@@ -2680,21 +2637,6 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Handle onboarding state machine
         is_onboarding = await handle_onboarding(sender_phone, user_msg)
         if is_onboarding:
-            return
-
-        # Low balance guard (< ₦20)
-        wallet_balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
-        if wallet_balance < 20.0:
-            low_bal_card = (
-                f"⚠️ *Insufficient Wallet Balance (₦{wallet_balance:.2f})*\n\n"
-                f"To continue asking clinical questions and practicing MBBS MCQs, please top up your wallet (minimum deposit is ₦500).\n\n"
-                f"Tap below to deposit:"
-            )
-            await send_whatsapp_interactive_button(
-                sender_phone,
-                low_bal_card,
-                [{"id": "TOPUP_WALLET", "title": "💳 Deposit ₦500+"}]
-            )
             return
 
         msg_clean_for_quiz = user_msg.strip()
@@ -3018,32 +2960,22 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 upsert=True
             )
 
-        # Dynamic Token Billing Deduction (2.5x Markup ~ 60% Margin) & Topic Persistence
+        # Topic & Query Tracking for Weekly Digest and Profile
         if users_col is not None:
             try:
-                est_prompt_tokens = 1500 + len(user_prompt) // 4
-                est_compl_tokens = len(ai_answer) // 4
-                raw_cost_usd = (est_prompt_tokens * 0.00000014) + (est_compl_tokens * 0.00000028)
-                cost_ngn = max(2.00, raw_cost_usd * 1550.0 * 2.5)
                 await users_col.update_one(
                     {"user_id": sender_phone},
                     {
-                        "$inc": {"wallet_balance_ngn": -cost_ngn, "total_spent_ngn": cost_ngn},
+                        "$inc": {"weekly_queries_count": 1, "total_queries_count": 1},
                         "$set": {
                             "last_medical_topic": clean_topic,
                             "last_context_text": formatted_context,
                             "last_assistant_answer": ai_answer
-                        },
-                        "$push": {"transactions": {
-                            "amount_ngn": cost_ngn,
-                            "type": "query_deduction",
-                            "description": "Medical Query / RAG Explanation",
-                            "timestamp": datetime.utcnow().isoformat()
-                        }}
+                        }
                     }
                 )
-            except Exception as bill_err:
-                print(f"⚠️ Billing deduction error: {bill_err}")
+            except Exception as trk_err:
+                print(f"⚠️ Tracking error: {trk_err}")
 
         # Check if the answer indicates information is missing from textbooks
         ai_lower = ai_answer.lower()
@@ -3569,9 +3501,8 @@ async def admin_students(request: Request):
             "user_id": u.get("user_id", ""),
             "name": u.get("name", "Student"),
             "level": u.get("level", "Unset"),
-            "wallet_balance_ngn": round(float(u.get("wallet_balance_ngn", 0.0)), 2),
-            "total_spent_ngn": round(float(u.get("total_spent_ngn", 0.0)), 2),
             "study_streak_days": int(u.get("study_streak_days", 1)),
+            "total_queries_count": int(u.get("total_queries_count", 0)),
             "last_study_date": u.get("last_study_date", "N/A"),
             "preferred_books_list": u.get("preferred_books_list", []),
             "onboarding_step": u.get("onboarding_step", "COMPLETED"),
@@ -3589,9 +3520,8 @@ async def admin_get_student_chats(user_id: str, request: Request):
         "user_id": user_id,
         "name": "Student",
         "level": "Unset",
-        "wallet_balance_ngn": 0.0,
-        "total_spent_ngn": 0.0,
         "study_streak_days": 1,
+        "total_queries_count": 0,
         "last_study_date": "N/A",
         "preferred_books_list": [],
         "onboarding_step": "COMPLETED",
@@ -3604,9 +3534,8 @@ async def admin_get_student_chats(user_id: str, request: Request):
                 "user_id": u.get("user_id", user_id),
                 "name": u.get("name", "Student"),
                 "level": u.get("level", "Unset"),
-                "wallet_balance_ngn": round(float(u.get("wallet_balance_ngn", 0.0)), 2),
-                "total_spent_ngn": round(float(u.get("total_spent_ngn", 0.0)), 2),
                 "study_streak_days": int(u.get("study_streak_days", 1)),
+                "total_queries_count": int(u.get("total_queries_count", 0)),
                 "last_study_date": u.get("last_study_date", "N/A"),
                 "preferred_books_list": u.get("preferred_books_list", []),
                 "onboarding_step": u.get("onboarding_step", "COMPLETED"),
@@ -3614,7 +3543,6 @@ async def admin_get_student_chats(user_id: str, request: Request):
             }
 
     messages = []
-    # 1. Fetch from chat_logs_col if populated
     if chat_logs_col is not None:
         cursor = chat_logs_col.find({"user_id": user_id}).sort("timestamp", 1)
         async for doc in cursor:
@@ -3625,7 +3553,6 @@ async def admin_get_student_chats(user_id: str, request: Request):
                 "metadata": doc.get("metadata", {})
             })
 
-    # 2. Fallback or merge from chat_history_col legacy array
     if not messages and chat_history_col is not None:
         h = await chat_history_col.find_one({"user_id": user_id})
         if h and "messages" in h:
@@ -3638,7 +3565,6 @@ async def admin_get_student_chats(user_id: str, request: Request):
                         "metadata": {"has_issue": m.get("has_issue", False), "msg_type": m.get("msg_type", "text")}
                     })
 
-    # Detect issues / errors to highlight for admin diagnosis
     issue_count = 0
     for m in messages:
         c_low = str(m.get("content", "")).lower()
@@ -3646,8 +3572,6 @@ async def admin_get_student_chats(user_id: str, request: Request):
             m.get("metadata", {}).get("has_issue") or
             "connection delay" in c_low or
             "trouble creating the interactive practice" in c_low or
-            "insufficient balance" in c_low or
-            "low balance" in c_low or
             "error processing your query" in c_low or
             "experienced a brief" in c_low or
             "only read text messages" in c_low or
@@ -3711,9 +3635,8 @@ async def admin_get_recent_chats(request: Request):
             "user_id": uid,
             "name": s.get("name", "Student"),
             "level": s.get("level", "Unset"),
-            "wallet_balance_ngn": round(float(s.get("wallet_balance_ngn", 0.0)), 2),
-            "total_spent_ngn": round(float(s.get("total_spent_ngn", 0.0)), 2),
             "study_streak_days": int(s.get("study_streak_days", 1)),
+            "total_queries_count": int(s.get("total_queries_count", 0)),
             "last_message": last_msg or "No chat history recorded yet",
             "last_time": last_time,
             "message_count": msg_count,
@@ -3722,77 +3645,9 @@ async def admin_get_recent_chats(request: Request):
         
     return {"conversations": conversations}
 
-class CreditWalletRequest(BaseModel):
-    user_id: str
-    amount: float
-    reason: str = "Manual Top-Up"
-    notify_whatsapp: bool = True
-
 class WeeklyDigestRequest(BaseModel):
     target_level: str = "ALL"
     test_phone: str = None
-
-@app.post("/admin/api/students/credit-wallet")
-async def admin_credit_wallet(req: CreditWalletRequest, request: Request):
-    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
-    if token not in ADMIN_SESSIONS:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-        
-    if req.amount <= 0:
-        raise HTTPException(status_code=400, detail="Credit amount must be greater than ₦0.00")
-        
-    if users_col is None:
-        raise HTTPException(status_code=500, detail="Database connection unavailable")
-        
-    user_doc = await users_col.find_one({"user_id": req.user_id})
-    if not user_doc:
-        raise HTTPException(status_code=404, detail=f"Student {req.user_id} not found")
-        
-    prev_balance = float(user_doc.get("wallet_balance_ngn", 0.0))
-    new_balance = round(prev_balance + req.amount, 2)
-    now_iso = datetime.utcnow().isoformat()
-    
-    tx_entry = {
-        "tx_id": str(uuid.uuid4()),
-        "type": "MANUAL_CREDIT",
-        "amount_ngn": req.amount,
-        "previous_balance_ngn": prev_balance,
-        "new_balance_ngn": new_balance,
-        "reason": req.reason or "Manual Admin Deposit",
-        "timestamp": now_iso,
-        "admin": "Admin Console"
-    }
-    
-    await users_col.update_one(
-        {"user_id": req.user_id},
-        {
-            "$set": {"wallet_balance_ngn": new_balance},
-            "$push": {"wallet_transactions": tx_entry}
-        }
-    )
-    
-    # Notify student via WhatsApp if requested
-    if req.notify_whatsapp:
-        student_name = user_doc.get("name", "Student")
-        receipt_msg = (
-            f"🎉 *Wallet Credit Notification!*\n\n"
-            f"Hello {student_name}! *₦{req.amount:,.2f}* has been credited to your NEURA AI study wallet.\n\n"
-            f"• *Reference/Reason:* {req.reason or 'Manual Deposit / Promo Reward'}\n"
-            f"• *New Available Balance:* *₦{new_balance:,.2f}*\n\n"
-            f"You can now continue practicing clinical MCQs, case management, and asking questions from your MBBS textbooks! 🧠⚡"
-        )
-        try:
-            await send_whatsapp_cloud_msg(req.user_id, receipt_msg)
-        except Exception as e:
-            print(f"Error notifying student {req.user_id}: {e}")
-            
-    return {
-        "status": "success",
-        "user_id": req.user_id,
-        "credited_amount": req.amount,
-        "previous_balance": prev_balance,
-        "new_balance": new_balance
-    }
 
 def generate_weekly_digest_card(user_doc: dict) -> str:
     name = user_doc.get("name", "Student")
@@ -3800,8 +3655,7 @@ def generate_weekly_digest_card(user_doc: dict) -> str:
     streak = int(user_doc.get("study_streak_days", 1))
     queries_count = int(user_doc.get("weekly_queries_count", 0))
     if queries_count == 0:
-        spent = float(user_doc.get("total_spent_ngn", 0.0))
-        queries_count = max(3, int(spent // 3.5)) if spent > 0 else 5
+        queries_count = max(3, int(user_doc.get("total_queries_count", 5)))
         
     top_topic = user_doc.get("last_medical_topic", "Clinical Medicine")
     
@@ -3901,7 +3755,7 @@ async def admin_dashboard_page():
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NEURA AI — Executive Clinical Control & Wallets Hub</title>
+  <title>NEURA AI — Executive Clinical Control Hub</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -3962,7 +3816,7 @@ async def admin_dashboard_page():
         🧠
       </div>
       <h2 class="text-2xl font-extrabold text-white tracking-tight">NEURA AI Admin</h2>
-      <p class="text-slate-400 text-sm mt-1 mb-8">Executive Control, Wallets & Diagnostics Suite</p>
+      <p class="text-slate-400 text-sm mt-1 mb-8">Executive Control & Diagnostics Suite</p>
       
       <div class="space-y-4 text-left">
         <div>
@@ -4013,7 +3867,7 @@ async def admin_dashboard_page():
         <nav class="hidden lg:flex items-center gap-1 bg-[#14161A] p-1.5 rounded-2xl border border-obsidian-border text-xs font-semibold">
           <button onclick="switchTab('students')" id="tab-btn-students" class="px-3.5 py-2 rounded-xl text-slate-300 hover:text-white transition-all flex items-center gap-2 tab-active">
             <i class="fa-solid fa-users"></i>
-            <span>Students & Wallets</span>
+            <span>Registered Students</span>
             <span id="nav-student-count" class="px-1.5 py-0.2 bg-black/40 text-black font-bold rounded text-[10px]">--</span>
           </button>
           <button onclick="switchTab('chats')" id="tab-btn-chats" class="px-3.5 py-2 rounded-xl text-slate-400 hover:text-white transition-all flex items-center gap-2">
@@ -4071,7 +3925,7 @@ async def admin_dashboard_page():
     <!-- CONTENT WRAPPER -->
     <main class="max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6 flex-1">
       
-      <!-- TOP EXECUTIVE KPI SUMMARY CARDS (Inspired by Dribbble UI) -->
+      <!-- TOP EXECUTIVE KPI SUMMARY CARDS -->
       <section class="grid grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-5">
         <!-- TOTAL STUDENTS -->
         <div class="glass-card p-5 rounded-2xl glass-card-hover relative overflow-hidden">
@@ -4101,17 +3955,17 @@ async def admin_dashboard_page():
           </p>
         </div>
 
-        <!-- WALLETS SUM -->
+        <!-- TOTAL QUESTIONS MASTERED -->
         <div class="glass-card p-5 rounded-2xl glass-card-hover relative overflow-hidden">
           <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total Escrowed Balances</span>
+            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Clinical Queries Mastered</span>
             <div class="w-8 h-8 rounded-lg bg-lime-accent/15 text-lime-accent flex items-center justify-center text-sm font-bold border border-lime-accent/30">
-              <i class="fa-solid fa-wallet"></i>
+              <i class="fa-solid fa-brain"></i>
             </div>
           </div>
-          <h3 id="stat-wallets" class="text-2xl sm:text-3xl font-black text-lime-accent mt-2">₦--</h3>
+          <h3 id="stat-queries" class="text-2xl sm:text-3xl font-black text-lime-accent mt-2">--</h3>
           <p class="text-[11px] text-slate-400 mt-1 flex items-center gap-1 font-medium">
-            <span>Prepaid Student Funds</span>
+            <span>Textbook Grounded Queries</span>
           </p>
         </div>
 
@@ -4130,16 +3984,16 @@ async def admin_dashboard_page():
         </div>
       </section>
 
-      <!-- ================= TAB 1: STUDENT DIRECTORY & WALLETS ================= -->
+      <!-- ================= TAB 1: STUDENT DIRECTORY ================= -->
       <section id="view-students" class="space-y-4">
         <!-- CONTROLS & FILTER BAR -->
         <div class="glass-card p-4 sm:p-5 rounded-2xl space-y-3.5">
           <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div>
               <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                <i class="fa-solid fa-users text-lime-accent"></i> Registered Student Directory & Wallets
+                <i class="fa-solid fa-users text-lime-accent"></i> Registered Student Directory
               </h2>
-              <p class="text-xs text-slate-400 mt-0.5">Live database of all MBBS students, active deposits, streaks & manual credit controls</p>
+              <p class="text-xs text-slate-400 mt-0.5">Live database of all registered MBBS students, study streaks & textbook preferences</p>
             </div>
 
             <!-- SEARCH BAR -->
@@ -4163,14 +4017,8 @@ async def admin_dashboard_page():
               <button onclick="setLevelFilter('600L')" id="lvl-filter-600L" class="lvl-btn px-2.5 py-1 rounded-lg font-semibold bg-[#1B1E24] text-slate-300 hover:bg-[#252A33] transition-all">600L</button>
             </div>
 
-            <!-- WALLET FILTER -->
             <div class="flex items-center gap-2 text-xs">
               <span id="filtered-count" class="text-slate-400 font-medium">Showing -- students</span>
-              <select id="wallet-filter" onchange="filterStudentsTable()" class="px-2.5 py-1 bg-[#0B0C0E] border border-obsidian-border rounded-lg text-slate-300 text-xs focus:outline-none focus:border-lime-accent">
-                <option value="ALL">All Wallets</option>
-                <option value="FUNDED">Funded (&gt; ₦0)</option>
-                <option value="ZERO">Zero Balance (₦0)</option>
-              </select>
             </div>
           </div>
         </div>
@@ -4184,9 +4032,8 @@ async def admin_dashboard_page():
                   <th class="py-3.5 px-4">Student Profile</th>
                   <th class="py-3.5 px-4">WhatsApp Phone Number</th>
                   <th class="py-3.5 px-4">MBBS Level</th>
-                  <th class="py-3.5 px-4">Wallet Balance</th>
-                  <th class="py-3.5 px-4">Total Spent</th>
                   <th class="py-3.5 px-4">Streak</th>
+                  <th class="py-3.5 px-4">Questions Mastered</th>
                   <th class="py-3.5 px-4">Preferred Textbooks</th>
                   <th class="py-3.5 px-4">Last Active</th>
                   <th class="py-3.5 px-4 text-center">Actions</th>
@@ -4194,7 +4041,7 @@ async def admin_dashboard_page():
               </thead>
               <tbody id="students-tbody" class="divide-y divide-obsidian-border text-slate-300">
                 <tr>
-                  <td colspan="9" class="py-12 text-center text-slate-500">
+                  <td colspan="8" class="py-12 text-center text-slate-500">
                     <div class="inline-block animate-spin text-lime-accent text-2xl mb-2"><i class="fa-solid fa-circle-notch"></i></div>
                     <p class="text-xs font-semibold">Loading student directory from MongoDB...</p>
                   </td>
@@ -4267,18 +4114,13 @@ async def admin_dashboard_page():
                     <button onclick="copyActiveChatPhone()" title="Copy Phone" class="hover:text-white transition-colors"><i class="fa-regular fa-copy text-xs"></i></button>
                     <span class="text-slate-600">•</span>
                     <span id="chat-header-streak" class="text-amber-400 font-sans font-bold">🔥 --</span>
-                    <span class="text-slate-600">•</span>
-                    <span id="chat-header-wallet" class="text-lime-accent font-sans font-bold">₦0.00</span>
                   </div>
                 </div>
               </div>
 
               <!-- RIGHT ACTIONS & IN-CHAT SEARCH -->
               <div class="flex items-center gap-2">
-                <button onclick="openCreditModalForActiveUser()" class="px-3 py-1.5 bg-lime-accent hover:bg-lime-hover text-black rounded-xl text-xs font-bold inline-flex items-center gap-1 shadow-md shadow-lime-accent/15 transition-all">
-                  <i class="fa-solid fa-plus"></i> Credit
-                </button>
-                <div class="relative hidden sm:block w-44">
+                <div class="relative hidden sm:block w-48">
                   <i class="fa-solid fa-magnifying-glass absolute left-2.5 top-2 text-slate-400 text-xs"></i>
                   <input type="text" id="in-chat-search" oninput="filterInChatMessages()" placeholder="Find in chat..."
                          class="w-full pl-7 pr-3 py-1 bg-[#0B0C0E] border border-obsidian-border rounded-lg text-white text-xs placeholder:text-slate-500 focus:outline-none focus:border-lime-accent">
@@ -4506,85 +4348,25 @@ Type your announcement on the left to see how it renders live on students' Whats
             </div>
           </div>
 
-          <!-- FINANCIAL & ENGAGEMENT SUMMARY -->
+          <!-- ENGAGEMENT SUMMARY -->
           <div class="glass-card p-6 rounded-2xl space-y-4 border border-obsidian-border">
             <h3 class="text-sm font-bold text-white flex items-center gap-2">
-              <i class="fa-solid fa-coins text-lime-accent"></i> Wallet & Prepaid Financial Health
+              <i class="fa-solid fa-graduation-cap text-lime-accent"></i> Academic Activity & Engagement
             </h3>
             <div class="space-y-4 pt-2">
               <div class="flex items-center justify-between p-3.5 bg-[#0B0C0E] rounded-xl border border-obsidian-border">
-                <span class="text-xs text-slate-400">Total User Funds in Escrow:</span>
-                <span id="analytics-wallet-total" class="text-sm font-black text-lime-accent">₦--</span>
+                <span class="text-xs text-slate-400">Total Registered Students:</span>
+                <span id="analytics-total-students" class="text-sm font-black text-white">--</span>
               </div>
               <div class="flex items-center justify-between p-3.5 bg-[#0B0C0E] rounded-xl border border-obsidian-border">
-                <span class="text-xs text-slate-400">Total Revenue Billed on Queries:</span>
-                <span id="analytics-spent-total" class="text-sm font-black text-white">₦--</span>
-              </div>
-              <div class="flex items-center justify-between p-3.5 bg-[#0B0C0E] rounded-xl border border-obsidian-border">
-                <span class="text-xs text-slate-400">Average Wallet Balance / Student:</span>
-                <span id="analytics-avg-wallet" class="text-sm font-black text-slate-200">₦--</span>
+                <span class="text-xs text-slate-400">Total Clinical Questions Answered:</span>
+                <span id="analytics-total-queries" class="text-sm font-black text-lime-accent">--</span>
               </div>
             </div>
           </div>
         </div>
       </section>
     </main>
-  </div>
-
-  <!-- ================= CREDIT WALLET MODAL ================= -->
-  <div id="credit-wallet-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 hidden">
-    <div class="glass-card w-full max-w-md p-6 rounded-3xl space-y-4 border border-lime-accent/30 shadow-2xl relative">
-      <div class="flex items-center justify-between border-b border-obsidian-border pb-3">
-        <div class="flex items-center gap-2.5">
-          <div class="w-9 h-9 rounded-xl bg-lime-accent/15 text-lime-accent flex items-center justify-center text-base font-bold border border-lime-accent/30">
-            <i class="fa-solid fa-wallet"></i>
-          </div>
-          <div>
-            <h3 class="text-sm font-bold text-white">Credit Student Wallet</h3>
-            <p class="text-[11px] text-slate-400">Direct manual deposit & promo reward</p>
-          </div>
-        </div>
-        <button onclick="closeCreditModal()" class="text-slate-400 hover:text-white text-sm"><i class="fa-solid fa-xmark"></i></button>
-      </div>
-
-      <div class="space-y-3.5">
-        <div class="p-3 bg-[#0B0C0E] rounded-xl border border-obsidian-border flex items-center justify-between text-xs">
-          <span class="text-slate-400">Student: <b id="credit-student-name" class="text-white">--</b></span>
-          <span class="text-slate-400">Current: <b id="credit-current-balance" class="text-lime-accent">₦0.00</b></span>
-        </div>
-
-        <div>
-          <label class="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">Credit Amount (₦ NGN)</label>
-          <input type="number" id="credit-amount-input" min="1" step="100" placeholder="e.g. 5000"
-                 class="w-full px-3.5 py-2.5 bg-[#0B0C0E] border border-obsidian-border rounded-xl text-white font-mono text-sm focus:outline-none focus:border-lime-accent">
-          
-          <!-- QUICK PRESET PILLS -->
-          <div class="flex flex-wrap gap-1.5 mt-2">
-            <button onclick="setCreditPreset(500)" class="px-2.5 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 rounded-lg text-xs font-mono border border-obsidian-border">+₦500</button>
-            <button onclick="setCreditPreset(1000)" class="px-2.5 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 rounded-lg text-xs font-mono border border-obsidian-border">+₦1,000</button>
-            <button onclick="setCreditPreset(2500)" class="px-2.5 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 rounded-lg text-xs font-mono border border-obsidian-border">+₦2,500</button>
-            <button onclick="setCreditPreset(5000)" class="px-2.5 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 rounded-lg text-xs font-mono border border-obsidian-border">+₦5,000</button>
-            <button onclick="setCreditPreset(10000)" class="px-2.5 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 rounded-lg text-xs font-mono border border-obsidian-border">+₦10,000</button>
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">Deposit Reason / Reference</label>
-          <input type="text" id="credit-reason-input" value="Direct Bank Transfer" placeholder="e.g. Bank Transfer, Promo Gift"
-                 class="w-full px-3.5 py-2 bg-[#0B0C0E] border border-obsidian-border rounded-xl text-white text-xs focus:outline-none focus:border-lime-accent">
-        </div>
-
-        <div class="flex items-center gap-2 pt-1">
-          <input type="checkbox" id="credit-notify-wa" checked class="accent-lime-accent rounded w-4 h-4 cursor-pointer">
-          <label for="credit-notify-wa" class="text-xs text-slate-300 cursor-pointer">Send automated WhatsApp confirmation receipt to student</label>
-        </div>
-      </div>
-
-      <div class="flex items-center gap-3 pt-3 border-t border-obsidian-border">
-        <button onclick="closeCreditModal()" class="flex-1 py-2.5 px-4 bg-[#1B1E24] hover:bg-[#252A33] text-slate-300 font-bold rounded-xl text-xs border border-obsidian-border transition-colors">Cancel</button>
-        <button onclick="submitCreditWallet()" id="credit-submit-btn" class="flex-1 py-2.5 px-4 bg-lime-accent hover:bg-lime-hover text-black font-extrabold rounded-xl text-xs shadow-lg shadow-lime-accent/20 transition-all">Confirm Deposit 💳</button>
-      </div>
-    </div>
   </div>
 
   <!-- ================= CONFIRMATION MODAL ================= -->
@@ -4613,7 +4395,6 @@ Type your announcement on the left to see how it renders live on students' Whats
     let activeChatThreadFilter = "ALL";
     let currentSelectedUserId = "";
     let currentActiveMessages = [];
-    let targetCreditUserId = "";
 
     function togglePass() {
       const p = document.getElementById("admin-pass");
@@ -4724,10 +4505,8 @@ Type your announcement on the left to see how it renders live on students' Whats
       
       document.getElementById("stat-total-students").innerText = data.total_students || "0";
       document.getElementById("stat-active-24h").innerText = data.active_24h || "0";
-      document.getElementById("stat-wallets").innerText = "₦" + (data.total_wallet_balance_ngn || 0).toLocaleString();
-      document.getElementById("analytics-wallet-total").innerText = "₦" + (data.total_wallet_balance_ngn || 0).toLocaleString();
+      document.getElementById("analytics-total-students").innerText = data.total_students || "0";
       
-      // Top class
       const dist = data.level_distribution || {};
       let topLvl = "None";
       let maxCount = -1;
@@ -4769,11 +4548,10 @@ Type your announcement on the left to see how it renders live on students' Whats
       
       document.getElementById("nav-student-count").innerText = rawStudentsList.length;
       
-      let totalSpent = 0;
-      rawStudentsList.forEach(s => totalSpent += (s.total_spent_ngn || 0));
-      document.getElementById("analytics-spent-total").innerText = "₦" + totalSpent.toLocaleString();
-      const avg = rawStudentsList.length > 0 ? Math.round(totalSpent / rawStudentsList.length) : 0;
-      document.getElementById("analytics-avg-wallet").innerText = "₦" + avg.toLocaleString();
+      let totalQueries = 0;
+      rawStudentsList.forEach(s => totalQueries += (s.total_queries_count || 0));
+      document.getElementById("stat-queries").innerText = totalQueries > 0 ? totalQueries.toLocaleString() : "100+";
+      document.getElementById("analytics-total-queries").innerText = totalQueries > 0 ? totalQueries.toLocaleString() : "100+";
 
       filterStudentsTable();
     }
@@ -4794,12 +4572,9 @@ Type your announcement on the left to see how it renders live on students' Whats
 
     function filterStudentsTable() {
       const query = document.getElementById("student-search").value.toLowerCase().trim();
-      const walletFilter = document.getElementById("wallet-filter").value;
       
       const filtered = rawStudentsList.filter(s => {
         if (activeLevelFilter !== "ALL" && s.level !== activeLevelFilter) return false;
-        if (walletFilter === "FUNDED" && s.wallet_balance_ngn <= 0) return false;
-        if (walletFilter === "ZERO" && s.wallet_balance_ngn > 0) return false;
         
         if (query) {
           const matchName = (s.name || "").toLowerCase().includes(query);
@@ -4819,7 +4594,7 @@ Type your announcement on the left to see how it renders live on students' Whats
       if (!students || students.length === 0) {
         tbody.innerHTML = `
           <tr>
-            <td colspan="9" class="py-10 text-center text-slate-500">
+            <td colspan="8" class="py-10 text-center text-slate-500">
               <i class="fa-regular fa-folder-open text-2xl mb-2"></i>
               <p class="text-xs">No registered students found matching your filter criteria.</p>
             </td>
@@ -4837,10 +4612,6 @@ Type your announcement on the left to see how it renders live on students' Whats
         else if (s.level === "400L") lvlBadge = "bg-indigo-500/10 text-indigo-400 border-indigo-500/20";
         else if (s.level === "500L") lvlBadge = "bg-purple-500/10 text-purple-400 border-purple-500/20";
         else if (s.level === "600L") lvlBadge = "bg-amber-500/10 text-amber-400 border-amber-500/20";
-
-        let walletPill = s.wallet_balance_ngn > 0 
-          ? `<span class="px-2.5 py-1 bg-lime-accent/15 text-lime-accent border border-lime-accent/30 rounded-lg font-mono font-bold">₦${s.wallet_balance_ngn.toLocaleString('en-NG', {minimumFractionDigits: 2})}</span>`
-          : `<span class="px-2.5 py-1 bg-[#1B1E24] text-slate-400 border border-obsidian-border rounded-lg font-mono">₦0.00</span>`;
 
         const booksCount = (s.preferred_books_list || []).length;
         const booksText = booksCount > 0 ? `${booksCount} Book(s)` : "General Library";
@@ -4879,19 +4650,14 @@ Type your announcement on the left to see how it renders live on students' Whats
               </span>
             </td>
 
-            <!-- WALLET BALANCE -->
-            <td class="py-3 px-4">
-              ${walletPill}
-            </td>
-
-            <!-- SPENT -->
-            <td class="py-3 px-4 font-mono text-slate-400">
-              ₦${(s.total_spent_ngn || 0).toLocaleString('en-NG', {minimumFractionDigits: 2})}
-            </td>
-
             <!-- STREAK -->
             <td class="py-3 px-4 font-bold text-amber-400">
               🔥 ${s.study_streak_days || 1}d
+            </td>
+
+            <!-- QUERIES MASTERED -->
+            <td class="py-3 px-4 font-mono text-lime-accent font-semibold">
+              ${s.total_queries_count || 0}
             </td>
 
             <!-- TEXTBOOKS -->
@@ -4909,9 +4675,6 @@ Type your announcement on the left to see how it renders live on students' Whats
             <!-- ACTIONS -->
             <td class="py-3 px-4 text-center">
               <div class="flex items-center justify-center gap-1.5">
-                <button onclick="openCreditModal('${s.user_id}', '${s.name || 'Student'}', ${s.wallet_balance_ngn || 0})" class="px-2.5 py-1 bg-lime-accent/15 hover:bg-lime-accent/25 text-lime-accent border border-lime-accent/30 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition-all">
-                  <i class="fa-solid fa-plus text-[10px]"></i> Credit
-                </button>
                 <button onclick="openStudentChat('${s.user_id}')" class="px-2.5 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 border border-obsidian-border rounded-lg text-xs font-semibold inline-flex items-center gap-1 transition-colors">
                   <i class="fa-solid fa-comments text-[10px]"></i> Chats
                 </button>
@@ -4923,79 +4686,6 @@ Type your announcement on the left to see how it renders live on students' Whats
           </tr>
         `;
       }).join("");
-    }
-
-    // ================= CREDIT WALLET MODAL LOGIC =================
-    function openCreditModal(userId, name, currentBal) {
-      targetCreditUserId = userId;
-      document.getElementById("credit-student-name").innerText = `${name} (${userId})`;
-      document.getElementById("credit-current-balance").innerText = `₦${(currentBal || 0).toLocaleString('en-NG', {minimumFractionDigits: 2})}`;
-      document.getElementById("credit-amount-input").value = "5000";
-      document.getElementById("credit-reason-input").value = "Direct Bank Transfer";
-      document.getElementById("credit-wallet-modal").classList.remove("hidden");
-    }
-
-    function openCreditModalForActiveUser() {
-      if (!currentSelectedUserId) return;
-      const s = rawStudentsList.find(u => u.user_id === currentSelectedUserId);
-      openCreditModal(currentSelectedUserId, s ? s.name : "Student", s ? s.wallet_balance_ngn : 0);
-    }
-
-    function closeCreditModal() {
-      document.getElementById("credit-wallet-modal").classList.add("hidden");
-    }
-
-    function setCreditPreset(amt) {
-      document.getElementById("credit-amount-input").value = amt;
-    }
-
-    async function submitCreditWallet() {
-      const amt = parseFloat(document.getElementById("credit-amount-input").value);
-      const reason = document.getElementById("credit-reason-input").value.trim();
-      const notify = document.getElementById("credit-notify-wa").checked;
-      const btn = document.getElementById("credit-submit-btn");
-
-      if (!amt || amt <= 0) {
-        alert("Please enter a valid credit amount greater than ₦0.00!");
-        return;
-      }
-
-      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Crediting...';
-      btn.disabled = true;
-
-      try {
-        const res = await fetch("/admin/api/students/credit-wallet", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + authToken
-          },
-          body: JSON.stringify({
-            user_id: targetCreditUserId,
-            amount: amt,
-            reason: reason,
-            notify_whatsapp: notify
-          })
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          closeCreditModal();
-          alert(`🎉 Successfully credited ₦${amt.toLocaleString()} to student! New Balance: ₦${data.new_balance.toLocaleString()}`);
-          loadAllData();
-          if (currentSelectedUserId === targetCreditUserId) {
-            loadConversationForUser(targetCreditUserId);
-          }
-        } else {
-          const err = await res.json();
-          alert(`Failed to credit wallet: ${err.detail || 'Error'}`);
-        }
-      } catch (e) {
-        alert("Network error crediting wallet: " + e.message);
-      } finally {
-        btn.innerHTML = 'Confirm Deposit 💳';
-        btn.disabled = false;
-      }
     }
 
     // ================= WEEKLY DIGEST PREVIEW & SEND =================
@@ -5201,7 +4891,7 @@ Ready to kick off another high-yield week? Type */quiz* for 5 exam MCQs or ask y
             <div class="flex items-center justify-between text-[10px] text-slate-500 pt-0.5 font-mono">
               <span>${t.user_id}</span>
               <span class="flex items-center gap-1.5">
-                <span class="text-lime-accent font-sans font-bold">₦${(t.wallet_balance_ngn || 0).toLocaleString()}</span>
+                <span class="text-amber-400 font-sans font-bold">🔥 ${t.study_streak_days || 1}d</span>
                 <span>•</span>
                 <span>${t.message_count || 0} msgs</span>
               </span>
@@ -5244,7 +4934,6 @@ Ready to kick off another high-yield week? Type */quiz* for 5 exam MCQs or ask y
         document.getElementById("chat-header-level").innerText = student.level || "Unset";
         document.getElementById("chat-header-phone").innerText = student.user_id || userId;
         document.getElementById("chat-header-streak").innerText = `🔥 ${student.study_streak_days || 1}d streak`;
-        document.getElementById("chat-header-wallet").innerText = `₦${(student.wallet_balance_ngn || 0).toLocaleString('en-NG', {minimumFractionDigits: 2})}`;
         document.getElementById("chat-header-wa-btn").href = `https://wa.me/${student.user_id || userId}`;
 
         const diagBanner = document.getElementById("chat-diagnostic-banner");
@@ -5464,6 +5153,7 @@ Ready to kick off another high-yield week? Type */quiz* for 5 exam MCQs or ask y
 </html>
 """
     return HTMLResponse(content=html_content)
+
 
 
 
