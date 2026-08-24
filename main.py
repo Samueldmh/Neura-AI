@@ -2847,7 +2847,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             if cached_answer:
                 clean_topic = clean_medical_topic_title(search_term)
                 print(f"[CACHE HIT ⚡] Returning instant cached explanation for '{clean_topic}'")
-                await send_whatsapp_cloud_msg(sender_phone, cached_answer)
+                streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
+                await send_whatsapp_cloud_msg(sender_phone, cached_answer + streak_footer)
                 
                 if chat_history_col is not None:
                     new_msgs = [
@@ -2999,7 +3000,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             )
             return
 
-        await send_whatsapp_cloud_msg(sender_phone, ai_answer)
+        streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
+        await send_whatsapp_cloud_msg(sender_phone, ai_answer + streak_footer)
 
         if chat_history_col is not None:
             new_msgs = [
