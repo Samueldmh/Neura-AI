@@ -3645,89 +3645,6 @@ async def admin_get_recent_chats(request: Request):
         
     return {"conversations": conversations}
 
-class WeeklyDigestRequest(BaseModel):
-    target_level: str = "ALL"
-    test_phone: str = None
-
-def generate_weekly_digest_card(user_doc: dict) -> str:
-    name = user_doc.get("name", "Student")
-    level = user_doc.get("level", "MBBS")
-    streak = int(user_doc.get("study_streak_days", 1))
-    queries_count = int(user_doc.get("weekly_queries_count", 0))
-    if queries_count == 0:
-        queries_count = max(3, int(user_doc.get("total_queries_count", 5)))
-        
-    top_topic = user_doc.get("last_medical_topic", "Clinical Medicine")
-    
-    level_tips = {
-        "200L": "💡 *High-Yield 200L Tip:* Focus on Anatomical triangles & Rate-limiting biochemical enzymes — they form the core of exam MCQs!",
-        "300L": "💡 *High-Yield 300L Tip:* Connect Mechanism of Action (MOA) directly to adverse drug reactions in Pharmacology & Robins Pathology hallmarks!",
-        "400L": "💡 *High-Yield 400L Tip:* Master clinical history taking, fluid resuscitation formulas (Parkland), and cardinal symptoms on ward rounds!",
-        "500L": "💡 *High-Yield 500L Tip:* High alert on IMCI triage, Pediatric milestones, and Obstetric emergencies (Eclampsia, PPH management)!",
-        "600L": "💡 *Finals High-Yield Focus:* Practice rapid diagnostic algorithms, differential diagnoses, and definitive management plans for your viva & OSCEs!"
-    }
-    tip = level_tips.get(level, "💡 *Clinical Tip:* Consistent daily active recall with textbook grounding guarantees exam excellence!")
-    active_days_est = min(7, max(1, streak % 7 if streak % 7 != 0 else 7))
-    
-    return (
-        f"📊 *NEURA AI Weekly Study Digest*\n"
-        f"📅 _Weekly Review & Exam Readiness_\n\n"
-        f"Hello *{name}*! Here is your MBBS performance summary for this week:\n\n"
-        f"🔥 *Active Study Days:* {active_days_est} days\n"
-        f"📚 *Clinical Queries & MCQs:* ~{queries_count} concepts mastered\n"
-        f"🩺 *Top Subject Studied:* *{top_topic}*\n"
-        f"🎯 *Academic Level:* *{level}*\n\n"
-        f"{tip}\n\n"
-        f"Ready to kick off another high-yield week? Type */quiz* for 5 exam MCQs or ask your next textbook question! 🧠⚡"
-    )
-
-@app.post("/admin/api/digest/send-weekly")
-async def admin_send_weekly_digest(req: WeeklyDigestRequest, request: Request, background_tasks: BackgroundTasks):
-    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
-    if token not in ADMIN_SESSIONS:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-        
-    if req.test_phone:
-        target_phone = req.test_phone.strip()
-        dummy_user = {
-            "name": "Doctor (Test)",
-            "level": req.target_level if req.target_level != "ALL" else "400L",
-            "study_streak_days": 5,
-            "weekly_queries_count": 28,
-            "last_medical_topic": "Antihypertensives & Heart Failure Management"
-        }
-        test_msg = generate_weekly_digest_card(dummy_user)
-        delivered = await send_whatsapp_cloud_msg(target_phone, test_msg)
-        return {"status": "test_sent", "phone": target_phone, "delivered": delivered}
-        
-    if users_col is None:
-        return {"status": "error", "detail": "Database unavailable"}
-        
-    query = {}
-    if req.target_level and req.target_level != "ALL":
-        query["level"] = req.target_level
-        
-    students = await users_col.find(query).to_list(length=10000)
-    
-    async def run_digest_dispatch(students_list):
-        sent = 0
-        for s in students_list:
-            phone = s.get("user_id")
-            if not phone:
-                continue
-            msg = generate_weekly_digest_card(s)
-            try:
-                await send_whatsapp_cloud_msg(phone, msg)
-                sent += 1
-            except Exception as e:
-                print(f"Digest error for {phone}: {e}")
-            await asyncio.sleep(0.05)
-            
-        print(f"Weekly digest dispatched to {sent} students.")
-        
-    background_tasks.add_task(run_digest_dispatch, students)
-    return {"status": "started", "total_targets": len(students)}
-
 @app.post("/admin/api/broadcast")
 async def admin_broadcast(req: BroadcastRequest, request: Request, background_tasks: BackgroundTasks):
     token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
@@ -3875,10 +3792,6 @@ async def admin_dashboard_page():
             <span>User Chats & Transcripts</span>
             <span id="nav-chat-issues" class="px-1.5 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[10px] font-bold hidden">⚠️ Issues</span>
           </button>
-          <button onclick="switchTab('digest')" id="tab-btn-digest" class="px-3.5 py-2 rounded-xl text-slate-400 hover:text-white transition-all flex items-center gap-2">
-            <i class="fa-solid fa-calendar-week text-lime-accent"></i>
-            <span>Weekly Digest Studio</span>
-          </button>
           <button onclick="switchTab('broadcast')" id="tab-btn-broadcast" class="px-3.5 py-2 rounded-xl text-slate-400 hover:text-white transition-all flex items-center gap-2">
             <i class="fa-solid fa-bullhorn"></i>
             <span>Broadcasts</span>
@@ -3909,9 +3822,6 @@ async def admin_dashboard_page():
         </button>
         <button onclick="switchTab('chats')" id="m-tab-btn-chats" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
           <i class="fa-solid fa-comments"></i> Chats
-        </button>
-        <button onclick="switchTab('digest')" id="m-tab-btn-digest" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
-          <i class="fa-solid fa-calendar-week text-lime-accent"></i> Digest
         </button>
         <button onclick="switchTab('broadcast')" id="m-tab-btn-broadcast" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
           <i class="fa-solid fa-bullhorn"></i> Broadcast
@@ -4157,88 +4067,7 @@ async def admin_dashboard_page():
         </div>
       </section>
 
-      <!-- ================= TAB 3: WEEKLY PERFORMANCE DIGEST STUDIO ================= -->
-      <section id="view-digest" class="hidden space-y-6">
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <!-- DIGEST CONTROLS (6 Cols) -->
-          <div class="lg:col-span-6 glass-card p-6 rounded-2xl space-y-5 border border-obsidian-border">
-            <div class="flex items-center justify-between border-b border-obsidian-border pb-4">
-              <div>
-                <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                  <i class="fa-solid fa-calendar-week text-lime-accent"></i> Sunday Weekly Digest Studio
-                </h2>
-                <p class="text-xs text-slate-400 mt-0.5">Automated Sunday 7:00 PM (WAT) performance report generator</p>
-              </div>
-              <span class="text-xs font-bold px-3 py-1 bg-lime-accent/10 text-lime-accent border border-lime-accent/30 rounded-full">
-                Auto-Scheduled: Sundays 19:00 WAT
-              </span>
-            </div>
-
-            <!-- AUDIENCE SELECTOR -->
-            <div>
-              <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">Target Academic Cohort</label>
-              <select id="digest-target" onchange="updateDigestPreview()" class="w-full px-3.5 py-2.5 bg-[#0B0C0E] border border-obsidian-border rounded-xl text-white text-xs font-semibold focus:outline-none focus:border-lime-accent">
-                <option value="ALL">🌟 All Registered MBBS Students (100%)</option>
-                <option value="200L">🩺 200 Level (Basic Sciences Focus)</option>
-                <option value="300L">🩺 300 Level (Paraclinicals & Pharma Focus)</option>
-                <option value="400L">🩺 400 Level (Junior Clerkship Focus)</option>
-                <option value="500L">🩺 500 Level (Specialities Focus)</option>
-                <option value="600L">🩺 600 Level (Final MBBS Exam Focus)</option>
-              </select>
-            </div>
-
-            <!-- TEST PHONE SEND -->
-            <div class="p-4 bg-[#1B1E24] rounded-2xl border border-obsidian-border space-y-3">
-              <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider">Send Instant Test to Admin Phone</label>
-              <div class="flex items-center gap-2">
-                <input type="text" id="digest-test-phone" value="2348109839187" placeholder="e.g. 2348109839187"
-                       class="flex-1 px-3.5 py-2 bg-[#0B0C0E] border border-obsidian-border rounded-xl text-white text-xs font-mono focus:outline-none focus:border-lime-accent">
-                <button onclick="sendDigestTest()" id="digest-test-btn"
-                        class="px-4 py-2 bg-[#0B0C0E] hover:bg-black text-lime-accent border border-lime-accent/30 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5">
-                  <i class="fa-solid fa-paper-plane text-[10px]"></i> Test Send
-                </button>
-              </div>
-              <p class="text-[11px] text-slate-400">Delivers a live test preview of this Sunday's performance card directly to your WhatsApp.</p>
-            </div>
-
-            <!-- DISPATCH ALL -->
-            <div class="pt-2">
-              <button onclick="confirmDigestBroadcast()" id="digest-dispatch-btn"
-                      class="w-full py-4 px-6 bg-lime-accent hover:bg-lime-hover text-black font-extrabold rounded-2xl shadow-xl shadow-lime-accent/20 transition-all flex items-center justify-center gap-2 text-sm">
-                <i class="fa-solid fa-bolt text-sm"></i>
-                <span>Dispatch Weekly Performance Digest Now</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- LIVE DIGEST PREVIEW (6 Cols) -->
-          <div class="lg:col-span-6 glass-card p-6 rounded-2xl flex flex-col border border-obsidian-border">
-            <div class="border-b border-obsidian-border pb-3 mb-4 flex items-center justify-between">
-              <h3 class="text-xs font-bold text-slate-300 flex items-center gap-2 uppercase tracking-wider">
-                <i class="fa-brands fa-whatsapp text-emerald-400 text-base"></i> Live WhatsApp Digest Card Preview
-              </h3>
-              <span class="text-[10px] font-mono text-slate-500">Student Screen</span>
-            </div>
-
-            <div class="flex-1 whatsapp-bg rounded-2xl p-4 border border-obsidian-border flex flex-col justify-center min-h-[380px] shadow-inner relative overflow-hidden">
-              <div class="wa-bubble-ai p-4 max-w-[95%] self-start text-xs space-y-2.5">
-                <div class="text-[11px] font-extrabold text-emerald-300 flex items-center gap-1.5 border-b border-white/10 pb-1.5">
-                  <span>📊 NEURA AI Weekly Study Digest</span>
-                </div>
-                <div id="digest-preview-text" class="text-slate-100 text-xs whitespace-pre-wrap leading-relaxed">
-                  Loading preview...
-                </div>
-                <div class="text-[10px] text-slate-300/80 text-right mt-1.5 flex items-center justify-end gap-1 font-mono">
-                  <span>Sun 19:00</span>
-                  <i class="fa-solid fa-check-double text-sky-300 text-[9px]"></i>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ================= TAB 4: BROADCAST STUDIO ================= -->
+      <!-- ================= TAB 3: BROADCAST STUDIO ================= -->
       <section id="view-broadcast" class="hidden space-y-6">
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <!-- COMPOSER CARD (7 Cols) -->
@@ -4335,7 +4164,7 @@ Type your announcement on the left to see how it renders live on students' Whats
         </div>
       </section>
 
-      <!-- ================= TAB 5: ANALYTICS & METRICS ================= -->
+      <!-- ================= TAB 4: ANALYTICS & METRICS ================= -->
       <section id="view-analytics" class="hidden space-y-6">
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <!-- LEVEL BREAKDOWN -->
@@ -4450,7 +4279,6 @@ Type your announcement on the left to see how it renders live on students' Whats
       document.getElementById("login-modal").classList.add("hidden");
       document.getElementById("dashboard-content").classList.remove("hidden");
       loadAllData();
-      updateDigestPreview();
     }
 
     function performLogout() {
@@ -4462,7 +4290,7 @@ Type your announcement on the left to see how it renders live on students' Whats
     }
 
     function switchTab(tabKey) {
-      const tabs = ['students', 'chats', 'digest', 'broadcast', 'analytics'];
+      const tabs = ['students', 'chats', 'broadcast', 'analytics'];
       tabs.forEach(t => {
         const view = document.getElementById('view-' + t);
         const btn = document.getElementById('tab-btn-' + t);
@@ -4686,109 +4514,6 @@ Type your announcement on the left to see how it renders live on students' Whats
           </tr>
         `;
       }).join("");
-    }
-
-    // ================= WEEKLY DIGEST PREVIEW & SEND =================
-    function updateDigestPreview() {
-      const targetLvl = document.getElementById("digest-target")?.value || "ALL";
-      const tips = {
-        "200L": "💡 *High-Yield 200L Tip:* Focus on Anatomical triangles & Rate-limiting biochemical enzymes — they form the core of exam MCQs!",
-        "300L": "💡 *High-Yield 300L Tip:* Connect Mechanism of Action (MOA) directly to adverse drug reactions in Pharmacology & Robins Pathology hallmarks!",
-        "400L": "💡 *High-Yield 400L Tip:* Master clinical history taking, fluid resuscitation formulas (Parkland), and cardinal symptoms on ward rounds!",
-        "500L": "💡 *High-Yield 500L Tip:* High alert on IMCI triage, Pediatric milestones, and Obstetric emergencies (Eclampsia, PPH management)!",
-        "600L": "💡 *Finals High-Yield Focus:* Practice rapid diagnostic algorithms, differential diagnoses, and definitive management plans for your viva & OSCEs!"
-      };
-      const tip = tips[targetLvl] || "💡 *Clinical Tip:* Consistent daily active recall with textbook grounding guarantees exam excellence!";
-
-      const previewText = 
-`Hello *Samuel*! Here is your MBBS performance summary for this week:
-
-🔥 *Active Study Days:* 5 days
-📚 *Clinical Queries & MCQs:* ~35 concepts mastered
-🩺 *Top Subject Studied:* *Cardiology & Hemodynamics*
-🎯 *Academic Level:* *${targetLvl !== 'ALL' ? targetLvl : '400L'}*
-
-${tip}
-
-Ready to kick off another high-yield week? Type */quiz* for 5 exam MCQs or ask your next textbook question! 🧠⚡`;
-
-      const el = document.getElementById("digest-preview-text");
-      if (el) el.innerText = previewText;
-    }
-
-    async function sendDigestTest() {
-      const phone = document.getElementById("digest-test-phone").value.trim();
-      const targetLvl = document.getElementById("digest-target").value;
-      const btn = document.getElementById("digest-test-btn");
-
-      if (!phone) {
-        alert("Please enter a valid WhatsApp phone number!");
-        return;
-      }
-
-      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Sending...';
-      btn.disabled = true;
-
-      try {
-        const res = await fetch("/admin/api/digest/send-weekly", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + authToken
-          },
-          body: JSON.stringify({
-            target_level: targetLvl,
-            test_phone: phone
-          })
-        });
-
-        if (res.ok) {
-          alert(`✅ Weekly Digest test delivered to ${phone}! Check your WhatsApp.`);
-        } else {
-          alert("Failed to send test digest. Please verify phone number.");
-        }
-      } catch (e) {
-        alert("Error sending test digest: " + e.message);
-      } finally {
-        btn.innerHTML = '<i class="fa-solid fa-paper-plane text-[10px]"></i> Test Send';
-        btn.disabled = false;
-      }
-    }
-
-    async function confirmDigestBroadcast() {
-      const targetLvl = document.getElementById("digest-target").value;
-      if (!confirm(`Are you ready to dispatch the Weekly Performance Digest to ${targetLvl === 'ALL' ? 'ALL registered students' : targetLvl + ' students'}?`)) {
-        return;
-      }
-
-      const btn = document.getElementById("digest-dispatch-btn");
-      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Dispatching...';
-      btn.disabled = true;
-
-      try {
-        const res = await fetch("/admin/api/digest/send-weekly", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + authToken
-          },
-          body: JSON.stringify({
-            target_level: targetLvl
-          })
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          alert(`🎉 Weekly Performance Digest dispatched to ${data.total_targets} students!`);
-        } else {
-          alert("Failed to dispatch weekly digest.");
-        }
-      } catch (e) {
-        alert("Error: " + e.message);
-      } finally {
-        btn.innerHTML = '<i class="fa-solid fa-bolt text-sm"></i> <span>Dispatch Weekly Performance Digest Now</span>';
-        btn.disabled = false;
-      }
     }
 
     // ================= CHAT TRANSCRIPTS LOGIC =================
