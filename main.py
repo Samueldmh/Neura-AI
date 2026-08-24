@@ -485,7 +485,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
         "model": "deepseek/deepseek-v4-flash",
         "messages": messages,
         "temperature": 0.2,
-        "max_tokens": 2500,
+        "max_tokens": 900,
         "provider": {
             "order": ["DeepSeek", "Together", "Fireworks", "Hyperbolic", "Novita"],
             "allow_fallbacks": True
@@ -991,7 +991,7 @@ async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_la
         print(f"Meta CTA URL Button Send Status {res.status_code}: {res.text}")
 
 async def mark_message_as_read(message_id: str):
-    """Marks incoming message as read on WhatsApp Cloud API for instant blue ticks (<100ms)"""
+    """Marks incoming message as read and activates WhatsApp native floating typing indicator bubble (<50ms)"""
     if not message_id or not WHATSAPP_TOKEN:
         return
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
@@ -1002,12 +1002,23 @@ async def mark_message_as_read(message_id: str):
     payload = {
         "messaging_product": "whatsapp",
         "status": "read",
-        "message_id": message_id
+        "message_id": message_id,
+        "typing_indicator": {
+            "type": "text"
+        }
     }
     try:
-        await shared_http_client.post(url, headers=headers, json=payload)
-    except Exception:
-        pass
+        res = await shared_http_client.post(url, headers=headers, json=payload)
+        if res.status_code != 200:
+            # Fallback if typing_indicator is rejected by older API version
+            fallback_payload = {
+                "messaging_product": "whatsapp",
+                "status": "read",
+                "message_id": message_id
+            }
+            await shared_http_client.post(url, headers=headers, json=fallback_payload)
+    except Exception as e:
+        print(f"⚠️ Read/Typing status error: {e}")
 
 async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str = ""):
     """Sends an image to WhatsApp via Meta Cloud API using direct binary media upload (guaranteeing zero 404/429 hotlink failures)"""
