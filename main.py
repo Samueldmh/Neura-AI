@@ -36,6 +36,10 @@ QDRANT_URL = os.getenv("QDRANT_URL", "https://76ce5d85-4701-4671-8c3f-02bcc741b0
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
+PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
+FLUTTERWAVE_SECRET_KEY = os.getenv("FLUTTERWAVE_SECRET_KEY", "")
+FLUTTERWAVE_SECRET_HASH = os.getenv("FLUTTERWAVE_SECRET_HASH", "neura_flw_hash_2026")
+BASE_URL = os.getenv("BASE_URL", "https://neura-ai-df6q.onrender.com")
 
 # Official Meta WhatsApp Cloud API credentials
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAM3F01f3nYBSKwpMPZAU2Nhgdvr7b4481UQ2sCTosr3Hu6UIL3U5BTBiN8I5932PfnEx6GzDWiUfwMYiFok4eZCaMrLPNhhMvnAQ27fVsxxqpxIvES3SYhSi6speeab3FaBq8anZCoPVXS2f9LXA7b7ZA2kWrZBRA8zmBv03cBe2yTR3OWAAhgEh0lEk3ULqfAZDZD")
@@ -71,11 +75,11 @@ print(f"QDRANT_API_KEY Present: {bool(QDRANT_API_KEY)}")
 print(f"OPENROUTER_API_KEY Present: {bool(OPENROUTER_API_KEY)}")
 print(f"PHONE_NUMBER_ID: {PHONE_NUMBER_ID}")
 
-embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
-qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 from collections import OrderedDict
 import time
 
+embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=30, max_connections=60))
 embedding_pool = ThreadPoolExecutor(max_workers=4)
 
@@ -88,9 +92,66 @@ db = mongo_client.neura_db if mongo_client else None
 chat_history_col = db.chat_history if db is not None else None
 users_col = db.users if db is not None else None
 broadcasts_col = db.broadcasts if db is not None else None
+chat_logs_col = db.chat_logs if db is not None else None
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neura2026admin")
 ADMIN_SESSIONS = set()
+
+async def log_user_chat_message(user_id: str, role: str, content: str, msg_type: str = "text", metadata: dict = None):
+    """Persists every user and AI message for audit, diagnostic, and admin chat inspection."""
+    if not user_id or not content:
+        return
+    now_iso = datetime.utcnow().isoformat()
+    meta = dict(metadata or {})
+    meta["msg_type"] = msg_type
+    
+    # Detect potential issues/errors in the message text for quick diagnostic flags
+    content_lower = str(content).lower()
+    is_error_flag = (
+        "connection delay" in content_lower or
+        "trouble creating the interactive practice" in content_lower or
+        "insufficient balance" in content_lower or
+        "low balance" in content_lower or
+        "error processing your query" in content_lower or
+        "experienced a brief" in content_lower or
+        "only read text messages" in content_lower or
+        "i had trouble creating" in content_lower or
+        meta.get("is_error", False)
+    )
+    if is_error_flag:
+        meta["has_issue"] = True
+
+    log_entry = {
+        "user_id": str(user_id),
+        "role": role,
+        "content": str(content),
+        "timestamp": now_iso,
+        "metadata": meta
+    }
+    
+    try:
+        if chat_logs_col is not None:
+            await chat_logs_col.insert_one(log_entry)
+            
+        if chat_history_col is not None:
+            await chat_history_col.update_one(
+                {"user_id": str(user_id)},
+                {
+                    "$push": {
+                        "messages": {
+                            "role": role,
+                            "content": str(content),
+                            "timestamp": now_iso,
+                            "msg_type": msg_type,
+                            "has_issue": is_error_flag
+                        }
+                    },
+                    "$set": {"last_active": now_iso}
+                },
+                upsert=True
+            )
+    except Exception as e:
+        print(f"Error persisting chat log for {user_id}: {e}")
 
 async def update_user_study_streak(user_id: str) -> int:
     """Updates user's daily study streak based on calendar date (WAT / UTC+1)."""
@@ -428,7 +489,7 @@ async def classify_intent(message: str) -> str:
     if msg_clean and is_gibberish_pattern:
         return "GIBBERISH"
 
-    # 5. LLM Universal Intent Classifier (Handles ANY language: German, French, Arabic, slang, gibberish, vague chatter)
+    # 4. LLM Universal Intent Classifier (Handles ANY language: German, French, Arabic, slang, gibberish, vague chatter)
     if OPENROUTER_API_KEY:
         try:
             router_prompt = (
@@ -491,7 +552,9 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
     
     messages = [{"role": "system", "content": system_prompt}]
     if chat_history:
-        messages.extend(chat_history)
+        for m in chat_history:
+            if isinstance(m, dict) and m.get("role") in ["user", "assistant"]:
+                messages.append({"role": m["role"], "content": str(m.get("content", ""))})
     messages.append({"role": "user", "content": user_prompt})
     
     payload = {
@@ -551,7 +614,9 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
     
     messages = [{"role": "system", "content": system_prompt}]
     if chat_history:
-        messages.extend(chat_history)
+        for m in chat_history:
+            if isinstance(m, dict) and m.get("role") in ["user", "assistant"]:
+                messages.append({"role": m["role"], "content": str(m.get("content", ""))})
     messages.append({"role": "user", "content": user_prompt})
     
     payload = {
@@ -903,6 +968,11 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
             async with httpx.AsyncClient(timeout=20.0) as fallback_client:
                 res = await fallback_client.post(url, headers=headers, json=payload)
         print(f"Meta Graph API Send Status {res.status_code}: {res.text}")
+        
+    try:
+        asyncio.create_task(log_user_chat_message(to_number, "assistant", message_text, msg_type="text"))
+    except Exception:
+        pass
 
 async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_text: str, options: list):
     """Sends an Interactive List Message (max 10 options)"""
@@ -954,6 +1024,11 @@ async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_
     async with httpx.AsyncClient(timeout=20.0) as client:
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta Graph API List Send Status {res.status_code}: {res.text}")
+        
+    try:
+        asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text, msg_type="interactive_list"))
+    except Exception:
+        pass
 
 async def send_whatsapp_interactive_button(to_number: str, body_text: str, buttons: list):
     """Sends an Interactive Button Message (max 3 buttons)"""
@@ -992,9 +1067,16 @@ async def send_whatsapp_interactive_button(to_number: str, body_text: str, butto
     async with httpx.AsyncClient(timeout=20.0) as client:
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta Graph API Button Send Status {res.status_code}: {res.text}")
+        
+    try:
+        btn_summary = " [Options: " + ", ".join(str(b.get("title", "")) for b in buttons) + "]"
+        asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text + btn_summary, msg_type="interactive_button"))
+    except Exception:
+        pass
 
 async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_label: str, url_target: str):
-    """Sends an interactive Call-To-Action (CTA) URL button to open In-App WebViews"""
+    """Sends an Interactive CTA URL Button that opens directly in WhatsApp's in-app webview"""
+    body_text = format_whatsapp_text(body_text)
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
@@ -1022,6 +1104,11 @@ async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_la
     async with httpx.AsyncClient(timeout=20.0) as client:
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta CTA URL Button Send Status {res.status_code}: {res.text}")
+        
+    try:
+        asyncio.create_task(log_user_chat_message(to_number, "assistant", f"{body_text} [Link: {button_label} -> {url_target}]", msg_type="cta_button"))
+    except Exception:
+        pass
 
 async def mark_message_as_read(message_id: str):
     """Marks incoming message as read and activates WhatsApp native floating typing indicator bubble (<50ms)"""
@@ -1157,6 +1244,159 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
     print(f"⚠️ Image could not be fetched server-side from {image_url}. Aborting image delivery to protect WhatsApp delivery status.")
     return
 
+
+
+async def initialize_flutterwave_transaction(amount_ngn: int, email: str, phone: str, name: str = "Student"):
+    """Initializes a Flutterwave payment and returns the hosted checkout URL"""
+    import uuid
+    url = "https://api.flutterwave.com/v3/payments"
+    headers = {
+        "Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY.strip()}",
+        "Content-Type": "application/json"
+    }
+    reference = f"NEURA_{phone}_{uuid.uuid4().hex[:8]}"
+    payload = {
+        "tx_ref": reference,
+        "amount": str(amount_ngn),
+        "currency": "NGN",
+        "payment_options": "banktransfer,card",
+        "redirect_url": f"{BASE_URL}/api/payment-complete",
+        "customer": {
+            "email": email,
+            "phonenumber": phone,
+            "name": name
+        },
+        "customizations": {
+            "title": "NEURA AI Wallet Top-Up",
+            "description": f"NEURA AI MBBS Study Assistant (₦{amount_ngn:,})",
+            "logo": "https://raw.githubusercontent.com/Samueldmh/Neura-AI/main/assets/logo.png"
+        }
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            data = res.json()
+            if data.get("status") == "success" and "data" in data and "link" in data["data"]:
+                return data["data"]["link"]
+            print(f"Flutterwave init response: {data}")
+    except Exception as e:
+        print(f"Error initializing Flutterwave: {e}")
+    return None
+
+async def initialize_paystack_transaction(amount_ngn: int, email: str, phone: str):
+    """Initializes a Paystack transaction and returns the checkout URL (Fallback)"""
+    import uuid
+    url = "https://api.paystack.co/transaction/initialize"
+    headers = {
+        "Authorization": f"Bearer {PAYSTACK_SECRET_KEY.strip()}",
+        "Content-Type": "application/json"
+    }
+    reference = f"NEURA_{phone}_{uuid.uuid4().hex[:8]}"
+    payload = {
+        "amount": amount_ngn * 100,
+        "email": email,
+        "reference": reference,
+        "callback_url": f"{BASE_URL}/api/payment-complete",
+        "metadata": {
+            "phone_number": phone,
+            "custom_fields": [
+                {
+                    "display_name": "Phone Number",
+                    "variable_name": "phone_number",
+                    "value": phone
+                },
+                {
+                    "display_name": "Product",
+                    "variable_name": "NEURA AI Wallet Credit"
+                }
+            ]
+        }
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            data = res.json()
+            if data.get("status"):
+                return data["data"]["authorization_url"]
+            print(f"Paystack init failed: {data}")
+    except Exception as e:
+        print(f"Error initializing Paystack: {e}")
+    return None
+
+async def send_deposit_menu(sender_phone: str, current_balance: float):
+    """Sends the hybrid deposit menu with quick presets and custom amount prompt"""
+    body_text = (
+        f"💳 *NEURA AI Wallet Top-Up*\n\n"
+        f"• Current Balance: *₦{current_balance:.2f}*\n"
+        f"• Minimum Deposit: *₦500*\n\n"
+        f"Tap a quick tier below, or reply with any custom amount (e.g. *500*, *1000*, *1500*, or */deposit 500*):"
+    )
+    options = [
+        {"id": "DEPOSIT_500", "title": "₦500 Deposit", "description": "~180 In-Depth Medical Explanations"},
+        {"id": "DEPOSIT_1500", "title": "₦1,500 Deposit", "description": "~550 In-Depth Medical Explanations"},
+        {"id": "DEPOSIT_3000", "title": "₦3,000 Deposit", "description": "~1,200 In-Depth Medical Explanations"},
+    ]
+    await send_whatsapp_interactive_list(sender_phone, body_text, "Select Deposit", options)
+
+async def handle_deposit_request(sender_phone: str, user_msg: str) -> bool:
+    """Parses deposit selection or custom typed amount and sends an In-App Flutterwave CTA button"""
+    msg_trim = user_msg.strip().upper()
+    amount_ngn = None
+    if msg_trim == "DEPOSIT_500":
+        amount_ngn = 500
+    elif msg_trim == "DEPOSIT_1500":
+        amount_ngn = 1500
+    elif msg_trim == "DEPOSIT_3000":
+        amount_ngn = 3000
+    elif msg_trim == "DEPOSIT_5000":
+        amount_ngn = 5000
+    elif msg_trim == "DEPOSIT_10000":
+        amount_ngn = 10000
+    elif msg_trim == "DEPOSIT_20000":
+        amount_ngn = 20000
+    else:
+        m = re.match(r'^(?:/deposit\s+)?(?:₦|NGN\s*)?(\d{1,3}(?:,\d{3})*|\d+)(?:\.00)?$', user_msg.strip(), re.IGNORECASE)
+        if m:
+            try:
+                amount_ngn = int(m.group(1).replace(',', ''))
+            except:
+                pass
+
+    if amount_ngn is None:
+        return False
+
+    if amount_ngn < 500:
+        await send_whatsapp_cloud_msg(
+            sender_phone,
+            "⚠️ Minimum deposit amount is *₦500*.\n\nPlease choose ₦500 or more (e.g. *500*, *1000*, *2000*, *5000*)."
+        )
+        return True
+
+    email = f"user_{sender_phone.replace('+', '')}@neura.ai"
+    
+    # Try Flutterwave first, fallback to Paystack if configured
+    auth_url = None
+    if FLUTTERWAVE_SECRET_KEY:
+        auth_url = await initialize_flutterwave_transaction(amount_ngn, email, sender_phone)
+    elif PAYSTACK_SECRET_KEY:
+        auth_url = await initialize_paystack_transaction(amount_ngn, email, sender_phone)
+
+    if auth_url:
+        card_body = (
+            f"💳 *NEURA AI In-App Checkout*\n\n"
+            f"• Amount: *₦{amount_ngn:,}*\n"
+            f"• Payment Gateway: *Flutterwave*\n"
+            f"• Status: *Ready*\n\n"
+            f"Tap the button below to complete your deposit directly inside WhatsApp (Supports all Nigerian Cards, Bank Transfer & USSD):"
+        )
+        await send_whatsapp_cta_url_button(sender_phone, card_body, f"Pay ₦{amount_ngn:,} Now", auth_url)
+    else:
+        await send_whatsapp_cloud_msg(
+            sender_phone,
+            "Sorry, we couldn't generate the payment link right now. Please verify your payment gateway setup or try again in a moment!"
+        )
+    return True
+
 async def send_commands_menu(sender_phone: str):
     """Sends an interactive WhatsApp List containing all available slash commands with 1-tap execution"""
     body_text = (
@@ -1164,11 +1404,14 @@ async def send_commands_menu(sender_phone: str):
         "Tap a command below to execute it instantly, or type any of them directly into the chat:"
     )
     options = [
-        {"id": "/profile", "title": "👤 /profile", "description": "View study streak, class, level & textbooks"},
+        {"id": "/wallet", "title": "💳 /wallet", "description": "Check balance, total spent & queries remaining"},
+        {"id": "/deposit", "title": "💰 /deposit", "description": "Top up your study wallet (min ₦500)"},
+        {"id": "/profile", "title": "👤 /profile", "description": "View study streak, class, balance & textbooks"},
         {"id": "/reminders on", "title": "🔔 /reminders on", "description": "Toggle daily study streak reminders on/off"},
         {"id": "/update books", "title": "📚 /update books", "description": "Change or add your preferred medical textbooks"},
         {"id": "/update level", "title": "🎓 /update level", "description": "Update your current class/level (e.g. 400L)"},
         {"id": "/update name", "title": "✏️ /update name", "description": "Update your student display name"},
+        {"id": "/clearwallet", "title": "🗑️ /clearwallet", "description": "Reset wallet balance to ₦0.00 (for testing)"},
         {"id": "/reset", "title": "🔄 /reset", "description": "Reset full profile & chat history to start over"},
         {"id": "/feedback", "title": "📝 /feedback", "description": "Share anonymous feedback on NEURA AI"},
     ]
@@ -1187,7 +1430,7 @@ SEARCH_STOP_WORDS = {
     "were", "be", "been", "being", "am", "will", "shall", "may", "might", "must",
     "need", "want", "know", "think", "say", "said", "get", "got", "make", "made",
     "go", "going", "come", "take", "see", "look", "also", "just", "more", "some",
-    "any", "each", "every", "both", "few", "many", "much", "no", "not",
+    "any", "all", "each", "every", "both", "few", "many", "much", "no", "not",
     "only", "own", "same", "so", "than", "too", "very", "really", "mean", "means",
     "meaning", "meant", "using", "used", "work", "works", "working", "way",
     "thing", "things", "something", "anything", "everything", "nothing",
@@ -1197,39 +1440,7 @@ SEARCH_STOP_WORDS = {
     "sketch", "visual", "visualize", "view"
 }
 
-SPECIAL_SHORT_MEDICAL = {"all", "aml", "cll", "cml", "sle", "ms", "itp", "ttp", "dic", "hus", "b", "t", "nk", "av", "sa", "ph", "c3", "c4", "c5", "k", "na", "ca", "fe", "mg", "ig"}
-
-MEDICAL_ACRONYMS_MAP = {
-    "all": "acute lymphoblastic leukemia",
-    "aml": "acute myeloid leukemia",
-    "cll": "chronic lymphocytic leukemia",
-    "cml": "chronic myeloid leukemia",
-    "sle": "systemic lupus erythematosus",
-    "itp": "immune thrombocytopenic purpura",
-    "ttp": "thrombotic thrombocytopenic purpura",
-    "dic": "disseminated intravascular coagulation",
-    "hus": "hemolytic uremic syndrome",
-    "copd": "chronic obstructive pulmonary disease",
-    "gerd": "gastroesophageal reflux disease",
-    "pcos": "polycystic ovary syndrome",
-    "dka": "diabetic ketoacidosis",
-    "men1": "multiple endocrine neoplasia type 1",
-    "men2": "multiple endocrine neoplasia type 2",
-    "men1a": "multiple endocrine neoplasia type 1",
-    "men2a": "multiple endocrine neoplasia type 2a",
-    "men2b": "multiple endocrine neoplasia type 2b",
-    "uti": "urinary tract infection",
-    "pid": "pelvic inflammatory disease",
-    "bph": "benign prostatic hyperplasia",
-    "aki": "acute kidney injury",
-    "ckd": "chronic kidney disease",
-    "chf": "congestive heart failure",
-    "cad": "coronary artery disease",
-    "dvt": "deep vein thrombosis",
-    "pe": "pulmonary embolism",
-    "tia": "transient ischemic attack",
-    "cva": "cerebrovascular accident"
-}
+SPECIAL_SHORT_MEDICAL = {"b", "t", "nk", "av", "sa", "ph", "c3", "c4", "c5", "k", "na", "ca", "fe", "mg", "ig"}
 
 FOLLOWUP_PHRASES = [
     "tell me more", "tell me more about this", "is this all", "is that all",
@@ -1317,74 +1528,77 @@ MEDICAL_TYPOS_MAP = {
     "falx cerebrii": "falx cerebri"
 }
 
-def safe_parse_json(text: str) -> dict:
-    """Safely parses JSON strings with regex extraction fallback for truncated or loosely formatted LLM JSON."""
-    if not text:
-        return {}
-    clean_text = text.replace("```json", "").replace("```", "").strip()
+MEDICAL_ACRONYMS_MAP = {
+    r'\ball\b': 'acute lymphoblastic leukemia (ALL)',
+    r'\baml\b': 'acute myeloid leukemia (AML)',
+    r'\bcll\b': 'chronic lymphocytic leukemia (CLL)',
+    r'\bcml\b': 'chronic myeloid leukemia (CML)',
+    r'\bdka\b': 'diabetic ketoacidosis (DKA)',
+    r'\bgerd\b': 'gastroesophageal reflux disease (GERD)',
+    r'\bdvt\b': 'deep vein thrombosis (DVT)',
+    r'\bpe\b': 'pulmonary embolism (PE)',
+    r'\bards\b': 'acute respiratory distress syndrome (ARDS)',
+    r'\bdic\b': 'disseminated intravascular coagulation (DIC)',
+    r'\bsle\b': 'systemic lupus erythematosus (SLE)',
+    r'\bmen1\b': 'multiple endocrine neoplasia type 1 (MEN1)',
+    r'\bmen2\b': 'multiple endocrine neoplasia type 2 (MEN2)',
+    r'\bmen2a\b': 'multiple endocrine neoplasia type 2A (MEN2A)',
+    r'\bmen2b\b': 'multiple endocrine neoplasia type 2B (MEN2B)',
+    r'\braas\b': 'renin angiotensin aldosterone system (RAAS)',
+    r'\bcopd\b': 'chronic obstructive pulmonary disease (COPD)',
+}
+
+def extract_json_from_llm(raw_text: str):
+    """Robust JSON extractor that handles markdown fences, leading conversational text, trailing notes, and single quotes."""
+    if not raw_text:
+        return None
+    cleaned = re.sub(r'```json\s*', '', raw_text)
+    cleaned = re.sub(r'```\s*', '', cleaned).strip()
     try:
-        parsed = json.loads(clean_text)
-        if isinstance(parsed, dict):
-            return parsed
+        return json.loads(cleaned)
     except Exception:
         pass
-    
-    # Fallback 1: Extract anything between { and }
-    match = re.search(r'\{.*\}', clean_text, re.DOTALL)
-    if match:
+
+    # Extract JSON Array [...]
+    m_list = re.search(r'\[\s*\{.*\}\s*\]', raw_text, re.DOTALL)
+    if m_list:
         try:
-            parsed = json.loads(match.group(0))
-            if isinstance(parsed, dict):
-                return parsed
+            return json.loads(m_list.group(0))
         except Exception:
             pass
 
-    # Fallback 2: Regex extraction of keys
-    data = {}
-    topic_match = re.search(r'"corrected_topic"\s*:\s*"([^"]+)"', clean_text)
-    if topic_match:
-        data["corrected_topic"] = topic_match.group(1)
-        
-    adeq_match = re.search(r'"is_adequate"\s*:\s*(true|false)', clean_text, re.IGNORECASE)
-    if adeq_match:
-        data["is_adequate"] = adeq_match.group(1).lower() == "true"
+    # Extract JSON Object {...}
+    m_dict = re.search(r'\{.*\}', raw_text, re.DOTALL)
+    if m_dict:
+        try:
+            return json.loads(m_dict.group(0))
+        except Exception:
+            pass
 
-    absent_match = re.search(r'"is_genuinely_absent"\s*:\s*(true|false)', clean_text, re.IGNORECASE)
-    if absent_match:
-        data["is_genuinely_absent"] = absent_match.group(1).lower() == "true"
-
-    kw_list = re.findall(r'"([^"]{3,60})"', clean_text)
-    if kw_list:
-        data["search_keywords"] = [
-            k for k in kw_list 
-            if k not in ["corrected_topic", "search_keywords", "is_adequate", "is_genuinely_absent", "re_anchored_queries", data.get("corrected_topic")]
-        ]
-        data["re_anchored_queries"] = data["search_keywords"]
-
-    return data
+    return None
 
 def clean_medical_topic_title(raw_query: str, corrected_topic: str = "") -> str:
     """Extracts a clean, authoritative, title-cased medical topic name from raw student queries."""
     if corrected_topic and len(corrected_topic.strip()) >= 3:
         topic = corrected_topic.strip().strip('"\'')
         topic = re.sub(r'^(?:Medical Topic:\s*|Topic:\s*)', '', topic, flags=re.IGNORECASE).strip()
-        for acr, expansion in MEDICAL_ACRONYMS_MAP.items():
-            topic = re.sub(rf'\b{re.escape(acr)}\b', expansion, topic, flags=re.IGNORECASE)
         for typo, correction in MEDICAL_TYPOS_MAP.items():
             topic = re.sub(rf'\b{re.escape(typo)}\b', correction, topic, flags=re.IGNORECASE)
         if topic and len(topic) >= 3:
             return topic.title()
 
     text = raw_query.strip()
-    # 1. Expand medical acronyms (ALL -> Acute Lymphoblastic Leukemia, SLE, AML, etc.)
-    for acr, expansion in MEDICAL_ACRONYMS_MAP.items():
-        text = re.sub(rf'\b{re.escape(acr)}\b', expansion, text, flags=re.IGNORECASE)
+    # 0. Expand medical acronyms (e.g. "ALL" -> "Acute Lymphoblastic Leukemia")
+    for pat, repl in MEDICAL_ACRONYMS_MAP.items():
+        if re.search(pat, text, flags=re.IGNORECASE):
+            text = re.sub(pat, repl, text, flags=re.IGNORECASE)
+            break
 
-    # 2. Normalize typos
+    # 1. Normalize typos
     for typo, correction in MEDICAL_TYPOS_MAP.items():
         text = re.sub(rf'\b{re.escape(typo)}\b', correction, text, flags=re.IGNORECASE)
 
-    # 3. Strip conversational query framing
+    # 2. Strip conversational query framing
     framing_patterns = [
         r'^(?:can you\s+)?(?:tell me about|explain|what is|what are|describe|discuss|give me|how does|outline|overview of|notes on|details on|summary of)\s+',
         r'^(?:i want to know about|let us talk about|let\'s discuss|briefly explain)\s+',
@@ -1392,7 +1606,7 @@ def clean_medical_topic_title(raw_query: str, corrected_topic: str = "") -> str:
     for pat in framing_patterns:
         text = re.sub(pat, '', text, flags=re.IGNORECASE).strip()
 
-    # 4. Clean up leading/trailing punctuation
+    # 3. Clean up leading/trailing punctuation
     text = re.sub(r'[?!.,:;]+$', '', text).strip()
 
     if not text:
@@ -1403,11 +1617,13 @@ def clean_medical_topic_title(raw_query: str, corrected_topic: str = "") -> str:
 def extract_medical_terms(user_msg: str) -> list:
     """Instantly extract clean medical keywords by normalizing typos, expanding clinical synonyms/subclasses, preserving short medical terms (B-cell, T-cell), and stripping filler words."""
     msg = user_msg
-    # 1. Expand medical acronyms (e.g. ALL -> acute lymphoblastic leukemia)
-    for acr, expansion in MEDICAL_ACRONYMS_MAP.items():
-        msg = re.sub(rf'\b{re.escape(acr)}\b', expansion, msg, flags=re.IGNORECASE)
+    # 0. Expand clinical acronyms before stop-word removal (prevents "ALL", "AML", "DKA" from being stripped)
+    for pat, repl in MEDICAL_ACRONYMS_MAP.items():
+        if re.search(pat, msg, flags=re.IGNORECASE):
+            msg = re.sub(pat, repl, msg, flags=re.IGNORECASE)
+            break
 
-    # 2. Normalize common student typos
+    # 1. Normalize common student typos
     for typo, correction in MEDICAL_TYPOS_MAP.items():
         msg = re.sub(rf'\b{re.escape(typo)}\b', correction, msg, flags=re.IGNORECASE)
         
@@ -1445,13 +1661,9 @@ def extract_medical_terms(user_msg: str) -> list:
     if joined_query and joined_query not in phrases:
         phrases.insert(0, joined_query)
 
-    # 3. Clinical Domain Multi-Angle Expansion
+    # 2. Clinical Domain Multi-Angle Expansion
     joined_lower = joined_query.lower()
-    if "acute lymphoblastic leukemia" in joined_lower or "lymphoblastic" in joined_lower:
-        for exp in ["acute lymphoblastic leukemia clinical features symptoms", "ALL bone marrow blast infiltration anaemia thrombocytopenia"]:
-            if exp not in phrases:
-                phrases.append(exp)
-    elif "sodium channel" in joined_lower and ("block" in joined_lower or "kinetic" in joined_lower or "dissociation" in joined_lower or "rate" in joined_lower):
+    if "sodium channel" in joined_lower and ("block" in joined_lower or "kinetic" in joined_lower or "dissociation" in joined_lower or "rate" in joined_lower):
         for exp in ["class I antiarrhythmics sodium channel kinetics", "class IA IB IC rate of dissociation recovery", "sodium channel blockers use dependence unbinding"]:
             if exp not in phrases:
                 phrases.append(exp)
@@ -1485,15 +1697,15 @@ async def normalize_medical_query(user_msg: str) -> dict:
         "X-Title": "NEURA AI Medical Assistant"
     }
     system_prompt = (
-        "You are an expert MBBS medical query normalizer and typo fixer. Medical students frequently send questions with abbreviations (e.g. 'ALL' for Acute Lymphoblastic Leukemia, 'SLE', 'AML'), typos (e.g. 'disassociation', 'pnuemonia'), or shorthand.\n"
-        "1. Expand medical acronyms (e.g. 'Symptoms of All' -> 'Symptoms of Acute Lymphoblastic Leukemia') and fix any typos.\n"
-        "2. Generate 2 to 4 authoritative medical textbook search queries.\n"
+        "You are an expert MBBS medical query normalizer. Medical students frequently send questions with medical acronyms (e.g. 'ALL' for Acute Lymphoblastic Leukemia, 'AML', 'CLL', 'CML', 'DKA', 'GERD', 'DVT', 'PE', 'ARDS', 'DIC', 'SLE', 'MEN1', 'RAAS', 'COPD', 'ITP', 'TTP'), shorthand, slang, typos (e.g. 'disassociation', 'pnuemonia', 'arrythmia'), or in other languages.\n"
+        "1. Dynamically recognize any medical acronyms or abbreviations, fix any typos, and resolve the query to proper clinical terminology.\n"
+        "2. Generate 2 to 4 authoritative medical textbook search queries (including pharmacological classes, anatomical names, or physiological processes).\n"
         "Output ONLY a valid JSON object in this exact schema:\n"
         "{\n"
         '  "corrected_topic": "Acute Lymphoblastic Leukemia Symptoms",\n'
         '  "search_keywords": ["acute lymphoblastic leukemia symptoms", "ALL clinical features presentation", "lymphoblast bone marrow failure"]\n'
         "}\n"
-        "Output ONLY valid JSON (no markdown, no ```json)."
+        "Output ONLY valid JSON."
     )
     payload = {
         "model": "deepseek/deepseek-v4-flash",
@@ -1502,7 +1714,7 @@ async def normalize_medical_query(user_msg: str) -> dict:
             {"role": "user", "content": user_msg}
         ],
         "temperature": 0.0,
-        "max_tokens": 400,
+        "max_tokens": 500,
         "provider": {
             "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
             "allow_fallbacks": True
@@ -1512,8 +1724,8 @@ async def normalize_medical_query(user_msg: str) -> dict:
         res = await shared_http_client.post(url, headers=headers, json=payload)
         if res.status_code == 200:
             text = res.json()["choices"][0]["message"]["content"]
-            parsed = safe_parse_json(text)
-            if isinstance(parsed, dict) and "search_keywords" in parsed and parsed["search_keywords"]:
+            parsed = extract_json_from_llm(text)
+            if isinstance(parsed, dict) and "search_keywords" in parsed:
                 return parsed
     except Exception as e:
         print(f"⚠️ Micro-LLM normalizer error: {e}")
@@ -1567,7 +1779,7 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
             {"role": "user", "content": user_payload_text}
         ],
         "temperature": 0.0,
-        "max_tokens": 400,
+        "max_tokens": 500,
         "provider": {
             "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
             "allow_fallbacks": True
@@ -1577,7 +1789,7 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
         res = await shared_http_client.post(url, headers=headers, json=payload)
         if res.status_code == 200:
             text = res.json()["choices"][0]["message"]["content"]
-            parsed = safe_parse_json(text)
+            parsed = extract_json_from_llm(text)
             if isinstance(parsed, dict) and "is_adequate" in parsed:
                 return parsed
     except Exception as e:
@@ -2082,30 +2294,10 @@ async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list
 
     try:
         json_raw = await call_openrouter_llm(SYSTEM_INTERACTIVE_QUIZ_PROMPT, user_prompt, max_tokens=2200)
-        
-        # Robust JSON Array extraction
-        quiz_questions = None
-        cleaned_json = re.sub(r'```json\s*', '', json_raw)
-        cleaned_json = re.sub(r'```\s*$', '', cleaned_json).strip()
-        try:
-            parsed = json.loads(cleaned_json)
-            if isinstance(parsed, list):
-                quiz_questions = parsed
-        except Exception:
-            pass
-            
-        if not quiz_questions:
-            m_list = re.search(r'\[\s*\{.*\}\s*\]', json_raw, re.DOTALL)
-            if m_list:
-                try:
-                    parsed = json.loads(m_list.group(0))
-                    if isinstance(parsed, list):
-                        quiz_questions = parsed
-                except Exception:
-                    pass
+        quiz_questions = extract_json_from_llm(json_raw)
         
         if not isinstance(quiz_questions, list) or len(quiz_questions) == 0:
-            raise ValueError(f"LLM did not return a valid list of questions. Raw: {json_raw[:200]}")
+            raise ValueError(f"LLM did not return a valid list of questions. Raw output: {json_raw[:200]}")
 
         quiz_state = {
             "topic": topic,
@@ -2314,6 +2506,12 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
 async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, is_tagged_reply: bool = False):
     """Internal task to run RAG & OpenRouter LLM and send WhatsApp reply"""
     try:
+        # Log incoming user message for admin conversation transcript and diagnostics
+        try:
+            asyncio.create_task(log_user_chat_message(sender_phone, "user", user_msg, msg_type="user_query", metadata={"is_tagged_reply": is_tagged_reply}))
+        except Exception:
+            pass
+
         # Fetch user doc early to get preferences
         user_doc = None
         preferred_books_list = []
@@ -2338,13 +2536,13 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             await send_whatsapp_cloud_msg(sender_phone, study_prompt)
             return
 
-        # Check for profile commands or menu first
+        # Check for profile and wallet commands first
         msg_lower = user_msg.strip().lower()
-        if msg_lower in ["/", "/help", "help", "menu", "commands", "/menu", "/commands", "/start"]:
-            await send_commands_menu(sender_phone)
-            return
+        if (msg_lower.startswith("/") or msg_lower in ["topup_wallet", "start_deposit", "clearwallet", "deposit", "wallet", "balance", "clear wallet", "help", "menu", "commands", "reminders on", "reminders off"]):
+            if msg_lower in ["/", "/help", "help", "menu", "commands", "/menu", "/commands", "/start"]:
+                await send_commands_menu(sender_phone)
+                return
 
-        if (msg_lower.startswith("/") or msg_lower in ["reminders on", "reminders off"]) and users_col is not None:
             if msg_lower.startswith("/broadcast ") or msg_lower.startswith("broadcast "):
                 admin_phones = [p.strip() for p in os.getenv("ADMIN_PHONES", "2348109839187,2349021292141").split(",")]
                 if sender_phone in admin_phones or sender_phone == os.getenv("ADMIN_PHONE", "2348109839187"):
@@ -2365,69 +2563,113 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         await send_whatsapp_cloud_msg(sender_phone, "⚠️ Usage: */broadcast [your announcement text]*")
                         return
 
-            if msg_lower == "/reset":
-                await users_col.delete_one({"user_id": sender_phone})
-                if chat_history_col is not None:
-                    await chat_history_col.delete_one({"user_id": sender_phone})
+            if msg_lower in ["/clearwallet", "/clear_wallet", "/clear wallet", "/resetwallet", "/reset_wallet", "/emptywallet", "/empty_wallet", "clearwallet"]:
+                if users_col is not None:
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"wallet_balance_ngn": 0.0}}, upsert=True)
+                await send_whatsapp_cloud_msg(
+                    sender_phone,
+                    "🗑️ *Wallet Cleared!*\n\nYour wallet balance has been reset to *₦0.00* for testing.\n\nType */deposit* to test depositing funds again, or ask a question to test the low-balance prompt!"
+                )
+                return
+
+            if msg_lower in ["/wallet", "/balance", "wallet", "balance"]:
+                balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
+                spent = user_doc.get("total_spent_ngn", 0.0) if user_doc else 0.0
+                est_queries = int(balance // 2.75)
+                wallet_msg = (
+                    f"💳 *NEURA AI Wallet*\n\n"
+                    f"• Available Balance: *₦{balance:.2f}*\n"
+                    f"• Total Spent: *₦{spent:.2f}*\n"
+                    f"• Estimated Queries Remaining: *~{est_queries}*\n\n"
+                    f"Type */deposit* to top up your wallet with any custom amount (min ₦500)!"
+                )
                 await send_whatsapp_interactive_button(
                     sender_phone,
-                    "✅ Your profile and chat history have been completely reset!\n\nTap the button below to set up your profile:",
-                    [{"id": "START_ONBOARDING", "title": "🚀 Start Setup"}]
+                    wallet_msg,
+                    [{"id": "TOPUP_WALLET", "title": "💳 Deposit ₦500+"}]
                 )
                 return
-            elif msg_lower == "/profile":
-                books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
-                streak_count = user_doc.get("study_streak_days", streak) if user_doc else streak
-                reminders_status = "Enabled 🔔" if (user_doc and user_doc.get("reminders_enabled", True)) else "Disabled 🔕"
-                await send_whatsapp_cloud_msg(
-                    sender_phone, 
-                    f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Study Streak: 🔥 {streak_count} Days\n• Reminders: {reminders_status}\n• Books:\n  - {books_str}\n\n"
-                    f"📝 *Feedback Survey:* https://forms.gle/dNr7SV5EUiqiFySx5"
-                )
+
+            if msg_lower in ["/deposit", "/topup", "topup_wallet", "start_deposit", "deposit", "topup"]:
+                balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
+                await send_deposit_menu(sender_phone, balance)
                 return
-            elif msg_lower in ["/reminders on", "/reminder on", "reminders on"]:
-                await users_col.update_one({"user_id": sender_phone}, {"$set": {"reminders_enabled": True}}, upsert=True)
-                await send_whatsapp_cloud_msg(
-                    sender_phone,
-                    "🔔 *Study Streak Reminders Enabled!*\n\nNEURA AI will gently safeguard your streak if you're inactive for 8–12 hours (between 6:00 AM and 11:00 PM WAT)."
-                )
-                return
-            elif msg_lower in ["/reminders off", "/reminder off", "reminders off"]:
-                await users_col.update_one({"user_id": sender_phone}, {"$set": {"reminders_enabled": False}}, upsert=True)
-                await send_whatsapp_cloud_msg(
-                    sender_phone,
-                    "🔕 *Study Streak Reminders Paused.*\n\nYou can re-enable them anytime by typing */reminders on*."
-                )
-                return
-            elif msg_lower == "/feedback":
-                feedback_msg = (
-                    "📝 *NEURA AI Beta Feedback Survey*\n\n"
-                    "Your feedback helps us make NEURA AI 10x better for medical students!\n\n"
-                    "This survey is 100% anonymous (takes under 2 minutes):\n"
-                    "👉 https://forms.gle/dNr7SV5EUiqiFySx5\n\n"
-                    "Thank you for beta testing NEURA AI! 🧠⚡"
-                )
-                await send_whatsapp_cloud_msg(sender_phone, feedback_msg)
-                return
-            elif msg_lower == "/update name":
-                await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_NAME"}})
-                await send_whatsapp_cloud_msg(sender_phone, "What would you like to change your name to?")
-                return
-            elif msg_lower == "/update level":
-                await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_LEVEL"}})
-                await send_whatsapp_interactive_list(
-                    sender_phone, 
-                    "What is your new medical class/level?",
-                    "Select Level",
-                    ["200L", "300L", "400L", "500L", "600L"]
-                )
-                return
-            elif msg_lower == "/update books":
-                await users_col.update_one({"user_id": sender_phone}, {"$set": {"preferred_books_list": []}})
-                has_subjects = await send_next_subject_menu(sender_phone, level)
-                if not has_subjects:
-                    await complete_onboarding(sender_phone)
-                return
+
+            if msg_lower.startswith("/deposit ") or msg_lower.startswith("deposit "):
+                handled = await handle_deposit_request(sender_phone, user_msg)
+                if handled:
+                    return
+
+            if users_col is not None:
+                if msg_lower == "/reset":
+                    await users_col.delete_one({"user_id": sender_phone})
+                    if chat_history_col is not None:
+                        await chat_history_col.delete_one({"user_id": sender_phone})
+                    await send_whatsapp_interactive_button(
+                        sender_phone,
+                        "✅ Your profile and chat history have been completely reset!\n\nTap the button below to set up your profile:",
+                        [{"id": "START_ONBOARDING", "title": "🚀 Start Setup"}]
+                    )
+                    return
+                elif msg_lower == "/profile":
+                    books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
+                    balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
+                    streak_count = user_doc.get("study_streak_days", streak) if user_doc else streak
+                    reminders_status = "Enabled 🔔" if (user_doc and user_doc.get("reminders_enabled", True)) else "Disabled 🔕"
+                    await send_whatsapp_cloud_msg(
+                        sender_phone, 
+                        f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Study Streak: 🔥 {streak_count} Days\n• Reminders: {reminders_status}\n• Wallet Balance: ₦{balance:.2f}\n• Books:\n  - {books_str}\n\n"
+                        f"📝 *Feedback Survey:* https://forms.gle/dNr7SV5EUiqiFySx5"
+                    )
+                    return
+                elif msg_lower in ["/reminders on", "/reminder on", "reminders on"]:
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"reminders_enabled": True}}, upsert=True)
+                    await send_whatsapp_cloud_msg(
+                        sender_phone,
+                        "🔔 *Study Streak Reminders Enabled!*\n\nNEURA AI will gently safeguard your streak if you're inactive for 8–12 hours (between 6:00 AM and 11:00 PM WAT)."
+                    )
+                    return
+                elif msg_lower in ["/reminders off", "/reminder off", "reminders off"]:
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"reminders_enabled": False}}, upsert=True)
+                    await send_whatsapp_cloud_msg(
+                        sender_phone,
+                        "🔕 *Study Streak Reminders Paused.*\n\nYou can re-enable them anytime by typing */reminders on*."
+                    )
+                    return
+                elif msg_lower == "/feedback":
+                    feedback_msg = (
+                        "📝 *NEURA AI Beta Feedback Survey*\n\n"
+                        "Your feedback helps us make NEURA AI 10x better for medical students!\n\n"
+                        "This survey is 100% anonymous (takes under 2 minutes):\n"
+                        "👉 https://forms.gle/dNr7SV5EUiqiFySx5\n\n"
+                        "Thank you for beta testing NEURA AI! 🧠⚡"
+                    )
+                    await send_whatsapp_cloud_msg(sender_phone, feedback_msg)
+                    return
+                elif msg_lower == "/update name":
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_NAME"}})
+                    await send_whatsapp_cloud_msg(sender_phone, "What would you like to change your name to?")
+                    return
+                elif msg_lower == "/update level":
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_LEVEL"}})
+                    await send_whatsapp_interactive_list(
+                        sender_phone, 
+                        "What is your new medical class/level?",
+                        "Select Level",
+                        ["200L", "300L", "400L", "500L", "600L"]
+                    )
+                    return
+                elif msg_lower == "/update books":
+                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"preferred_books_list": []}})
+                    has_subjects = await send_next_subject_menu(sender_phone, level)
+                    if not has_subjects:
+                        await complete_onboarding(sender_phone)
+                    return
+
+        # Handle deposit menu selection (e.g. DEPOSIT_500) or custom amount entry
+        handled_deposit = await handle_deposit_request(sender_phone, user_msg)
+        if handled_deposit:
+            return
 
         # Handle active interactive quiz answer if student is answering an MCQ
         if user_doc and "active_quiz" in user_doc:
@@ -2438,6 +2680,21 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Handle onboarding state machine
         is_onboarding = await handle_onboarding(sender_phone, user_msg)
         if is_onboarding:
+            return
+
+        # Low balance guard (< ₦20)
+        wallet_balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
+        if wallet_balance < 20.0:
+            low_bal_card = (
+                f"⚠️ *Insufficient Wallet Balance (₦{wallet_balance:.2f})*\n\n"
+                f"To continue asking clinical questions and practicing MBBS MCQs, please top up your wallet (minimum deposit is ₦500).\n\n"
+                f"Tap below to deposit:"
+            )
+            await send_whatsapp_interactive_button(
+                sender_phone,
+                low_bal_card,
+                [{"id": "TOPUP_WALLET", "title": "💳 Deposit ₦500+"}]
+            )
             return
 
         msg_clean_for_quiz = user_msg.strip()
@@ -2555,7 +2812,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         if intent == "GIBBERISH":
             gibberish_msg = (
                 f"I didn't quite catch that, *{name}*! 🧐\n\n"
-                f"Type a medical condition, drug mechanism, anatomical structure, or clinical case (e.g. *Carcinoid Syndrome*, *Prazosin*, *Lobar Pneumonia*, *Tetralogy of Fallot*), and I will pull exact details from your textbooks!"
+                f"Type a medical condition, drug mechanism, anatomical structure, or clinical case (e.g. *Carcinoid Syndrome*, *Prazosin*, *Lobar Pneumonia*, *Tetralogy of Fallot*), and I will dive straight into an in-depth breakdown!"
             )
             await send_whatsapp_cloud_msg(sender_phone, gibberish_msg)
             return
@@ -2761,20 +3018,32 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 upsert=True
             )
 
+        # Dynamic Token Billing Deduction (2.5x Markup ~ 60% Margin) & Topic Persistence
         if users_col is not None:
             try:
+                est_prompt_tokens = 1500 + len(user_prompt) // 4
+                est_compl_tokens = len(ai_answer) // 4
+                raw_cost_usd = (est_prompt_tokens * 0.00000014) + (est_compl_tokens * 0.00000028)
+                cost_ngn = max(2.00, raw_cost_usd * 1550.0 * 2.5)
                 await users_col.update_one(
                     {"user_id": sender_phone},
                     {
+                        "$inc": {"wallet_balance_ngn": -cost_ngn, "total_spent_ngn": cost_ngn},
                         "$set": {
                             "last_medical_topic": clean_topic,
                             "last_context_text": formatted_context,
                             "last_assistant_answer": ai_answer
-                        }
+                        },
+                        "$push": {"transactions": {
+                            "amount_ngn": cost_ngn,
+                            "type": "query_deduction",
+                            "description": "Medical Query / RAG Explanation",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }}
                     }
                 )
             except Exception as bill_err:
-                print(f"⚠️ Topic persistence error: {bill_err}")
+                print(f"⚠️ Billing deduction error: {bill_err}")
 
         # Check if the answer indicates information is missing from textbooks
         ai_lower = ai_answer.lower()
@@ -2816,8 +3085,150 @@ def root():
         "status": "online",
         "system": "NEURA AI Official WhatsApp Cloud API Backend v2.0",
         "phone_number_id": PHONE_NUMBER_ID,
-        "openrouter_configured": bool(OPENROUTER_API_KEY)
+        "openrouter_configured": bool(OPENROUTER_API_KEY),
+        "billing": "Flutterwave In-App WebView + Dynamic Token Multiplier"
     }
+
+@app.post("/webhook/flutterwave")
+async def flutterwave_webhook(request: Request):
+    """Flutterwave Webhook Endpoint to credit student wallets upon successful charge"""
+    try:
+        signature = request.headers.get("verif-hash", "")
+        if FLUTTERWAVE_SECRET_HASH and signature != FLUTTERWAVE_SECRET_HASH:
+            print("❌ Flutterwave secret hash mismatch!")
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
+        body = await request.json()
+        print(f"💳 Flutterwave Webhook: {json.dumps(body)}")
+        
+        event = body.get("event")
+        data = body.get("data", {})
+        status = data.get("status")
+        
+        if event == "charge.completed" and status == "successful":
+            amount_ngn = float(data.get("amount", 0.0))
+            tx_ref = data.get("tx_ref", "")
+            flw_ref = str(data.get("flw_ref") or tx_ref)
+            customer = data.get("customer", {})
+            phone = customer.get("phone_number") or customer.get("phonenumber")
+            
+            if not phone and "NEURA_" in tx_ref:
+                parts = tx_ref.split("_")
+                if len(parts) >= 2:
+                    phone = parts[1]
+
+            if phone and amount_ngn > 0 and users_col is not None:
+                # Idempotent credit
+                res = await users_col.update_one(
+                    {"user_id": phone, "transactions.reference": {"$ne": flw_ref}},
+                    {
+                        "$inc": {"wallet_balance_ngn": amount_ngn},
+                        "$push": {"transactions": {
+                            "amount_ngn": amount_ngn,
+                            "reference": flw_ref,
+                            "tx_ref": tx_ref,
+                            "type": "deposit",
+                            "description": f"Flutterwave Wallet Deposit (₦{amount_ngn:,.2f})",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }}
+                    },
+                    upsert=True
+                )
+                if res.modified_count > 0 or res.upserted_id:
+                    u = await users_col.find_one({"user_id": phone})
+                    bal = u.get("wallet_balance_ngn", amount_ngn) if u else amount_ngn
+                    receipt = (
+                        f"🎉 *PAYMENT RECEIVED!*\n\n"
+                        f"• Amount Credited: *₦{amount_ngn:,.2f}*\n"
+                        f"• New Wallet Balance: *₦{bal:,.2f}*\n"
+                        f"• Ref: _{flw_ref}_\n\n"
+                        f"You can now continue asking medical questions with full textbook grounding! 🧠⚡"
+                    )
+                    await send_whatsapp_cloud_msg(phone, receipt)
+        return {"status": "success"}
+    except Exception as e:
+        print(f"Error handling Flutterwave webhook: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/webhook/paystack")
+async def paystack_webhook(request: Request):
+    """Paystack Webhook Endpoint to credit student wallets upon successful charge (Fallback)"""
+    try:
+        body_bytes = await request.body()
+        signature = request.headers.get("x-paystack-signature", "")
+        if PAYSTACK_SECRET_KEY:
+            expected = hmac.new(PAYSTACK_SECRET_KEY.strip().encode(), body_bytes, hashlib.sha512).hexdigest()
+            if expected.lower() != signature.lower():
+                print("❌ Paystack signature mismatch!")
+                raise HTTPException(status_code=401, detail="Invalid signature")
+
+        data = json.loads(body_bytes.decode())
+        if data.get("event") == "charge.success":
+            tx_data = data.get("data", {})
+            amount_kobo = tx_data.get("amount", 0)
+            ref = tx_data.get("reference", "")
+            metadata = tx_data.get("metadata", {})
+            phone = metadata.get("phone_number") or tx_data.get("customer", {}).get("phone")
+
+            if phone and amount_kobo > 0 and users_col is not None:
+                amount_ngn = amount_kobo / 100.0
+                # Idempotent credit
+                res = await users_col.update_one(
+                    {"user_id": phone, "transactions.reference": {"$ne": ref}},
+                    {
+                        "$inc": {"wallet_balance_ngn": amount_ngn},
+                        "$push": {"transactions": {
+                            "amount_ngn": amount_ngn,
+                            "reference": ref,
+                            "type": "deposit",
+                            "description": f"Paystack Wallet Deposit (₦{amount_ngn:,.2f})",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }}
+                    },
+                    upsert=True
+                )
+                if res.modified_count > 0 or res.upserted_id:
+                    u = await users_col.find_one({"user_id": phone})
+                    bal = u.get("wallet_balance_ngn", amount_ngn) if u else amount_ngn
+                    receipt = (
+                        f"🎉 *PAYMENT RECEIVED!*\n\n"
+                        f"• Amount Credited: *₦{amount_ngn:,.2f}*\n"
+                        f"• New Wallet Balance: *₦{bal:,.2f}*\n"
+                        f"• Ref: _{ref}_\n\n"
+                        f"You can now continue asking medical questions with full textbook grounding! 🧠⚡"
+                    )
+                    await send_whatsapp_cloud_msg(phone, receipt)
+        return {"status": "success"}
+    except Exception as e:
+        print(f"Error handling Paystack webhook: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/payment-complete")
+async def payment_complete_page(request: Request):
+    status = request.query_params.get("status", "").lower()
+    
+    is_successful = status in ["successful", "success", "completed"]
+    
+    if is_successful:
+        html_content = """
+        <!DOCTYPE html>
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Confirmed - NEURA AI</title>
+        <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#0f172a;text-align:center;}
+        .card{background:white;padding:32px;border-radius:16px;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);max-width:400px;margin:20px;}
+        .icon{font-size:48px;margin-bottom:16px;}h1{font-size:24px;margin:0 0 8px;color:#16a34a;}p{color:#64748b;font-size:16px;line-height:1.5;}</style></head>
+        <body><div class="card"><div class="icon">✅</div><h1>Payment Confirmed!</h1><p>Your NEURA AI wallet has been successfully credited. You can return to WhatsApp.</p></div></body></html>
+        """
+    else:
+        html_content = """
+        <!DOCTYPE html>
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Cancelled - NEURA AI</title>
+        <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#0f172a;text-align:center;}
+        .card{background:white;padding:32px;border-radius:16px;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);max-width:400px;margin:20px;}
+        .icon{font-size:48px;margin-bottom:16px;}h1{font-size:24px;margin:0 0 8px;color:#dc2626;}p{color:#64748b;font-size:16px;line-height:1.5;}</style></head>
+        <body><div class="card"><div class="icon">❌</div><h1>Payment Cancelled</h1><p>The transaction was not completed and your wallet was not charged. You can return to WhatsApp and try again anytime with <b>/deposit</b>.</p></div></body></html>
+        """
+    return Response(content=html_content, media_type="text/html")
+
 
 @app.get("/api/books")
 def get_books():
@@ -3168,6 +3579,149 @@ async def admin_students(request: Request):
         })
     return {"students": students}
 
+@app.get("/admin/api/students/{user_id}/chats")
+async def admin_get_student_chats(user_id: str, request: Request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    if token not in ADMIN_SESSIONS:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    user_info = {
+        "user_id": user_id,
+        "name": "Student",
+        "level": "Unset",
+        "wallet_balance_ngn": 0.0,
+        "total_spent_ngn": 0.0,
+        "study_streak_days": 1,
+        "last_study_date": "N/A",
+        "preferred_books_list": [],
+        "onboarding_step": "COMPLETED",
+        "reminders_enabled": True
+    }
+    if users_col is not None:
+        u = await users_col.find_one({"user_id": user_id})
+        if u:
+            user_info = {
+                "user_id": u.get("user_id", user_id),
+                "name": u.get("name", "Student"),
+                "level": u.get("level", "Unset"),
+                "wallet_balance_ngn": round(float(u.get("wallet_balance_ngn", 0.0)), 2),
+                "total_spent_ngn": round(float(u.get("total_spent_ngn", 0.0)), 2),
+                "study_streak_days": int(u.get("study_streak_days", 1)),
+                "last_study_date": u.get("last_study_date", "N/A"),
+                "preferred_books_list": u.get("preferred_books_list", []),
+                "onboarding_step": u.get("onboarding_step", "COMPLETED"),
+                "reminders_enabled": u.get("reminders_enabled", True)
+            }
+
+    messages = []
+    # 1. Fetch from chat_logs_col if populated
+    if chat_logs_col is not None:
+        cursor = chat_logs_col.find({"user_id": user_id}).sort("timestamp", 1)
+        async for doc in cursor:
+            messages.append({
+                "role": doc.get("role", "user"),
+                "content": doc.get("content", ""),
+                "timestamp": doc.get("timestamp", ""),
+                "metadata": doc.get("metadata", {})
+            })
+
+    # 2. Fallback or merge from chat_history_col legacy array
+    if not messages and chat_history_col is not None:
+        h = await chat_history_col.find_one({"user_id": user_id})
+        if h and "messages" in h:
+            for m in h["messages"]:
+                if isinstance(m, dict):
+                    messages.append({
+                        "role": m.get("role", "user"),
+                        "content": m.get("content", ""),
+                        "timestamp": m.get("timestamp", ""),
+                        "metadata": {"has_issue": m.get("has_issue", False), "msg_type": m.get("msg_type", "text")}
+                    })
+
+    # Detect issues / errors to highlight for admin diagnosis
+    issue_count = 0
+    for m in messages:
+        c_low = str(m.get("content", "")).lower()
+        has_issue = (
+            m.get("metadata", {}).get("has_issue") or
+            "connection delay" in c_low or
+            "trouble creating the interactive practice" in c_low or
+            "insufficient balance" in c_low or
+            "low balance" in c_low or
+            "error processing your query" in c_low or
+            "experienced a brief" in c_low or
+            "only read text messages" in c_low or
+            "i had trouble creating" in c_low
+        )
+        if has_issue:
+            issue_count += 1
+            if "metadata" not in m:
+                m["metadata"] = {}
+            m["metadata"]["has_issue"] = True
+
+    return {
+        "student": user_info,
+        "total_messages": len(messages),
+        "issue_count": issue_count,
+        "messages": messages
+    }
+
+@app.get("/admin/api/chats/recent")
+async def admin_get_recent_chats(request: Request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    if token not in ADMIN_SESSIONS:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    if users_col is None:
+        return {"conversations": []}
+        
+    students = await users_col.find({}).sort("_id", -1).to_list(length=1000)
+    conversations = []
+    for s in students:
+        uid = s.get("user_id", "")
+        if not uid:
+            continue
+            
+        last_msg = ""
+        last_time = s.get("last_study_date", "")
+        msg_count = 0
+        has_issue = False
+        
+        if chat_logs_col is not None:
+            latest_doc = await chat_logs_col.find_one({"user_id": uid}, sort=[("timestamp", -1)])
+            if latest_doc:
+                last_msg = latest_doc.get("content", "")[:120]
+                last_time = latest_doc.get("timestamp", last_time)
+                msg_count = await chat_logs_col.count_documents({"user_id": uid})
+                has_issue = bool(latest_doc.get("metadata", {}).get("has_issue"))
+        
+        if msg_count == 0 and chat_history_col is not None:
+            h = await chat_history_col.find_one({"user_id": uid})
+            if h and "messages" in h and len(h["messages"]) > 0:
+                msg_count = len(h["messages"])
+                latest = h["messages"][-1]
+                last_msg = latest.get("content", "")[:120]
+                last_time = latest.get("timestamp", last_time)
+                has_issue = any(
+                    m.get("has_issue") or "connection delay" in str(m.get("content", "")).lower()
+                    for m in h["messages"] if isinstance(m, dict)
+                )
+                
+        conversations.append({
+            "user_id": uid,
+            "name": s.get("name", "Student"),
+            "level": s.get("level", "Unset"),
+            "wallet_balance_ngn": round(float(s.get("wallet_balance_ngn", 0.0)), 2),
+            "total_spent_ngn": round(float(s.get("total_spent_ngn", 0.0)), 2),
+            "study_streak_days": int(s.get("study_streak_days", 1)),
+            "last_message": last_msg or "No chat history recorded yet",
+            "last_time": last_time,
+            "message_count": msg_count,
+            "has_issue": has_issue
+        })
+        
+    return {"conversations": conversations}
+
 @app.post("/admin/api/broadcast")
 async def admin_broadcast(req: BroadcastRequest, request: Request, background_tasks: BackgroundTasks):
     token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
@@ -3237,12 +3791,14 @@ async def admin_dashboard_page():
     .glass-surface { background: rgba(17, 24, 39, 0.85); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.08); }
     .glass-surface-hover:hover { border-color: rgba(56, 189, 248, 0.35); box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 15px -3px rgba(56, 189, 248, 0.15); transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
     .whatsapp-bg { background-color: #0c1317; background-image: radial-gradient(#1e293b 1px, transparent 1px); background-size: 18px 18px; }
-    .wa-bubble { background: #005c4b; color: #e9edef; border-radius: 14px 14px 2px 14px; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
+    .wa-bubble-ai { background: #005c4b; color: #e9edef; border-radius: 14px 14px 14px 2px; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
+    .wa-bubble-user { background: #1e293b; color: #f1f5f9; border-radius: 14px 14px 2px 14px; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
     .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
     .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
     .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.8); border-radius: 9999px; }
     .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #0284c7; }
     .tab-active { background: #0284c7 !important; color: #ffffff !important; box-shadow: 0 4px 14px rgba(2, 132, 199, 0.35); }
+    .chat-thread-active { background: rgba(14, 165, 233, 0.15) !important; border-color: rgba(56, 189, 248, 0.4) !important; }
   </style>
 </head>
 <body class="min-h-screen flex flex-col antialiased selection:bg-brand-500 selection:text-white">
@@ -3257,7 +3813,7 @@ async def admin_dashboard_page():
         🧠
       </div>
       <h2 class="text-2xl font-extrabold text-white tracking-tight">NEURA AI Admin</h2>
-      <p class="text-slate-400 text-sm mt-1 mb-8">Executive Control, Directory & Broadcast Suite</p>
+      <p class="text-slate-400 text-sm mt-1 mb-8">Executive Control, Directory & Diagnostics Suite</p>
       
       <div class="space-y-4 text-left">
         <div>
@@ -3305,21 +3861,26 @@ async def admin_dashboard_page():
         </div>
 
         <!-- NAVIGATION TABS -->
-        <nav class="hidden md:flex items-center gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800/80 text-xs font-semibold">
-          <button onclick="switchTab('students')" id="tab-btn-students" class="px-4 py-2 rounded-lg text-slate-300 hover:text-white transition-all flex items-center gap-2 tab-active">
+        <nav class="hidden lg:flex items-center gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800/80 text-xs font-semibold">
+          <button onclick="switchTab('students')" id="tab-btn-students" class="px-3.5 py-2 rounded-lg text-slate-300 hover:text-white transition-all flex items-center gap-2 tab-active">
             <i class="fa-solid fa-users"></i>
             <span>Students & Wallets</span>
             <span id="nav-student-count" class="px-1.5 py-0.2 bg-white/20 text-white rounded text-[10px] font-bold">--</span>
           </button>
-          <button onclick="switchTab('broadcast')" id="tab-btn-broadcast" class="px-4 py-2 rounded-lg text-slate-400 hover:text-white transition-all flex items-center gap-2">
+          <button onclick="switchTab('chats')" id="tab-btn-chats" class="px-3.5 py-2 rounded-lg text-slate-400 hover:text-white transition-all flex items-center gap-2">
+            <i class="fa-solid fa-comments"></i>
+            <span>User Chats & Transcripts</span>
+            <span id="nav-chat-issues" class="px-1.5 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[10px] font-bold hidden">⚠️ Issues</span>
+          </button>
+          <button onclick="switchTab('broadcast')" id="tab-btn-broadcast" class="px-3.5 py-2 rounded-lg text-slate-400 hover:text-white transition-all flex items-center gap-2">
             <i class="fa-solid fa-bullhorn"></i>
             <span>Broadcast Studio</span>
           </button>
-          <button onclick="switchTab('analytics')" id="tab-btn-analytics" class="px-4 py-2 rounded-lg text-slate-400 hover:text-white transition-all flex items-center gap-2">
+          <button onclick="switchTab('analytics')" id="tab-btn-analytics" class="px-3.5 py-2 rounded-lg text-slate-400 hover:text-white transition-all flex items-center gap-2">
             <i class="fa-solid fa-chart-pie"></i>
             <span>Analytics</span>
           </button>
-          <button onclick="switchTab('history')" id="tab-btn-history" class="px-4 py-2 rounded-lg text-slate-400 hover:text-white transition-all flex items-center gap-2">
+          <button onclick="switchTab('history')" id="tab-btn-history" class="px-3.5 py-2 rounded-lg text-slate-400 hover:text-white transition-all flex items-center gap-2">
             <i class="fa-solid fa-clock-rotate-left"></i>
             <span>History</span>
           </button>
@@ -3338,10 +3899,13 @@ async def admin_dashboard_page():
         </div>
       </div>
 
-      <!-- MOBILE NAV TABS -->
-      <div class="flex md:hidden items-center justify-between gap-1 mt-3 pt-3 border-t border-slate-800 overflow-x-auto custom-scrollbar text-xs font-semibold">
+      <!-- MOBILE / TABLET NAV TABS -->
+      <div class="flex lg:hidden items-center justify-between gap-1 mt-3 pt-3 border-t border-slate-800 overflow-x-auto custom-scrollbar text-xs font-semibold">
         <button onclick="switchTab('students')" id="m-tab-btn-students" class="px-3 py-1.5 rounded-lg text-slate-300 tab-active flex items-center gap-1.5 whitespace-nowrap">
           <i class="fa-solid fa-users"></i> Students
+        </button>
+        <button onclick="switchTab('chats')" id="m-tab-btn-chats" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
+          <i class="fa-solid fa-comments"></i> User Chats
         </button>
         <button onclick="switchTab('broadcast')" id="m-tab-btn-broadcast" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
           <i class="fa-solid fa-bullhorn"></i> Broadcast
@@ -3476,7 +4040,7 @@ async def admin_dashboard_page():
                   <th class="py-3.5 px-4">Streak</th>
                   <th class="py-3.5 px-4">Preferred Textbooks</th>
                   <th class="py-3.5 px-4">Last Active</th>
-                  <th class="py-3.5 px-4 text-center">Action</th>
+                  <th class="py-3.5 px-4 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody id="students-tbody" class="divide-y divide-slate-800/60 text-slate-300">
@@ -3492,7 +4056,114 @@ async def admin_dashboard_page():
         </div>
       </section>
 
-      <!-- ================= TAB 2: BROADCAST STUDIO ================= -->
+      <!-- ================= TAB 2: USER CHATS & DIAGNOSTICS ================= -->
+      <section id="view-chats" class="hidden space-y-4">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 h-[calc(100vh-210px)] min-h-[640px]">
+          <!-- LEFT SIDEBAR: STUDENT CHAT THREADS LIST (4 Cols) -->
+          <div class="lg:col-span-4 glass-surface rounded-2xl p-4 flex flex-col space-y-3 h-full overflow-hidden border border-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div>
+                <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                  <i class="fa-solid fa-comments text-brand-400"></i> Conversations
+                </h3>
+                <p class="text-[11px] text-slate-400">Select student to inspect chat history</p>
+              </div>
+              <button onclick="loadRecentChats()" title="Refresh chat list" class="text-slate-400 hover:text-white text-xs p-1.5 bg-slate-800 rounded-lg border border-slate-700">
+                <i class="fa-solid fa-arrows-rotate"></i>
+              </button>
+            </div>
+
+            <!-- SEARCH IN THREADS -->
+            <div class="relative">
+              <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+              <input type="text" id="search-chat-students" oninput="filterChatThreadsList()" placeholder="Filter students or messages..."
+                     class="w-full pl-8 pr-3 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs placeholder:text-slate-500 focus:outline-none focus:border-brand-400 transition-all">
+            </div>
+
+            <!-- QUICK FILTER PILLS -->
+            <div class="flex flex-wrap items-center gap-1 text-[11px] pt-1">
+              <button onclick="setChatThreadFilter('ALL')" id="ct-filter-ALL" class="ct-filter-btn px-2 py-0.5 rounded-md font-bold bg-brand-600 text-white">All</button>
+              <button onclick="setChatThreadFilter('ISSUES')" id="ct-filter-ISSUES" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-slate-800 text-amber-300 hover:bg-slate-700 flex items-center gap-1"><i class="fa-solid fa-triangle-exclamation text-[10px]"></i> Issues</button>
+              <button onclick="setChatThreadFilter('200L')" id="ct-filter-200L" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700">200L</button>
+              <button onclick="setChatThreadFilter('300L')" id="ct-filter-300L" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700">300L</button>
+              <button onclick="setChatThreadFilter('400L')" id="ct-filter-400L" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700">400L</button>
+              <button onclick="setChatThreadFilter('500L')" id="ct-filter-500L" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700">500L</button>
+              <button onclick="setChatThreadFilter('600L')" id="ct-filter-600L" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700">600L</button>
+            </div>
+
+            <!-- THREADS SCROLL LIST -->
+            <div id="chat-threads-container" class="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+              <div class="py-12 text-center text-slate-500 text-xs">
+                <div class="inline-block animate-spin text-brand-400 text-xl mb-2"><i class="fa-solid fa-circle-notch"></i></div>
+                <p>Loading student chat threads...</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT MAIN PANEL: CONVERSATION TRANSCRIPT STREAM (8 Cols) -->
+          <div class="lg:col-span-8 glass-surface rounded-2xl flex flex-col h-full overflow-hidden border border-slate-800 relative">
+            <!-- CONVERSATION HEADER -->
+            <div id="active-chat-header" class="p-4 border-b border-slate-800 bg-slate-900/80 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div id="chat-header-avatar" class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-600 text-white font-bold flex items-center justify-center text-sm shadow-md">
+                  🧠
+                </div>
+                <div>
+                  <div class="flex items-center gap-2">
+                    <h3 id="chat-header-name" class="font-extrabold text-white text-sm">Select a Student</h3>
+                    <span id="chat-header-level" class="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700">--</span>
+                  </div>
+                  <div class="flex items-center gap-2 text-[11px] text-slate-400 font-mono mt-0.5">
+                    <span id="chat-header-phone">--</span>
+                    <button onclick="copyActiveChatPhone()" title="Copy Phone" class="hover:text-white transition-colors"><i class="fa-regular fa-copy text-xs"></i></button>
+                    <span class="text-slate-600">•</span>
+                    <span id="chat-header-streak" class="text-amber-400 font-sans font-bold">🔥 --</span>
+                    <span class="text-slate-600">•</span>
+                    <span id="chat-header-wallet" class="text-emerald-400 font-sans font-bold">₦0.00</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- RIGHT ACTIONS & IN-CHAT SEARCH -->
+              <div class="flex items-center gap-2">
+                <div class="relative hidden sm:block w-48">
+                  <i class="fa-solid fa-magnifying-glass absolute left-2.5 top-2 text-slate-400 text-xs"></i>
+                  <input type="text" id="in-chat-search" oninput="filterInChatMessages()" placeholder="Find in chat..."
+                         class="w-full pl-7 pr-3 py-1 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs placeholder:text-slate-500 focus:outline-none focus:border-brand-400">
+                </div>
+                <a id="chat-header-wa-btn" href="#" target="_blank" class="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors">
+                  <i class="fa-brands fa-whatsapp"></i> <span class="hidden sm:inline">Open WA</span>
+                </a>
+              </div>
+            </div>
+
+            <!-- DIAGNOSTIC ALERT BANNER -->
+            <div id="chat-diagnostic-banner" class="hidden px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-between text-xs text-amber-300">
+              <div class="flex items-center gap-2">
+                <i class="fa-solid fa-triangle-exclamation text-amber-400"></i>
+                <span id="chat-diagnostic-text">Potential issue(s) detected in this conversation! Highlighted in cards below.</span>
+              </div>
+              <span class="text-[10px] px-2 py-0.5 bg-amber-500/20 rounded font-bold uppercase tracking-wider">DIAGNOSTIC ALERT</span>
+            </div>
+
+            <!-- CHAT STREAM CONTAINER -->
+            <div id="chat-stream-container" class="flex-1 whatsapp-bg p-4 overflow-y-auto space-y-3.5 custom-scrollbar flex flex-col">
+              <!-- Empty State -->
+              <div id="chat-empty-state" class="m-auto text-center text-slate-400 p-8 space-y-3 max-w-sm">
+                <div class="w-16 h-16 rounded-2xl bg-slate-800/80 text-brand-400 flex items-center justify-center text-3xl mx-auto border border-slate-700 shadow-inner">
+                  <i class="fa-solid fa-comments"></i>
+                </div>
+                <h4 class="font-bold text-white text-sm">No Conversation Selected</h4>
+                <p class="text-xs text-slate-400 leading-relaxed">
+                  Choose a student from the sidebar on the left or click <b>"View Chats"</b> from the Registered Students Directory table to inspect their complete interaction transcript and diagnose issues.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= TAB 3: BROADCAST STUDIO ================= -->
       <section id="view-broadcast" class="hidden space-y-6">
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <!-- COMPOSER CARD (7 Cols) -->
@@ -3571,7 +4242,7 @@ async def admin_dashboard_page():
 
             <!-- PHONE CONTAINER -->
             <div class="flex-1 whatsapp-bg rounded-2xl p-4 border border-slate-800/90 flex flex-col justify-end min-h-[380px] shadow-inner relative overflow-hidden">
-              <div class="wa-bubble p-4 max-w-[92%] self-start text-xs space-y-2">
+              <div class="wa-bubble-ai p-4 max-w-[92%] self-start text-xs space-y-2">
                 <div class="text-[11px] font-extrabold text-emerald-300 flex items-center gap-1.5 border-b border-white/10 pb-1.5">
                   <span>🧠 NEURA AI Official Broadcast</span>
                 </div>
@@ -3590,7 +4261,7 @@ Type your announcement on the left to see how it renders live on students' Whats
         </div>
       </section>
 
-      <!-- ================= TAB 3: ANALYTICS & METRICS ================= -->
+      <!-- ================= TAB 4: ANALYTICS & METRICS ================= -->
       <section id="view-analytics" class="hidden space-y-6">
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <!-- LEVEL BREAKDOWN -->
@@ -3626,7 +4297,7 @@ Type your announcement on the left to see how it renders live on students' Whats
         </div>
       </section>
 
-      <!-- ================= TAB 4: BROADCAST HISTORY ================= -->
+      <!-- ================= TAB 5: BROADCAST HISTORY ================= -->
       <section id="view-history" class="hidden space-y-4">
         <div class="glass-surface p-6 rounded-2xl space-y-4">
           <div class="flex items-center justify-between border-b border-slate-800 pb-4">
@@ -3683,7 +4354,11 @@ Type your announcement on the left to see how it renders live on students' Whats
   <script>
     let authToken = localStorage.getItem("neura_admin_token") || "";
     let rawStudentsList = [];
+    let rawChatThreads = [];
     let activeLevelFilter = "ALL";
+    let activeChatThreadFilter = "ALL";
+    let currentSelectedUserId = "";
+    let currentActiveMessages = [];
 
     function togglePass() {
       const p = document.getElementById("admin-pass");
@@ -3750,21 +4425,24 @@ Type your announcement on the left to see how it renders live on students' Whats
     }
 
     function switchTab(tabKey) {
-      const tabs = ['students', 'broadcast', 'analytics', 'history'];
+      const tabs = ['students', 'chats', 'broadcast', 'analytics', 'history'];
       tabs.forEach(t => {
         const view = document.getElementById('view-' + t);
         const btn = document.getElementById('tab-btn-' + t);
         const mBtn = document.getElementById('m-tab-btn-' + t);
         if (t === tabKey) {
-          view.classList.remove('hidden');
+          view?.classList.remove('hidden');
           btn?.classList.add('tab-active');
           mBtn?.classList.add('tab-active');
         } else {
-          view.classList.add('hidden');
+          view?.classList.add('hidden');
           btn?.classList.remove('tab-active');
           mBtn?.classList.remove('tab-active');
         }
       });
+      if (tabKey === 'chats' && (!rawChatThreads || rawChatThreads.length === 0)) {
+        loadRecentChats();
+      }
     }
 
     async function loadAllData() {
@@ -3773,7 +4451,7 @@ Type your announcement on the left to see how it renders live on students' Whats
       syncIcon?.classList.add("fa-spin");
       
       try {
-        await Promise.all([loadStats(), loadStudents()]);
+        await Promise.all([loadStats(), loadStudents(), loadRecentChats()]);
       } catch (e) {
         console.error("Sync error:", e);
       } finally {
@@ -3878,14 +4556,10 @@ Type your announcement on the left to see how it renders live on students' Whats
       const walletFilter = document.getElementById("wallet-filter").value;
       
       const filtered = rawStudentsList.filter(s => {
-        // Level match
         if (activeLevelFilter !== "ALL" && s.level !== activeLevelFilter) return false;
-        
-        // Wallet match
         if (walletFilter === "FUNDED" && s.wallet_balance_ngn <= 0) return false;
         if (walletFilter === "ZERO" && s.wallet_balance_ngn > 0) return false;
         
-        // Search query match
         if (query) {
           const matchName = (s.name || "").toLowerCase().includes(query);
           const matchPhone = (s.user_id || "").toLowerCase().includes(query);
@@ -3916,7 +4590,6 @@ Type your announcement on the left to see how it renders live on students' Whats
       tbody.innerHTML = students.map(s => {
         const initials = (s.name || "S").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase();
         
-        // Class badge styling
         let lvlBadge = "bg-slate-800 text-slate-300 border-slate-700";
         if (s.level === "200L") lvlBadge = "bg-blue-500/10 text-blue-400 border-blue-500/20";
         else if (s.level === "300L") lvlBadge = "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
@@ -3924,12 +4597,10 @@ Type your announcement on the left to see how it renders live on students' Whats
         else if (s.level === "500L") lvlBadge = "bg-purple-500/10 text-purple-400 border-purple-500/20";
         else if (s.level === "600L") lvlBadge = "bg-amber-500/10 text-amber-400 border-amber-500/20";
 
-        // Wallet pill
         let walletPill = s.wallet_balance_ngn > 0 
           ? `<span class="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg font-mono font-bold">₦${s.wallet_balance_ngn.toLocaleString('en-NG', {minimumFractionDigits: 2})}</span>`
           : `<span class="px-2.5 py-1 bg-slate-800 text-slate-400 border border-slate-700 rounded-lg font-mono">₦0.00</span>`;
 
-        // Books pill
         const booksCount = (s.preferred_books_list || []).length;
         const booksText = booksCount > 0 ? `${booksCount} Textbook(s)` : "General Library";
 
@@ -3996,15 +4667,287 @@ Type your announcement on the left to see how it renders live on students' Whats
 
             <!-- ACTIONS -->
             <td class="py-3 px-4 text-center">
-              <a href="https://wa.me/${s.user_id}" target="_blank" class="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors">
-                <i class="fa-brands fa-whatsapp"></i> Chat
-              </a>
+              <div class="flex items-center justify-center gap-1.5">
+                <button onclick="openStudentChat('${s.user_id}')" class="px-2.5 py-1 bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/20 rounded-lg text-xs font-semibold inline-flex items-center gap-1 transition-colors">
+                  <i class="fa-solid fa-comments"></i> Chats
+                </button>
+                <a href="https://wa.me/${s.user_id}" target="_blank" class="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-lg text-xs font-semibold inline-flex items-center gap-1 transition-colors">
+                  <i class="fa-brands fa-whatsapp"></i> WA
+                </a>
+              </div>
             </td>
           </tr>
         `;
       }).join("");
     }
 
+    // ================= CHAT TRANSCRIPTS LOGIC =================
+    async function loadRecentChats() {
+      if (!authToken) return;
+      try {
+        const res = await fetch("/admin/api/chats/recent", {
+          headers: { "Authorization": "Bearer " + authToken }
+        });
+        if (res.status === 401) { performLogout(); return; }
+        const data = await res.json();
+        rawChatThreads = data.conversations || [];
+        
+        const hasAnyIssues = rawChatThreads.some(t => t.has_issue);
+        const issuesBadge = document.getElementById("nav-chat-issues");
+        if (hasAnyIssues) {
+          issuesBadge?.classList.remove("hidden");
+        } else {
+          issuesBadge?.classList.add("hidden");
+        }
+
+        filterChatThreadsList();
+      } catch (e) {
+        console.error("Error loading chats:", e);
+      }
+    }
+
+    function setChatThreadFilter(filterKey) {
+      activeChatThreadFilter = filterKey;
+      document.querySelectorAll(".ct-filter-btn").forEach(b => {
+        b.classList.remove("bg-brand-600", "text-white");
+        b.classList.add("bg-slate-800", "text-slate-300");
+      });
+      const btn = document.getElementById("ct-filter-" + filterKey);
+      if (btn) {
+        btn.classList.remove("bg-slate-800", "text-slate-300");
+        btn.classList.add("bg-brand-600", "text-white");
+      }
+      filterChatThreadsList();
+    }
+
+    function filterChatThreadsList() {
+      const q = (document.getElementById("search-chat-students")?.value || "").toLowerCase().trim();
+      
+      const filtered = rawChatThreads.filter(t => {
+        if (activeChatThreadFilter === "ISSUES" && !t.has_issue) return false;
+        if (activeChatThreadFilter !== "ALL" && activeChatThreadFilter !== "ISSUES" && t.level !== activeChatThreadFilter) return false;
+        
+        if (q) {
+          const matchName = (t.name || "").toLowerCase().includes(q);
+          const matchPhone = (t.user_id || "").toLowerCase().includes(q);
+          const matchLast = (t.last_message || "").toLowerCase().includes(q);
+          if (!matchName && !matchPhone && !matchLast) return false;
+        }
+        return true;
+      });
+
+      renderChatThreads(filtered);
+    }
+
+    function renderChatThreads(threads) {
+      const container = document.getElementById("chat-threads-container");
+      if (!threads || threads.length === 0) {
+        container.innerHTML = `
+          <div class="py-10 text-center text-slate-500 text-xs">
+            <i class="fa-regular fa-comments text-2xl mb-2"></i>
+            <p>No conversation threads matching criteria.</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = threads.map(t => {
+        const initials = (t.name || "S").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase();
+        const isActive = t.user_id === currentSelectedUserId ? "chat-thread-active" : "border-slate-800/80 hover:border-slate-700 bg-slate-900/60";
+        
+        return `
+          <div onclick="loadConversationForUser('${t.user_id}')" class="p-3 rounded-xl border ${isActive} cursor-pointer transition-all space-y-1.5 group">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <div class="w-7 h-7 rounded-lg bg-gradient-to-tr from-brand-600 to-indigo-600 text-white font-bold flex items-center justify-center text-[10px]">
+                  ${initials}
+                </div>
+                <div>
+                  <div class="font-bold text-white text-xs flex items-center gap-1.5">
+                    <span>${t.name}</span>
+                    <span class="text-[9px] px-1.5 py-0.2 bg-slate-800 text-slate-400 rounded font-mono">${t.level || "Unset"}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                ${t.has_issue ? '<span class="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[9px] font-bold"><i class="fa-solid fa-triangle-exclamation"></i> Issue</span>' : ''}
+              </div>
+            </div>
+
+            <p class="text-[11px] text-slate-400 truncate leading-snug group-hover:text-slate-300">
+              ${t.last_message || "No messages yet"}
+            </p>
+
+            <div class="flex items-center justify-between text-[10px] text-slate-500 pt-0.5 font-mono">
+              <span>${t.user_id}</span>
+              <span class="flex items-center gap-1.5">
+                <span class="text-emerald-400 font-sans font-bold">₦${(t.wallet_balance_ngn || 0).toLocaleString()}</span>
+                <span>•</span>
+                <span>${t.message_count || 0} msgs</span>
+              </span>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function openStudentChat(userId) {
+      switchTab('chats');
+      await loadConversationForUser(userId);
+    }
+
+    async function loadConversationForUser(userId) {
+      currentSelectedUserId = userId;
+      filterChatThreadsList(); // Update active card styling
+      
+      const streamContainer = document.getElementById("chat-stream-container");
+      streamContainer.innerHTML = `
+        <div class="m-auto text-center text-slate-400 p-8 space-y-2">
+          <div class="inline-block animate-spin text-brand-400 text-2xl"><i class="fa-solid fa-circle-notch"></i></div>
+          <p class="text-xs font-semibold">Loading conversation transcript for ${userId}...</p>
+        </div>
+      `;
+
+      try {
+        const res = await fetch(`/admin/api/students/${userId}/chats`, {
+          headers: { "Authorization": "Bearer " + authToken }
+        });
+        if (res.status === 401) { performLogout(); return; }
+        const data = await res.json();
+        
+        const student = data.student || {};
+        currentActiveMessages = data.messages || [];
+
+        // Update header
+        const initials = (student.name || "S").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase();
+        document.getElementById("chat-header-avatar").innerText = initials;
+        document.getElementById("chat-header-name").innerText = student.name || "Student";
+        document.getElementById("chat-header-level").innerText = student.level || "Unset";
+        document.getElementById("chat-header-phone").innerText = student.user_id || userId;
+        document.getElementById("chat-header-streak").innerText = `🔥 ${student.study_streak_days || 1}d streak`;
+        document.getElementById("chat-header-wallet").innerText = `₦${(student.wallet_balance_ngn || 0).toLocaleString('en-NG', {minimumFractionDigits: 2})}`;
+        document.getElementById("chat-header-wa-btn").href = `https://wa.me/${student.user_id || userId}`;
+
+        // Diagnostic banner
+        const diagBanner = document.getElementById("chat-diagnostic-banner");
+        const diagText = document.getElementById("chat-diagnostic-text");
+        if (data.issue_count > 0) {
+          diagText.innerText = `⚠️ ${data.issue_count} potential issue(s) or connection alert(s) detected in this transcript! Highlighted below.`;
+          diagBanner.classList.remove("hidden");
+        } else {
+          diagBanner.classList.add("hidden");
+        }
+
+        renderConversationMessages(currentActiveMessages);
+      } catch (e) {
+        streamContainer.innerHTML = `<div class="m-auto text-rose-400 text-xs">Error loading conversation: ${e.message}</div>`;
+      }
+    }
+
+    function copyActiveChatPhone() {
+      const p = document.getElementById("chat-header-phone").innerText;
+      if (p && p !== "--") {
+        navigator.clipboard.writeText(p);
+        alert(`Copied ${p}`);
+      }
+    }
+
+    function filterInChatMessages() {
+      const q = (document.getElementById("in-chat-search")?.value || "").toLowerCase().trim();
+      if (!q) {
+        renderConversationMessages(currentActiveMessages);
+        return;
+      }
+      const filtered = currentActiveMessages.filter(m => (m.content || "").toLowerCase().includes(q));
+      renderConversationMessages(filtered, q);
+    }
+
+    function formatChatMarkdown(text, highlightQuery = "") {
+      if (!text) return "";
+      let html = text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+
+      if (highlightQuery) {
+        const regex = new RegExp(`(${highlightQuery})`, "gi");
+        html = html.replace(regex, '<mark class="bg-amber-400/30 text-amber-200 px-0.5 rounded">$1</mark>');
+      }
+
+      html = html
+        .replace(/\*(.*?)\*/g, '<b class="font-bold text-white">$1</b>')
+        .replace(/_(.*?)_/g, '<i class="italic text-slate-200">$1</i>')
+        .replace(/`([^`]+)`/g, '<code class="bg-slate-900/80 px-1 py-0.5 rounded font-mono text-[11px] text-brand-300">$1</code>');
+
+      return html;
+    }
+
+    function renderConversationMessages(messages, highlightQuery = "") {
+      const container = document.getElementById("chat-stream-container");
+      if (!messages || messages.length === 0) {
+        container.innerHTML = `
+          <div class="m-auto text-center text-slate-500 p-8 space-y-2">
+            <i class="fa-regular fa-comment-dots text-3xl mb-1"></i>
+            <p class="text-xs">No chat messages found for this user.</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = messages.map(m => {
+        const isUser = m.role === "user";
+        const hasIssue = m.metadata?.has_issue;
+        const timeStr = m.timestamp ? (new Date(m.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})) : "";
+        const formatted = formatChatMarkdown(m.content, highlightQuery);
+
+        if (isUser) {
+          return `
+            <div class="flex justify-end items-end gap-2 group">
+              <div class="wa-bubble-user p-3 max-w-[85%] sm:max-w-[75%] space-y-1">
+                <div class="text-[10px] font-bold text-brand-400 flex items-center gap-1 mb-0.5">
+                  <i class="fa-solid fa-user text-[9px]"></i> <span>Student</span>
+                </div>
+                <div class="text-slate-100 text-xs whitespace-pre-wrap leading-relaxed">${formatted}</div>
+                <div class="text-[9px] text-slate-400 text-right mt-1 font-mono">${timeStr}</div>
+              </div>
+            </div>
+          `;
+        } else {
+          let issueBadge = "";
+          let borderClass = "";
+          if (hasIssue) {
+            borderClass = "border-2 border-amber-500/60 shadow-lg shadow-amber-500/10";
+            issueBadge = `
+              <div class="mb-1.5 px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[10px] font-bold flex items-center gap-1 w-max">
+                <i class="fa-solid fa-triangle-exclamation text-[9px]"></i> <span>Diagnostic Alert Triggered</span>
+              </div>
+            `;
+          }
+
+          return `
+            <div class="flex justify-start items-end gap-2 group">
+              <div class="wa-bubble-ai ${borderClass} p-3.5 max-w-[90%] sm:max-w-[80%] space-y-1">
+                <div class="text-[10px] font-extrabold text-emerald-300 flex items-center gap-1.5 border-b border-white/10 pb-1 mb-1">
+                  <span>🧠 NEURA AI</span>
+                  ${m.metadata?.msg_type ? `<span class="text-[8px] uppercase tracking-wider font-mono opacity-70">(${m.metadata.msg_type})</span>` : ''}
+                </div>
+                ${issueBadge}
+                <div class="text-slate-100 text-xs whitespace-pre-wrap leading-relaxed">${formatted}</div>
+                <div class="text-[9px] text-slate-300/80 text-right mt-1.5 flex items-center justify-end gap-1 font-mono">
+                  <span>${timeStr}</span>
+                  <i class="fa-solid fa-check-double text-sky-300 text-[8px]"></i>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+      }).join("");
+
+      // Scroll to bottom
+      container.scrollTop = container.scrollHeight;
+    }
+
+    // ================= BROADCAST & PREVIEW LOGIC =================
     function updateLivePreview() {
       const raw = document.getElementById("broadcast-msg").value;
       document.getElementById("char-count").innerText = raw.length + " chars";
@@ -4014,7 +4957,7 @@ Type your announcement on the left to see how it renders live on students' Whats
         .replace(/_(.*?)_/g, '<i class="italic text-slate-200">$1</i>');
         
       if (!formatted.trim()) {
-        formatted = "Hello Samuel! 👋\\n\\nType your announcement on the left to see how it renders live on students' WhatsApp screens in real-time.";
+        formatted = "Hello Samuel! 👋\n\nType your announcement on the left to see how it renders live on students' WhatsApp screens in real-time.";
       }
       document.getElementById("preview-text").innerHTML = formatted;
       
@@ -4104,5 +5047,6 @@ Type your announcement on the left to see how it renders live on students' Whats
 </html>
 """
     return HTMLResponse(content=html_content)
+
 
 
