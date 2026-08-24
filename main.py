@@ -491,7 +491,11 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
         "model": "deepseek/deepseek-v4-flash",
         "messages": messages,
         "temperature": 0.2,
-        "max_tokens": 2500
+        "max_tokens": 2500,
+        "provider": {
+            "order": ["DeepSeek", "Together", "Fireworks", "Hyperbolic", "Novita"],
+            "allow_fallbacks": True
+        }
     }
     
     try:
@@ -1008,8 +1012,7 @@ async def mark_message_as_read(message_id: str):
         "message_id": message_id
     }
     try:
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            await client.post(url, headers=headers, json=payload)
+        await shared_http_client.post(url, headers=headers, json=payload)
     except Exception:
         pass
 
@@ -1373,6 +1376,8 @@ def clean_medical_topic_title(raw_query: str, corrected_topic: str = "") -> str:
     if corrected_topic and len(corrected_topic.strip()) >= 3:
         topic = corrected_topic.strip().strip('"\'')
         topic = re.sub(r'^(?:Medical Topic:\s*|Topic:\s*)', '', topic, flags=re.IGNORECASE).strip()
+        for typo, correction in MEDICAL_TYPOS_MAP.items():
+            topic = re.sub(rf'\b{re.escape(typo)}\b', correction, topic, flags=re.IGNORECASE)
         if topic and len(topic) >= 3:
             return topic.title()
 
@@ -1491,17 +1496,20 @@ async def normalize_medical_query(user_msg: str) -> dict:
             {"role": "user", "content": user_msg}
         ],
         "temperature": 0.0,
-        "max_tokens": 160
+        "max_tokens": 160,
+        "provider": {
+            "order": ["DeepSeek", "Together", "Fireworks", "Hyperbolic", "Novita"],
+            "allow_fallbacks": True
+        }
     }
     try:
-        async with httpx.AsyncClient(timeout=3.5) as client:
-            res = await client.post(url, headers=headers, json=payload)
-            if res.status_code == 200:
-                text = res.json()["choices"][0]["message"]["content"]
-                text = text.replace("```json", "").replace("```", "").strip()
-                parsed = json.loads(text)
-                if isinstance(parsed, dict) and "search_keywords" in parsed:
-                    return parsed
+        res = await shared_http_client.post(url, headers=headers, json=payload)
+        if res.status_code == 200:
+            text = res.json()["choices"][0]["message"]["content"]
+            text = text.replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(text)
+            if isinstance(parsed, dict) and "search_keywords" in parsed:
+                return parsed
     except Exception as e:
         print(f"⚠️ Micro-LLM normalizer error: {e}")
 
@@ -1554,17 +1562,20 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
             {"role": "user", "content": user_payload_text}
         ],
         "temperature": 0.0,
-        "max_tokens": 160
+        "max_tokens": 160,
+        "provider": {
+            "order": ["DeepSeek", "Together", "Fireworks", "Hyperbolic", "Novita"],
+            "allow_fallbacks": True
+        }
     }
     try:
-        async with httpx.AsyncClient(timeout=3.5) as client:
-            res = await client.post(url, headers=headers, json=payload)
-            if res.status_code == 200:
-                text = res.json()["choices"][0]["message"]["content"]
-                text = text.replace("```json", "").replace("```", "").strip()
-                parsed = json.loads(text)
-                if isinstance(parsed, dict) and "is_adequate" in parsed:
-                    return parsed
+        res = await shared_http_client.post(url, headers=headers, json=payload)
+        if res.status_code == 200:
+            text = res.json()["choices"][0]["message"]["content"]
+            text = text.replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(text)
+            if isinstance(parsed, dict) and "is_adequate" in parsed:
+                return parsed
     except Exception as e:
         print(f"⚠️ Micro-LLM retrieval evaluator error: {e}")
 
@@ -2621,37 +2632,54 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 )
                 return
 
-        # Step 1: Upfront Keyword Extraction & Micro-LLM Query Typo Resolution
-        normalized_data = await normalize_medical_query(search_term)
-        medical_terms = normalized_data.get("search_keywords") or extract_medical_terms(search_term)
-        clean_topic = clean_medical_topic_title(search_term, normalized_data.get("corrected_topic", ""))
+        # ⚡ Step 1: Speculative Parallel Execution (Concurrent Vector Retrieval + Typo Normalization)
+        local_terms = extract_medical_terms(search_term)
         active_books = get_explicit_book_override(search_term, preferred_books_list)
-        
-        # Step 2: Multi-search Qdrant with clean medical terms across active books
-        search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
 
-        # Step 3: Self-Correcting Retrieval Evaluation Loop (Before declaring missing or answering with incomplete context)
-        eval_result = await evaluate_retrieval_adequacy(search_term, search_res)
-        
-        if not eval_result.get("is_adequate", True) and not eval_result.get("is_genuinely_absent", False):
-            re_anchored = eval_result.get("re_anchored_queries", [])
-            if re_anchored:
-                print(f"[SELF-CORRECTING RETRIEVAL] Context judged inadequate for '{search_term}'. Re-querying full medical library with: {re_anchored}")
-                second_pass_res = await multi_search_qdrant(re_anchored, preferred_books=None)
-                if second_pass_res:
-                    # Merge and deduplicate with initial search results
-                    seen_p_keys = {p.payload.get("text", "")[:120] for p in search_res}
-                    for p in second_pass_res:
-                        p_key = p.payload.get("text", "")[:120]
-                        if p_key not in seen_p_keys:
-                            seen_p_keys.add(p_key)
-                            search_res.append(p)
-                    search_res.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
-                    search_res = search_res[:15]
+        # Launch vector search and micro-LLM normalizer simultaneously in parallel
+        task_norm = normalize_medical_query(search_term)
+        task_search = multi_search_qdrant(local_terms, preferred_books=active_books)
 
-        # Step 4: If 0 chunks found even after fallback, check Micro-LLM normalizer as emergency pass
+        normalized_data, search_res = await asyncio.gather(task_norm, task_search)
+
+        clean_topic = clean_medical_topic_title(search_term, normalized_data.get("corrected_topic", ""))
+        medical_terms = normalized_data.get("search_keywords") or local_terms
+
+        # ⚡ Fast-Path Check: If local search returned >= 3 high-confidence chunks, bypass evaluator completely!
+        is_high_confidence = (
+            len(search_res) >= 3 and 
+            any(getattr(p, 'score', 0) >= 0.70 for p in search_res)
+        )
+
+        eval_result = {"is_adequate": True, "is_genuinely_absent": False}
+
+        if not is_high_confidence:
+            # Fallback path for ambiguous or 0-chunk queries
+            if not search_res:
+                print(f"[SEARCH FALLBACK] 0 chunks with local terms. Re-querying with normalized terms: {medical_terms}")
+                search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
+
+            eval_result = await evaluate_retrieval_adequacy(search_term, search_res)
+            
+            if not eval_result.get("is_adequate", True) and not eval_result.get("is_genuinely_absent", False):
+                re_anchored = eval_result.get("re_anchored_queries", [])
+                if re_anchored:
+                    print(f"[SELF-CORRECTING RETRIEVAL] Context judged inadequate for '{search_term}'. Re-querying full medical library with: {re_anchored}")
+                    second_pass_res = await multi_search_qdrant(re_anchored, preferred_books=None)
+                    if second_pass_res:
+                        # Merge and deduplicate with initial search results
+                        seen_p_keys = {p.payload.get("text", "")[:120] for p in search_res}
+                        for p in second_pass_res:
+                            p_key = p.payload.get("text", "")[:120]
+                            if p_key not in seen_p_keys:
+                                seen_p_keys.add(p_key)
+                                search_res.append(p)
+                        search_res.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
+                        search_res = search_res[:15]
+
+        # Step 4: If still 0 chunks found even after fallback, emergency scan across full library
         if not search_res:
-            print(f"[SEARCH FALLBACK] 0 chunks found. Re-querying full library with medical terms for: '{search_term}'")
+            print(f"[SEARCH FALLBACK] Re-querying full library across all books for: '{clean_topic}'")
             search_res = await multi_search_qdrant(medical_terms, preferred_books=None)
 
         if not search_res or (eval_result.get("is_genuinely_absent", False) and not search_res):
