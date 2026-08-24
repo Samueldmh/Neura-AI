@@ -1273,7 +1273,7 @@ SEARCH_STOP_WORDS = {
     "were", "be", "been", "being", "am", "will", "shall", "may", "might", "must",
     "need", "want", "know", "think", "say", "said", "get", "got", "make", "made",
     "go", "going", "come", "take", "see", "look", "also", "just", "more", "some",
-    "any", "each", "every", "both", "few", "many", "much", "no", "not",
+    "any", "all", "each", "every", "both", "few", "many", "much", "no", "not",
     "only", "own", "same", "so", "than", "too", "very", "really", "mean", "means",
     "meaning", "meant", "using", "used", "work", "works", "working", "way",
     "thing", "things", "something", "anything", "everything", "nothing",
@@ -1283,39 +1283,7 @@ SEARCH_STOP_WORDS = {
     "sketch", "visual", "visualize", "view"
 }
 
-SPECIAL_SHORT_MEDICAL = {"all", "aml", "cll", "cml", "sle", "ms", "itp", "ttp", "dic", "hus", "b", "t", "nk", "av", "sa", "ph", "c3", "c4", "c5", "k", "na", "ca", "fe", "mg", "ig"}
-
-MEDICAL_ACRONYMS_MAP = {
-    "all": "acute lymphoblastic leukemia",
-    "aml": "acute myeloid leukemia",
-    "cll": "chronic lymphocytic leukemia",
-    "cml": "chronic myeloid leukemia",
-    "sle": "systemic lupus erythematosus",
-    "itp": "immune thrombocytopenic purpura",
-    "ttp": "thrombotic thrombocytopenic purpura",
-    "dic": "disseminated intravascular coagulation",
-    "hus": "hemolytic uremic syndrome",
-    "copd": "chronic obstructive pulmonary disease",
-    "gerd": "gastroesophageal reflux disease",
-    "pcos": "polycystic ovary syndrome",
-    "dka": "diabetic ketoacidosis",
-    "men1": "multiple endocrine neoplasia type 1",
-    "men2": "multiple endocrine neoplasia type 2",
-    "men1a": "multiple endocrine neoplasia type 1",
-    "men2a": "multiple endocrine neoplasia type 2a",
-    "men2b": "multiple endocrine neoplasia type 2b",
-    "uti": "urinary tract infection",
-    "pid": "pelvic inflammatory disease",
-    "bph": "benign prostatic hyperplasia",
-    "aki": "acute kidney injury",
-    "ckd": "chronic kidney disease",
-    "chf": "congestive heart failure",
-    "cad": "coronary artery disease",
-    "dvt": "deep vein thrombosis",
-    "pe": "pulmonary embolism",
-    "tia": "transient ischemic attack",
-    "cva": "cerebrovascular accident"
-}
+SPECIAL_SHORT_MEDICAL = {"b", "t", "nk", "av", "sa", "ph", "c3", "c4", "c5", "k", "na", "ca", "fe", "mg", "ig"}
 
 FOLLOWUP_PHRASES = [
     "tell me more", "tell me more about this", "is this all", "is that all",
@@ -1403,74 +1371,77 @@ MEDICAL_TYPOS_MAP = {
     "falx cerebrii": "falx cerebri"
 }
 
-def safe_parse_json(text: str) -> dict:
-    """Safely parses JSON strings with regex extraction fallback for truncated or loosely formatted LLM JSON."""
-    if not text:
-        return {}
-    clean_text = text.replace("```json", "").replace("```", "").strip()
+MEDICAL_ACRONYMS_MAP = {
+    r'\ball\b': 'acute lymphoblastic leukemia (ALL)',
+    r'\baml\b': 'acute myeloid leukemia (AML)',
+    r'\bcll\b': 'chronic lymphocytic leukemia (CLL)',
+    r'\bcml\b': 'chronic myeloid leukemia (CML)',
+    r'\bdka\b': 'diabetic ketoacidosis (DKA)',
+    r'\bgerd\b': 'gastroesophageal reflux disease (GERD)',
+    r'\bdvt\b': 'deep vein thrombosis (DVT)',
+    r'\bpe\b': 'pulmonary embolism (PE)',
+    r'\bards\b': 'acute respiratory distress syndrome (ARDS)',
+    r'\bdic\b': 'disseminated intravascular coagulation (DIC)',
+    r'\bsle\b': 'systemic lupus erythematosus (SLE)',
+    r'\bmen1\b': 'multiple endocrine neoplasia type 1 (MEN1)',
+    r'\bmen2\b': 'multiple endocrine neoplasia type 2 (MEN2)',
+    r'\bmen2a\b': 'multiple endocrine neoplasia type 2A (MEN2A)',
+    r'\bmen2b\b': 'multiple endocrine neoplasia type 2B (MEN2B)',
+    r'\braas\b': 'renin angiotensin aldosterone system (RAAS)',
+    r'\bcopd\b': 'chronic obstructive pulmonary disease (COPD)',
+}
+
+def extract_json_from_llm(raw_text: str):
+    """Robust JSON extractor that handles markdown fences, leading conversational text, trailing notes, and single quotes."""
+    if not raw_text:
+        return None
+    cleaned = re.sub(r'```json\s*', '', raw_text)
+    cleaned = re.sub(r'```\s*', '', cleaned).strip()
     try:
-        parsed = json.loads(clean_text)
-        if isinstance(parsed, dict):
-            return parsed
+        return json.loads(cleaned)
     except Exception:
         pass
-    
-    # Fallback 1: Extract anything between { and }
-    match = re.search(r'\{.*\}', clean_text, re.DOTALL)
-    if match:
+
+    # Extract JSON Array [...]
+    m_list = re.search(r'\[\s*\{.*\}\s*\]', raw_text, re.DOTALL)
+    if m_list:
         try:
-            parsed = json.loads(match.group(0))
-            if isinstance(parsed, dict):
-                return parsed
+            return json.loads(m_list.group(0))
         except Exception:
             pass
 
-    # Fallback 2: Regex extraction of keys
-    data = {}
-    topic_match = re.search(r'"corrected_topic"\s*:\s*"([^"]+)"', clean_text)
-    if topic_match:
-        data["corrected_topic"] = topic_match.group(1)
-        
-    adeq_match = re.search(r'"is_adequate"\s*:\s*(true|false)', clean_text, re.IGNORECASE)
-    if adeq_match:
-        data["is_adequate"] = adeq_match.group(1).lower() == "true"
+    # Extract JSON Object {...}
+    m_dict = re.search(r'\{.*\}', raw_text, re.DOTALL)
+    if m_dict:
+        try:
+            return json.loads(m_dict.group(0))
+        except Exception:
+            pass
 
-    absent_match = re.search(r'"is_genuinely_absent"\s*:\s*(true|false)', clean_text, re.IGNORECASE)
-    if absent_match:
-        data["is_genuinely_absent"] = absent_match.group(1).lower() == "true"
-
-    kw_list = re.findall(r'"([^"]{3,60})"', clean_text)
-    if kw_list:
-        data["search_keywords"] = [
-            k for k in kw_list 
-            if k not in ["corrected_topic", "search_keywords", "is_adequate", "is_genuinely_absent", "re_anchored_queries", data.get("corrected_topic")]
-        ]
-        data["re_anchored_queries"] = data["search_keywords"]
-
-    return data
+    return None
 
 def clean_medical_topic_title(raw_query: str, corrected_topic: str = "") -> str:
     """Extracts a clean, authoritative, title-cased medical topic name from raw student queries."""
     if corrected_topic and len(corrected_topic.strip()) >= 3:
         topic = corrected_topic.strip().strip('"\'')
         topic = re.sub(r'^(?:Medical Topic:\s*|Topic:\s*)', '', topic, flags=re.IGNORECASE).strip()
-        for acr, expansion in MEDICAL_ACRONYMS_MAP.items():
-            topic = re.sub(rf'\b{re.escape(acr)}\b', expansion, topic, flags=re.IGNORECASE)
         for typo, correction in MEDICAL_TYPOS_MAP.items():
             topic = re.sub(rf'\b{re.escape(typo)}\b', correction, topic, flags=re.IGNORECASE)
         if topic and len(topic) >= 3:
             return topic.title()
 
     text = raw_query.strip()
-    # 1. Expand medical acronyms (ALL -> Acute Lymphoblastic Leukemia, SLE, AML, etc.)
-    for acr, expansion in MEDICAL_ACRONYMS_MAP.items():
-        text = re.sub(rf'\b{re.escape(acr)}\b', expansion, text, flags=re.IGNORECASE)
+    # 0. Expand medical acronyms (e.g. "ALL" -> "Acute Lymphoblastic Leukemia")
+    for pat, repl in MEDICAL_ACRONYMS_MAP.items():
+        if re.search(pat, text, flags=re.IGNORECASE):
+            text = re.sub(pat, repl, text, flags=re.IGNORECASE)
+            break
 
-    # 2. Normalize typos
+    # 1. Normalize typos
     for typo, correction in MEDICAL_TYPOS_MAP.items():
         text = re.sub(rf'\b{re.escape(typo)}\b', correction, text, flags=re.IGNORECASE)
 
-    # 3. Strip conversational query framing
+    # 2. Strip conversational query framing
     framing_patterns = [
         r'^(?:can you\s+)?(?:tell me about|explain|what is|what are|describe|discuss|give me|how does|outline|overview of|notes on|details on|summary of)\s+',
         r'^(?:i want to know about|let us talk about|let\'s discuss|briefly explain)\s+',
@@ -1478,7 +1449,7 @@ def clean_medical_topic_title(raw_query: str, corrected_topic: str = "") -> str:
     for pat in framing_patterns:
         text = re.sub(pat, '', text, flags=re.IGNORECASE).strip()
 
-    # 4. Clean up leading/trailing punctuation
+    # 3. Clean up leading/trailing punctuation
     text = re.sub(r'[?!.,:;]+$', '', text).strip()
 
     if not text:
@@ -1489,11 +1460,13 @@ def clean_medical_topic_title(raw_query: str, corrected_topic: str = "") -> str:
 def extract_medical_terms(user_msg: str) -> list:
     """Instantly extract clean medical keywords by normalizing typos, expanding clinical synonyms/subclasses, preserving short medical terms (B-cell, T-cell), and stripping filler words."""
     msg = user_msg
-    # 1. Expand medical acronyms (e.g. ALL -> acute lymphoblastic leukemia)
-    for acr, expansion in MEDICAL_ACRONYMS_MAP.items():
-        msg = re.sub(rf'\b{re.escape(acr)}\b', expansion, msg, flags=re.IGNORECASE)
+    # 0. Expand clinical acronyms before stop-word removal (prevents "ALL", "AML", "DKA" from being stripped)
+    for pat, repl in MEDICAL_ACRONYMS_MAP.items():
+        if re.search(pat, msg, flags=re.IGNORECASE):
+            msg = re.sub(pat, repl, msg, flags=re.IGNORECASE)
+            break
 
-    # 2. Normalize common student typos
+    # 1. Normalize common student typos
     for typo, correction in MEDICAL_TYPOS_MAP.items():
         msg = re.sub(rf'\b{re.escape(typo)}\b', correction, msg, flags=re.IGNORECASE)
         
@@ -1531,13 +1504,9 @@ def extract_medical_terms(user_msg: str) -> list:
     if joined_query and joined_query not in phrases:
         phrases.insert(0, joined_query)
 
-    # 3. Clinical Domain Multi-Angle Expansion
+    # 2. Clinical Domain Multi-Angle Expansion
     joined_lower = joined_query.lower()
-    if "acute lymphoblastic leukemia" in joined_lower or "lymphoblastic" in joined_lower:
-        for exp in ["acute lymphoblastic leukemia clinical features symptoms", "ALL bone marrow blast infiltration anaemia thrombocytopenia"]:
-            if exp not in phrases:
-                phrases.append(exp)
-    elif "sodium channel" in joined_lower and ("block" in joined_lower or "kinetic" in joined_lower or "dissociation" in joined_lower or "rate" in joined_lower):
+    if "sodium channel" in joined_lower and ("block" in joined_lower or "kinetic" in joined_lower or "dissociation" in joined_lower or "rate" in joined_lower):
         for exp in ["class I antiarrhythmics sodium channel kinetics", "class IA IB IC rate of dissociation recovery", "sodium channel blockers use dependence unbinding"]:
             if exp not in phrases:
                 phrases.append(exp)
@@ -1571,13 +1540,13 @@ async def normalize_medical_query(user_msg: str) -> dict:
         "X-Title": "NEURA AI Medical Assistant"
     }
     system_prompt = (
-        "You are an expert MBBS medical query normalizer and typo fixer. Medical students frequently send questions with abbreviations (e.g. 'ALL' for Acute Lymphoblastic Leukemia, 'SLE', 'AML'), typos (e.g. 'disassociation', 'pnuemonia'), or shorthand.\n"
-        "1. Expand medical acronyms (e.g. 'Symptoms of All' -> 'Symptoms of Acute Lymphoblastic Leukemia') and fix any typos.\n"
-        "2. Generate 2 to 4 authoritative medical textbook search queries.\n"
+        "You are an expert MBBS medical query normalizer and typo fixer. Medical students frequently send questions with typos (e.g. 'disassociation', 'pnuemonia', 'arrythmia'), shorthand, or colloquial terms.\n"
+        "1. Fix any typos and resolve the query to proper medical terminology.\n"
+        "2. Generate 2 to 4 authoritative medical textbook search queries (including pharmacological classes, anatomical names, or physiological processes).\n"
         "Output ONLY a valid JSON object in this exact schema:\n"
         "{\n"
-        '  "corrected_topic": "Acute Lymphoblastic Leukemia Symptoms",\n'
-        '  "search_keywords": ["acute lymphoblastic leukemia symptoms", "ALL clinical features presentation", "lymphoblast bone marrow failure"]\n'
+        '  "corrected_topic": "Dissociation kinetics of sodium channel blockers",\n'
+        '  "search_keywords": ["dissociation kinetics sodium channel blockers", "Class I antiarrhythmics kinetics", "Class IA IB IC recovery rate"]\n'
         "}\n"
         "Output ONLY valid JSON (no markdown, no ```json)."
     )
@@ -1588,7 +1557,7 @@ async def normalize_medical_query(user_msg: str) -> dict:
             {"role": "user", "content": user_msg}
         ],
         "temperature": 0.0,
-        "max_tokens": 400,
+        "max_tokens": 500,
         "provider": {
             "order": ["DeepSeek", "Together", "Fireworks", "Hyperbolic", "Novita"],
             "allow_fallbacks": True
@@ -1598,8 +1567,8 @@ async def normalize_medical_query(user_msg: str) -> dict:
         res = await shared_http_client.post(url, headers=headers, json=payload)
         if res.status_code == 200:
             text = res.json()["choices"][0]["message"]["content"]
-            parsed = safe_parse_json(text)
-            if isinstance(parsed, dict) and "search_keywords" in parsed and parsed["search_keywords"]:
+            parsed = extract_json_from_llm(text)
+            if isinstance(parsed, dict) and "search_keywords" in parsed:
                 return parsed
     except Exception as e:
         print(f"⚠️ Micro-LLM normalizer error: {e}")
@@ -1653,7 +1622,7 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
             {"role": "user", "content": user_payload_text}
         ],
         "temperature": 0.0,
-        "max_tokens": 400,
+        "max_tokens": 500,
         "provider": {
             "order": ["DeepSeek", "Together", "Fireworks", "Hyperbolic", "Novita"],
             "allow_fallbacks": True
@@ -1663,7 +1632,7 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
         res = await shared_http_client.post(url, headers=headers, json=payload)
         if res.status_code == 200:
             text = res.json()["choices"][0]["message"]["content"]
-            parsed = safe_parse_json(text)
+            parsed = extract_json_from_llm(text)
             if isinstance(parsed, dict) and "is_adequate" in parsed:
                 return parsed
     except Exception as e:
@@ -2133,6 +2102,16 @@ async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list
             context_blocks.append(f"[Chunk {idx} | Book: {book_str}]\n{text_str}")
         context_text = "\n\n".join(context_blocks)
 
+    if not context_text or len(context_text.strip()) < 50:
+        # Fallback search if context is sparse
+        try:
+            terms = extract_medical_terms(topic)
+            fallback_pts = await multi_search_qdrant(terms)
+            context_blocks = [f"[Chunk {i+1} | Book: {p.payload.get('book_title', 'Textbook')}]\n{p.payload.get('text', '')}" for i, p in enumerate(fallback_pts[:8])]
+            context_text = "\n\n".join(context_blocks)
+        except Exception:
+            pass
+
     user_prompt = (
         f"TARGET MEDICAL TOPIC TO TEST:\n{topic}\n\n"
         f"RETRIEVED TEXTBOOK CONTEXT:\n{context_text}\n\n"
@@ -2141,13 +2120,10 @@ async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list
 
     try:
         json_raw = await call_openrouter_llm(SYSTEM_INTERACTIVE_QUIZ_PROMPT, user_prompt)
-        cleaned_json = re.sub(r'```json\s*', '', json_raw)
-        cleaned_json = re.sub(r'```\s*$', '', cleaned_json).strip()
-        
-        quiz_questions = json.loads(cleaned_json)
+        quiz_questions = extract_json_from_llm(json_raw)
         
         if not isinstance(quiz_questions, list) or len(quiz_questions) == 0:
-            raise ValueError("LLM did not return a valid list of questions")
+            raise ValueError(f"LLM did not return a valid list of questions. Raw output: {json_raw[:200]}")
 
         quiz_state = {
             "topic": topic,
