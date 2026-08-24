@@ -471,7 +471,7 @@ async def classify_intent(message: str) -> str:
         return "GIBBERISH"
     return "MEDICAL"
 
-async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history: list = None, max_tokens: int = 1000) -> str:
+async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history: list = None, max_tokens: int = 2500) -> str:
     if not OPENROUTER_API_KEY:
         raise ValueError("OPENROUTER_API_KEY environment variable is not set on Render!")
         
@@ -2202,12 +2202,10 @@ async def send_quiz_question(sender_phone: str, quiz_state: dict):
 
     q = questions[idx]
     q_num = idx + 1
-    book_source = q.get("book_source", "Textbook")
     vignette = q.get("vignette", "")
 
     question_text = (
-        f"🏥 *NEURA AI MBBS Exam Quiz* (Q{q_num}/{total})\n"
-        f"📚 *Source:* {book_source}\n\n"
+        f"🏥 *NEURA AI MBBS Exam Quiz* (Q{q_num}/{total})\n\n"
         f"{vignette}\n\n"
         f"A) {q.get('option_a')}\n"
         f"B) {q.get('option_b')}\n"
@@ -2709,8 +2707,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     )
                 
                 clean_topic_label = clean_topic
-                if len(clean_topic_label) > 45:
-                    clean_topic_label = clean_topic_label[:42] + "..."
+                if len(clean_topic_label) > 90:
+                    clean_topic_label = clean_topic_label[:87] + "..."
                 topic_snippet = clean_topic[:100]
                 await send_whatsapp_interactive_button(
                     sender_phone,
@@ -2879,8 +2877,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         if not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
             try:
                 clean_topic_label = clean_topic
-                if len(clean_topic_label) > 45:
-                    clean_topic_label = clean_topic_label[:42] + "..."
+                if len(clean_topic_label) > 90:
+                    clean_topic_label = clean_topic_label[:87] + "..."
                 topic_snippet = clean_topic[:100]
                 await send_whatsapp_interactive_button(
                     sender_phone,
