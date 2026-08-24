@@ -1970,6 +1970,16 @@ async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list
             context_blocks.append(f"[Chunk {idx} | Book: {book_str}]\n{text_str}")
         context_text = "\n\n".join(context_blocks)
 
+    if not context_text or len(context_text.strip()) < 50:
+        # Fallback search if context is sparse
+        try:
+            terms = extract_medical_terms(topic)
+            fallback_pts = await multi_search_qdrant(terms)
+            context_blocks = [f"[Chunk {i+1} | Book: {p.payload.get('book_title', 'Textbook')}]\n{p.payload.get('text', '')}" for i, p in enumerate(fallback_pts[:8])]
+            context_text = "\n\n".join(context_blocks)
+        except Exception:
+            pass
+
     user_prompt = (
         f"TARGET MEDICAL TOPIC TO TEST:\n{topic}\n\n"
         f"RETRIEVED TEXTBOOK CONTEXT:\n{context_text}\n\n"
@@ -1978,13 +1988,30 @@ async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list
 
     try:
         json_raw = await call_openrouter_llm(SYSTEM_INTERACTIVE_QUIZ_PROMPT, user_prompt)
+        
+        # Robust JSON Array extraction
+        quiz_questions = None
         cleaned_json = re.sub(r'```json\s*', '', json_raw)
         cleaned_json = re.sub(r'```\s*$', '', cleaned_json).strip()
-        
-        quiz_questions = json.loads(cleaned_json)
+        try:
+            parsed = json.loads(cleaned_json)
+            if isinstance(parsed, list):
+                quiz_questions = parsed
+        except Exception:
+            pass
+            
+        if not quiz_questions:
+            m_list = re.search(r'\[\s*\{.*\}\s*\]', json_raw, re.DOTALL)
+            if m_list:
+                try:
+                    parsed = json.loads(m_list.group(0))
+                    if isinstance(parsed, list):
+                        quiz_questions = parsed
+                except Exception:
+                    pass
         
         if not isinstance(quiz_questions, list) or len(quiz_questions) == 0:
-            raise ValueError("LLM did not return a valid list of questions")
+            raise ValueError(f"LLM did not return a valid list of questions. Raw: {json_raw[:200]}")
 
         quiz_state = {
             "topic": topic,
