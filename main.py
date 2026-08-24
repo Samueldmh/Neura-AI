@@ -296,12 +296,20 @@ Your goal is to explain clinical concepts, pathophysiological mechanisms, diagno
 
 CLINICAL EXPLANATION & EXPERT VOICE RULES:
 1. AUTHORITATIVE CLINICAL EXPERT VOICE: Respond like a top-tier medical professor and expert AI assistant. Deliver factual, comprehensive, and accurate explanations directly from the knowledge provided.
-2. ZERO TEXTBOOK META-TALK & ZERO SOURCE REFERENCES: Absolutely NEVER use phrases like "your textbook explains", "your textbook also lists", "the textbook states", "according to the text", "the retrieved context mentions", "in your selected textbooks", or refer to textbooks/sources in your explanation. Never write meta-commentary about where facts come from. Jump straight into the clinical breakdown and state the facts directly with expert authority.
-3. NO PREAMBLES & NO FILLER: Never use opening filler, greetings, or announcements (e.g., "Certainly Samuel!", "Certainly!", "Absolutely!", "Sure thing!", "Here is the breakdown you requested", "Based on the retrieved context..."). Jump DIRECTLY into the medical explanation starting immediately with 📖 *IN-DEPTH EXPLANATION*. Zero conversational filler.
-4. ZERO CITATION BLOCKS & ZERO FOOTERS: Absolutely NEVER output citation footers, '📚 CITATIONS', or list textbook names at the end. Explain the core medical facts directly in your own structured words.
-5. SIMPLIFY COMPLEX MECHANISMS: Whenever explaining complex biochemistry, pharmacology kinetics, or high-level pathology, break down the mechanisms step-by-step with clear, intuitive reasoning so students can grasp the concepts effortlessly.
-6. HIGHLIGHT IMPORTANT TERMS: Bold key clinical terms, drug names, and diagnostic criteria (*Drug Name*, *Phase 0*, *5-HIAA*) so the text is visually crisp and easy to scan.
-7. CONVERSATIONAL SOCRATIC CO-PILOT: Engage students naturally. When they ask hypothetical "what if" questions or follow-ups, synthesize clinical principles with common-sense medical reasoning.
+2. TOPIC-ANCHORED HEADING: Every response MUST start with a clear, topic-anchored heading formatted as:
+   📖 *[TOPIC NAME: CLINICAL FOCUS]*
+   (e.g., 📖 *SHIGELLA: PATHOPHYSIOLOGY & CLINICAL MANIFESTATIONS*, 📖 *SODIUM CHANNEL BLOCKERS: DISSOCIATION KINETICS*, 📖 *LOBAR PNEUMONIA: PHASES & PATHOLOGY*).
+3. CLINICAL OVERVIEW FIRST: Immediately after the topic heading, provide a concise 1-2 sentence high-level overview or definition so anyone reading instantly understands what pathogen, condition, drug class, or physiological mechanism is being discussed before diving into detailed sub-sections. Never start abruptly with a random isolated complication or single bullet point.
+4. STRUCTURED SUB-SECTIONS: Organize into clear, logically ordered sections separated by double line breaks:
+   - *Core Pathophysiology / Mechanism of Action / Etiology:* Detailed step-by-step breakdown.
+   - *Clinical Manifestations / Signs & Symptoms / Diagnostic Findings:* Key clinical presentations.
+   - *Complications & High-Yield Associations:* Important consequences.
+5. ZERO TEXTBOOK META-TALK & ZERO SOURCE REFERENCES: Absolutely NEVER use phrases like "your textbook explains", "your textbook also lists", "the textbook states", "according to the text", "the retrieved context mentions", "in your selected textbooks", or refer to textbooks/sources in your explanation. Never write meta-commentary about where facts come from. Jump straight into the clinical breakdown and state the facts directly with expert authority.
+6. NO PREAMBLES & NO FILLER: Never use opening filler, greetings, or announcements (e.g., "Certainly Samuel!", "Certainly!", "Absolutely!", "Sure thing!", "Here is the breakdown you requested", "Based on the retrieved context..."). Jump DIRECTLY into the medical explanation starting with your topic header: 📖 *[TOPIC NAME: CLINICAL FOCUS]*. Zero conversational filler.
+7. ZERO CITATION BLOCKS & ZERO FOOTERS: Absolutely NEVER output citation footers, '📚 CITATIONS', or list textbook names at the end. Explain the core medical facts directly in your own structured words.
+8. SIMPLIFY COMPLEX MECHANISMS: Whenever explaining complex biochemistry, pharmacology kinetics, or high-level pathology, break down the mechanisms step-by-step with clear, intuitive reasoning so students can grasp the concepts effortlessly.
+9. HIGHLIGHT IMPORTANT TERMS: Bold key clinical terms, drug names, and diagnostic criteria (*Drug Name*, *Phase 0*, *5-HIAA*) so the text is visually crisp and easy to scan.
+10. CONVERSATIONAL SOCRATIC CO-PILOT: Engage students naturally. When they ask hypothetical "what if" questions or follow-ups, synthesize clinical principles with common-sense medical reasoning.
 
 CRITICAL FORMATTING & LAYOUT RULES FOR WHATSAPP:
 1. DOUBLE-LINE SPACING: Every section heading, sub-heading, bullet item, and paragraph MUST be separated by a full blank line (`\n\n`). Never stack bullet items or headers back-to-back on consecutive single lines.
@@ -316,7 +324,9 @@ CRITICAL FORMATTING & LAYOUT RULES FOR WHATSAPP:
 6. ZERO FABRICATED FIGURE CITATIONS: Absolutely NEVER invent, cite, or mention specific figure numbers, diagram numbers, plate numbers, or table numbers (e.g., NEVER write "Figure 46-9", "Fig 12.8", "Figure 43.5", "Plate 3-1", "Table 14.2", "Robbins p. 787").
 7. NO SMASHED WORDS: Ensure flawless spacing between words, punctuation, and hyphens. Always put a space after colons, periods, and bold words (e.g. write "*Prazosin* is" instead of "*Prazosin*is").
 8. Structure responses into clear sections separated by blank lines:
-   📖 *IN-DEPTH EXPLANATION*
+   📖 *[TOPIC NAME: CLINICAL FOCUS]*
+   
+   [1-2 sentence high-level clinical overview / definition]
    
    💡 *KEY CLINICAL PEARLS*
 9. NO RAW MARKDOWN TABLES: WhatsApp does NOT render markdown tables. NEVER output pipes or table headers (| Col 1 | Col 2 | or |---|---|). Always structure comparisons and summary tables as clean bulleted list cards (e.g. - *Category:* followed by indented • *Detail:* bullets).
@@ -1184,8 +1194,45 @@ MEDICAL_TYPOS_MAP = {
     "mycardial": "myocardial",
     "infarction": "infarction",
     "pnuemonia": "pneumonia",
-    "pnemonia": "pneumonia"
+    "pnemonia": "pneumonia",
+    "pathoiof": "pathophysiology of",
+    "pathoof": "pathophysiology of",
+    "pathologyof": "pathology of",
+    "pathophys": "pathophysiology",
+    "patho": "pathology",
+    "shigela": "shigella",
+    "salmonela": "salmonella",
+    "falx cerebrii": "falx cerebri"
 }
+
+def clean_medical_topic_title(raw_query: str, corrected_topic: str = "") -> str:
+    """Extracts a clean, authoritative, title-cased medical topic name from raw student queries."""
+    if corrected_topic and len(corrected_topic.strip()) >= 3:
+        topic = corrected_topic.strip().strip('"\'')
+        topic = re.sub(r'^(?:Medical Topic:\s*|Topic:\s*)', '', topic, flags=re.IGNORECASE).strip()
+        if topic and len(topic) >= 3:
+            return topic.title()
+
+    text = raw_query.strip()
+    # 1. Normalize typos
+    for typo, correction in MEDICAL_TYPOS_MAP.items():
+        text = re.sub(rf'\b{re.escape(typo)}\b', correction, text, flags=re.IGNORECASE)
+
+    # 2. Strip conversational query framing
+    framing_patterns = [
+        r'^(?:can you\s+)?(?:tell me about|explain|what is|what are|describe|discuss|give me|how does|outline|overview of|notes on|details on|summary of)\s+',
+        r'^(?:i want to know about|let us talk about|let\'s discuss|briefly explain)\s+',
+    ]
+    for pat in framing_patterns:
+        text = re.sub(pat, '', text, flags=re.IGNORECASE).strip()
+
+    # 3. Clean up leading/trailing punctuation
+    text = re.sub(r'[?!.,:;]+$', '', text).strip()
+
+    if not text:
+        text = "High-Yield Clinical Concepts"
+
+    return text.title()
 
 def extract_medical_terms(user_msg: str) -> list:
     """Instantly extract clean medical keywords by normalizing typos, expanding clinical synonyms/subclasses, preserving short medical terms (B-cell, T-cell), and stripping filler words."""
@@ -2314,7 +2361,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         if intent != "QUIZ" and not is_followup:
             cached_answer, cached_context = TOPIC_CACHE.get(search_term, preferred_books=preferred_books_list)
             if cached_answer:
-                print(f"[CACHE HIT ⚡] Returning instant cached textbook explanation for '{search_term}'")
+                clean_topic = clean_medical_topic_title(search_term)
+                print(f"[CACHE HIT ⚡] Returning instant cached explanation for '{clean_topic}'")
                 await send_whatsapp_cloud_msg(sender_phone, cached_answer)
                 
                 if chat_history_col is not None:
@@ -2332,19 +2380,19 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         {"user_id": sender_phone},
                         {
                             "$set": {
-                                "last_medical_topic": search_term,
+                                "last_medical_topic": clean_topic,
                                 "last_context_text": cached_context or cached_answer[:2000]
                             }
                         }
                     )
                 
-                clean_topic_label = search_term.title()
-                if len(clean_topic_label) > 40:
-                    clean_topic_label = clean_topic_label[:37] + "..."
-                topic_snippet = search_term[:100]
+                clean_topic_label = clean_topic
+                if len(clean_topic_label) > 45:
+                    clean_topic_label = clean_topic_label[:42] + "..."
+                topic_snippet = clean_topic[:100]
                 await send_whatsapp_interactive_button(
                     sender_phone,
-                    f"Ready to test your knowledge on *{clean_topic_label}*?",
+                    f"Ready to practice MCQs on *{clean_topic_label}*?",
                     [
                         {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice MCQs"}
                     ]
@@ -2352,7 +2400,9 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 return
 
         # Step 1: Upfront Keyword Extraction & Micro-LLM Query Typo Resolution
-        medical_terms = extract_medical_terms(search_term)
+        normalized_data = await normalize_medical_query(search_term)
+        medical_terms = normalized_data.get("search_keywords") or extract_medical_terms(search_term)
+        clean_topic = clean_medical_topic_title(search_term, normalized_data.get("corrected_topic", ""))
         active_books = get_explicit_book_override(search_term, preferred_books_list)
         
         # Step 2: Multi-search Qdrant with clean medical terms across active books
@@ -2379,22 +2429,20 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         # Step 4: If 0 chunks found even after fallback, check Micro-LLM normalizer as emergency pass
         if not search_res:
-            print(f"[SEARCH FALLBACK] 0 chunks found. Invoking Micro-LLM normalizer for: '{search_term}'")
-            normalized_data = await normalize_medical_query(search_term)
-            normalized_terms = normalized_data.get("search_keywords", [search_term])
-            search_res = await multi_search_qdrant(normalized_terms, preferred_books=None)
+            print(f"[SEARCH FALLBACK] 0 chunks found. Re-querying full library with medical terms for: '{search_term}'")
+            search_res = await multi_search_qdrant(medical_terms, preferred_books=None)
 
         if not search_res or (eval_result.get("is_genuinely_absent", False) and not search_res):
             await send_whatsapp_cloud_msg(
                 sender_phone, 
-                f"I've thoroughly checked your medical textbooks for *{search_term}*, but couldn't find a dedicated chapter or section on this specific concept in the indexed library.\n\n"
+                f"I've thoroughly checked your medical textbooks for *{clean_topic}*, but couldn't find a dedicated chapter or section on this specific concept in the indexed library.\n\n"
                 f"Try rephrasing with related clinical terms, or explore other subjects using */update books*!"
             )
             return
 
         # If user explicitly asked for a quiz on a topic via text, launch the interactive quiz directly!
         if intent == "QUIZ":
-            await start_interactive_quiz(sender_phone, search_term.title(), search_res)
+            await start_interactive_quiz(sender_phone, clean_topic, search_res)
             return
 
         context_blocks = []
@@ -2412,15 +2460,17 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             tagged_snippet = last_assistant_msg[:400]
             user_prompt = (
                 f"THE USER EXPLICITLY TAGGED/QUOTED YOUR PREVIOUS WHATSAPP MESSAGE BELOW:\n\"\"\"{tagged_snippet}\"\"\"\n\n"
-                f"RETRIEVED MEDICAL KNOWLEDGE CONTEXT:\n{formatted_context}\n\n"
+                f"CLEAN MEDICAL TOPIC: {clean_topic}\n"
                 f"USER'S QUESTION/INSTRUCTION REGARDING THE TAGGED MESSAGE:\n{query_to_search}\n\n"
-                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Speak authoritatively like an elite medical professor. Absolutely NEVER say 'your textbook explains', 'the textbook states', 'your textbooks list', 'based on the retrieved context', 'the text describes', or mention 'textbook/context' anywhere in your response. State the facts directly with clinical authority. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured clinical explanation directly."
+                f"RETRIEVED MEDICAL KNOWLEDGE CONTEXT:\n{formatted_context}\n\n"
+                f"CRITICAL INSTRUCTION: Start your response with the topic-anchored header: 📖 *{clean_topic.upper()}*. Immediately follow the header with a 1-2 sentence high-level clinical overview/definition so anyone reading immediately understands what condition, pathogen, or pharmacological concept is being explained. Then provide the structured clinical breakdown. Speak authoritatively like an elite medical professor. Absolutely NEVER use textbook meta-talk (e.g., 'your textbook explains', 'the text states') and NEVER cite fabricated figure numbers."
             )
         else:
             user_prompt = (
-                f"RETRIEVED MEDICAL KNOWLEDGE CONTEXT:\n{formatted_context}\n\n"
+                f"CLEAN MEDICAL TOPIC: {clean_topic}\n"
                 f"STUDENT QUESTION:\n{query_to_search}\n\n"
-                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Speak authoritatively like an elite medical professor. Absolutely NEVER say 'your textbook explains', 'the textbook states', 'your textbooks list', 'based on the retrieved context', 'the text describes', or mention 'textbook/context' anywhere in your response. State the facts directly with clinical authority. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured clinical explanation directly."
+                f"RETRIEVED MEDICAL KNOWLEDGE CONTEXT:\n{formatted_context}\n\n"
+                f"CRITICAL INSTRUCTION: Start your response with the topic-anchored header: 📖 *{clean_topic.upper()}*. Immediately follow the header with a 1-2 sentence high-level clinical overview/definition so anyone reading immediately understands what condition, pathogen, or pharmacological concept is being explained. Then provide the structured clinical breakdown. Speak authoritatively like an elite medical professor. Absolutely NEVER use textbook meta-talk (e.g., 'your textbook explains', 'the text states') and NEVER cite fabricated figure numbers."
             )
         
         # Build dynamic user context
@@ -2457,7 +2507,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     {"user_id": sender_phone},
                     {
                         "$set": {
-                            "last_medical_topic": search_term,
+                            "last_medical_topic": clean_topic,
                             "last_context_text": formatted_context
                         }
                     }
@@ -2476,13 +2526,13 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Attach interactive follow-up button for quick MCQ generation ONLY if it was a valid medical answer
         if not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
             try:
-                clean_topic_label = search_term.title()
-                if len(clean_topic_label) > 40:
-                    clean_topic_label = clean_topic_label[:37] + "..."
-                topic_snippet = search_term[:100]
+                clean_topic_label = clean_topic
+                if len(clean_topic_label) > 45:
+                    clean_topic_label = clean_topic_label[:42] + "..."
+                topic_snippet = clean_topic[:100]
                 await send_whatsapp_interactive_button(
                     sender_phone,
-                    f"Ready to test your knowledge on *{clean_topic_label}*?",
+                    f"Ready to practice MCQs on *{clean_topic_label}*?",
                     [
                         {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice MCQs"}
                     ]
