@@ -346,26 +346,26 @@ RULES FOR MCQs:
 """
 
 SYSTEM_INTERACTIVE_QUIZ_PROMPT = """You are NEURA AI, an elite medical study assistant and co-pilot for MBBS students.
-Your task is to generate exactly 5 rigorous, high-yield, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions that test the student DIRECTLY and EXCLUSIVELY on the TARGET MEDICAL TOPIC and RETRIEVED MEDICAL CONTEXT provided in the prompt.
+Your task is to generate exactly 5 rigorous, high-yield, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions that test the student DIRECTLY and EXCLUSIVELY on the MEDICAL EXPLANATION AND CLINICAL CONCEPTS provided in the prompt.
 
 CRITICAL RULES:
-1. STRICT TOPIC COHESION: Every single question (all 5) MUST test core concepts, clinical presentations, physiological mechanisms, or pharmacotherapies of the specified TARGET MEDICAL TOPIC. Never generate questions about unrelated conditions.
-2. VIGNETTES & MECHANISMS: Provide realistic clinical vignettes or mechanism-of-action questions appropriate for medical students.
+1. STRICT LESSON COHESION: Every single question (all 5) MUST test core concepts, pathophysiology, clinical presentations, diagnostic criteria, or treatments directly discussed in the medical explanation just taught to the student. Never ask questions about unrelated topics.
+2. VIGNETTES & MECHANISMS: Provide realistic clinical vignettes or mechanism-of-action questions appropriate for medical students based on the lesson material.
 3. 4 DISTINCT OPTIONS: Provide 4 options (A, B, C, D) with exactly 1 unambiguous correct answer and 3 clinically plausible distractors.
-4. CLINICAL RATIONALE: Provide a clear, authoritative explanation of why the correct option is right and why key distractors are wrong without mentioning 'textbooks' or 'retrieved context'.
+4. CLINICAL RATIONALE: Provide a clear, authoritative explanation of why the correct option is right and why key distractors are wrong based on the provided explanation.
 5. STRICT JSON OUTPUT ONLY: Output ONLY a valid JSON array of 5 question objects. No markdown formatting, no code block backticks (no ```json), and no introductory or concluding commentary.
 
 JSON Schema format:
 [
   {
     "q_num": 1,
-    "vignette": "A clinical vignette or mechanism question specifically testing the target topic...",
+    "vignette": "A clinical vignette or mechanism question specifically testing the concepts taught in the explanation...",
     "option_a": "First option",
     "option_b": "Second option",
     "option_c": "Third option",
     "option_d": "Fourth option",
     "correct_option": "A",
-    "explanation": "Clear explanation of the correct clinical mechanism and why distractors are incorrect.",
+    "explanation": "Clear clinical explanation of why A is correct based on the lesson and why distractors are incorrect.",
     "book_source": "High-Yield Clinical Concepts"
   }
 ]
@@ -1959,31 +1959,47 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
         await send_subject_book_menu(sender_phone, level, current_subject)
         return True
         
-async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list = None, context_text: str = ""):
-    """Generates 5 structured MCQs as JSON and starts the 1-by-1 interactive quiz flow"""
-    if not context_text:
+async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list = None, context_text: str = "", explanation_text: str = ""):
+    """Generates 5 structured MCQs as JSON strictly grounded in the medical explanation just given to the student."""
+    source_material = ""
+    if explanation_text and len(explanation_text.strip()) > 50:
+        source_material = explanation_text.strip()
+    elif context_text and len(context_text.strip()) > 50:
+        source_material = context_text.strip()
+    elif chat_history_col is not None:
+        try:
+            user_hist = await chat_history_col.find_one({"user_id": sender_phone})
+            if user_hist and "messages" in user_hist:
+                for m in reversed(user_hist["messages"]):
+                    if m.get("role") == "assistant" and len(m.get("content", "")) > 80:
+                        source_material = m.get("content")
+                        break
+        except Exception:
+            pass
+
+    if not source_material:
         context_blocks = []
         for idx, point in enumerate((search_res or [])[:10], 1):
             p = point.payload
             book_str = p.get('book_title', 'Textbook')
             text_str = p.get('text', '')
             context_blocks.append(f"[Chunk {idx} | Book: {book_str}]\n{text_str}")
-        context_text = "\n\n".join(context_blocks)
+        source_material = "\n\n".join(context_blocks)
 
-    if not context_text or len(context_text.strip()) < 50:
+    if not source_material or len(source_material.strip()) < 50:
         # Fallback search if context is sparse
         try:
             terms = extract_medical_terms(topic)
             fallback_pts = await multi_search_qdrant(terms)
             context_blocks = [f"[Chunk {i+1} | Book: {p.payload.get('book_title', 'Textbook')}]\n{p.payload.get('text', '')}" for i, p in enumerate(fallback_pts[:8])]
-            context_text = "\n\n".join(context_blocks)
+            source_material = "\n\n".join(context_blocks)
         except Exception:
             pass
 
     user_prompt = (
-        f"TARGET MEDICAL TOPIC TO TEST:\n{topic}\n\n"
-        f"RETRIEVED TEXTBOOK CONTEXT:\n{context_text}\n\n"
-        f"CRITICAL INSTRUCTION: Generate exactly 5 medical-school standard MCQs (with options A, B, C, D) that test the student DIRECTLY and EXCLUSIVELY on the concepts, mechanisms, pathology, and clinical management of '{topic}' based on the textbook context above. Do not ask questions about unrelated topics. Return ONLY the valid JSON array of 5 objects."
+        f"TARGET MEDICAL TOPIC:\n{topic}\n\n"
+        f"MEDICAL EXPLANATION PROVIDED TO STUDENT:\n{source_material}\n\n"
+        f"CRITICAL INSTRUCTION: Generate exactly 5 medical-school standard MCQs (with options A, B, C, D) that test the student DIRECTLY and EXCLUSIVELY on the concepts, mechanisms, signs/symptoms, and clinical pearls taught in the medical explanation above. Do not ask questions about unrelated topics. Return ONLY the valid JSON array of 5 objects."
     )
 
     try:
@@ -2365,18 +2381,12 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             if not quiz_topic:
                 quiz_topic = "High-Yield Clinical Concepts"
 
-            # Check if we have cached context matching this topic
-            cached_context = user_doc.get("last_context_text", "") if (user_doc and user_doc.get("last_medical_topic") == quiz_topic) else ""
-            
-            if cached_context:
-                search_res = []
-            else:
-                normalized_data = await normalize_medical_query(quiz_topic)
-                medical_terms = normalized_data.get("search_keywords", [quiz_topic])
-                active_books = get_explicit_book_override(quiz_topic, preferred_books_list)
-                search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
+            # Pull the exact explanation the student just received!
+            last_explanation = user_doc.get("last_assistant_answer", "") if user_doc else ""
+            if not last_explanation and user_doc:
+                last_explanation = user_doc.get("last_context_text", "")
 
-            await start_interactive_quiz(sender_phone, quiz_topic.title(), search_res, context_text=cached_context)
+            await start_interactive_quiz(sender_phone, quiz_topic.title(), explanation_text=last_explanation)
             return
 
         query_to_search = user_msg
@@ -2509,7 +2519,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         {
                             "$set": {
                                 "last_medical_topic": clean_topic,
-                                "last_context_text": cached_context or cached_answer[:2000]
+                                "last_context_text": cached_context or cached_answer[:2000],
+                                "last_assistant_answer": cached_answer
                             }
                         }
                     )
@@ -2653,7 +2664,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     {
                         "$set": {
                             "last_medical_topic": clean_topic,
-                            "last_context_text": formatted_context
+                            "last_context_text": formatted_context,
+                            "last_assistant_answer": ai_answer
                         }
                     }
                 )
