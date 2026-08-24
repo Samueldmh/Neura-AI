@@ -1371,8 +1371,8 @@ def extract_medical_terms(user_msg: str) -> list:
     return phrases
 
 async def normalize_medical_query(user_msg: str) -> dict:
-    """Normalizes medical queries: resolves typos, slang, and extracts authoritative textbook search phrases."""
-    fallback_result = {"search_keywords": extract_medical_terms(user_msg)}
+    """Upfront Micro-LLM normalizer: resolves typos, abbreviations, and expands clinical concepts into standard textbook search queries."""
+    fallback_result = {"search_keywords": extract_medical_terms(user_msg), "corrected_topic": user_msg}
     if not OPENROUTER_API_KEY:
         return fallback_result
 
@@ -1384,9 +1384,14 @@ async def normalize_medical_query(user_msg: str) -> dict:
         "X-Title": "NEURA AI Medical Assistant"
     }
     system_prompt = (
-        "You are an expert MBBS medical query normalizer. The student may send questions with typos, shorthand, or Nigerian medical student slang.\n"
-        "Output ONLY a valid JSON object with one field:\n"
-        "1. 'search_keywords': A list of 1 to 3 authoritative medical textbook search phrases (fix typos, expand acronyms, e.g. ['B-cell lymphopoiesis in bone marrow', 'B-lymphocyte maturation stages']).\n"
+        "You are an expert MBBS medical query normalizer and typo fixer. Medical students frequently send questions with typos (e.g. 'disassociation', 'pnuemonia', 'arrythmia'), shorthand, or colloquial terms.\n"
+        "1. Fix any typos and resolve the query to proper medical terminology.\n"
+        "2. Generate 2 to 4 authoritative medical textbook search queries (including pharmacological classes, anatomical names, or physiological processes).\n"
+        "Output ONLY a valid JSON object in this exact schema:\n"
+        "{\n"
+        '  "corrected_topic": "Dissociation kinetics of sodium channel blockers",\n'
+        '  "search_keywords": ["dissociation kinetics sodium channel blockers", "Class I antiarrhythmics kinetics", "Class IA IB IC recovery rate"]\n'
+        "}\n"
         "Output ONLY valid JSON (no markdown, no ```json)."
     )
     payload = {
@@ -1396,7 +1401,7 @@ async def normalize_medical_query(user_msg: str) -> dict:
             {"role": "user", "content": user_msg}
         ],
         "temperature": 0.0,
-        "max_tokens": 120
+        "max_tokens": 160
     }
     try:
         async with httpx.AsyncClient(timeout=3.5) as client:
@@ -1411,6 +1416,69 @@ async def normalize_medical_query(user_msg: str) -> dict:
         print(f"⚠️ Micro-LLM normalizer error: {e}")
 
     return fallback_result
+
+async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> dict:
+    """Evaluates whether retrieved textbook chunks sufficiently cover the student's question before declaring a topic missing.
+    If inadequate due to synonym mismatch, narrow search, or hierarchical difference, returns re-anchored queries for second-pass scan.
+    """
+    if not OPENROUTER_API_KEY or not retrieved_points:
+        return {"is_adequate": bool(retrieved_points), "is_genuinely_absent": not bool(retrieved_points), "re_anchored_queries": []}
+
+    # Prepare compact context summary (first 180 chars of each chunk)
+    context_summaries = []
+    for idx, p in enumerate(retrieved_points[:8], 1):
+        payload = p.payload
+        b_title = payload.get("book_title", "Textbook")
+        snippet = payload.get("text", "")[:200].replace("\n", " ")
+        context_summaries.append(f"[{idx}. {b_title}]: {snippet}...")
+    
+    combined_context_summary = "\n".join(context_summaries)
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://neura-ai.org",
+        "X-Title": "NEURA AI Medical Assistant"
+    }
+    system_prompt = (
+        "You are an expert MBBS medical retrieval evaluator. A student asked a clinical question, and the vector database returned initial textbook snippets.\n"
+        "Determine if the retrieved text sufficiently covers the core question or if the retrieval missed the specific topic due to terminology mismatch, subclass distinctions (e.g. Class IA/IB/IC antiarrhythmics), anatomical hierarchy, or phrasing differences.\n\n"
+        "Output ONLY a valid JSON object in this schema:\n"
+        "{\n"
+        '  "is_adequate": true,\n'
+        '  "is_genuinely_absent": false,\n'
+        '  "re_anchored_queries": ["query 1", "query 2", "query 3"]\n'
+        "}\n"
+        "If 'is_adequate' is false and it is a valid medical concept, provide 2 to 3 broader or alternative authoritative textbook search queries (e.g. parent chapter titles, drug class mechanisms, anatomical systems). Only set 'is_genuinely_absent' to true if the question is genuinely non-medical or completely nonexistent in medical curricula.\n"
+        "Output ONLY valid JSON."
+    )
+    user_payload_text = (
+        f"STUDENT QUESTION: {user_msg}\n\n"
+        f"RETRIEVED TEXTBOOK CONTEXT SNIPPETS:\n{combined_context_summary}"
+    )
+    payload = {
+        "model": "deepseek/deepseek-v4-flash",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_payload_text}
+        ],
+        "temperature": 0.0,
+        "max_tokens": 160
+    }
+    try:
+        async with httpx.AsyncClient(timeout=3.5) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            if res.status_code == 200:
+                text = res.json()["choices"][0]["message"]["content"]
+                text = text.replace("```json", "").replace("```", "").strip()
+                parsed = json.loads(text)
+                if isinstance(parsed, dict) and "is_adequate" in parsed:
+                    return parsed
+    except Exception as e:
+        print(f"⚠️ Micro-LLM retrieval evaluator error: {e}")
+
+    return {"is_adequate": True, "is_genuinely_absent": False, "re_anchored_queries": []}
 
 def extract_book_keywords(preferred_books: list) -> list:
     """Extract core textbook keywords for matching (e.g., 'lippincott', 'robbins', 'moore', 'hoffbrand')"""
@@ -2464,22 +2532,45 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 )
                 return
 
-        # Step 1: 1ms Instant Local Keyword Extraction (Optimistic search)
+        # Step 1: Upfront Keyword Extraction & Micro-LLM Query Typo Resolution
         medical_terms = extract_medical_terms(search_term)
         active_books = get_explicit_book_override(search_term, preferred_books_list)
         
-        # Step 2: Multi-search Qdrant with clean medical terms, filtered by active books
+        # Step 2: Multi-search Qdrant with clean medical terms across active books
         search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
 
-        # Step 2.5: Fallback Micro-LLM Normalization (ONLY if initial search returned 0 chunks)
-        if not search_res:
-            print(f"[SEARCH FALLBACK] 0 chunks found with local keywords. Invoking Micro-LLM normalizer for: '{search_term}'")
-            normalized_data = await normalize_medical_query(search_term)
-            medical_terms = normalized_data.get("search_keywords", [search_term])
-            search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
+        # Step 3: Self-Correcting Retrieval Evaluation Loop (Before declaring missing or answering with incomplete context)
+        eval_result = await evaluate_retrieval_adequacy(search_term, search_res)
+        
+        if not eval_result.get("is_adequate", True) and not eval_result.get("is_genuinely_absent", False):
+            re_anchored = eval_result.get("re_anchored_queries", [])
+            if re_anchored:
+                print(f"[SELF-CORRECTING RETRIEVAL] Context judged inadequate for '{search_term}'. Re-querying full medical library with: {re_anchored}")
+                second_pass_res = await multi_search_qdrant(re_anchored, preferred_books=None)
+                if second_pass_res:
+                    # Merge and deduplicate with initial search results
+                    seen_p_keys = {p.payload.get("text", "")[:120] for p in search_res}
+                    for p in second_pass_res:
+                        p_key = p.payload.get("text", "")[:120]
+                        if p_key not in seen_p_keys:
+                            seen_p_keys.add(p_key)
+                            search_res.append(p)
+                    search_res.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
+                    search_res = search_res[:15]
 
+        # Step 4: If 0 chunks found even after fallback, check Micro-LLM normalizer as emergency pass
         if not search_res:
-            await send_whatsapp_cloud_msg(sender_phone, "I couldn't find relevant textbook material for your question in your selected textbooks. Try rephrasing or updating your preferred books using /update books!")
+            print(f"[SEARCH FALLBACK] 0 chunks found. Invoking Micro-LLM normalizer for: '{search_term}'")
+            normalized_data = await normalize_medical_query(search_term)
+            normalized_terms = normalized_data.get("search_keywords", [search_term])
+            search_res = await multi_search_qdrant(normalized_terms, preferred_books=None)
+
+        if not search_res or (eval_result.get("is_genuinely_absent", False) and not search_res):
+            await send_whatsapp_cloud_msg(
+                sender_phone, 
+                f"I've thoroughly checked your medical textbooks for *{search_term}*, but couldn't find a dedicated chapter or section on this specific concept in the indexed library.\n\n"
+                f"Try rephrasing with related clinical terms, or explore other subjects using */update books*!"
+            )
             return
 
         # If user explicitly asked for a quiz on a topic via text, launch the interactive quiz directly!
