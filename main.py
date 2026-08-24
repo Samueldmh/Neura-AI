@@ -139,14 +139,14 @@ async def update_user_study_streak(user_id: str) -> int:
         print(f"Error updating study streak: {e}")
         return 1
 
-async def check_and_send_inactivity_reminders(force_ignore_quiet_hours: bool = False):
+async def check_and_send_inactivity_reminders(force_ignore_quiet_hours: bool = False, simulated_hour: int = None):
     """Background worker to send Duolingo-style study streak reminders to users inactive for 8-12 hours between 6am and 11pm WAT."""
     if users_col is None:
         return
         
     try:
         now_wat = datetime.utcnow() + timedelta(hours=1)
-        current_hour = now_wat.hour
+        current_hour = simulated_hour if simulated_hour is not None else now_wat.hour
         
         # Only send between 6:00 AM and 11:00 PM WAT unless force_ignore_quiet_hours is True
         if not force_ignore_quiet_hours and (current_hour < 6 or current_hour >= 23):
@@ -295,9 +295,9 @@ SYSTEM_MEDICAL_PROMPT = """{user_context}You are NEURA AI, an elite medical stud
 Your goal is to engage students in an intelligent, conversational, back-and-forth Socratic dialogue while anchoring all core medical principles in their textbooks.
 
 CLINICAL EXPLANATION & SIMPLIFICATION RULES:
-1. STRICT TEXTBOOK GROUNDING: Answer ONLY using facts explicitly present in the RETRIEVED TEXTBOOK CONTEXT. If the requested medical topic is not covered in the retrieved context, state: "I'm sorry, but this topic is not covered in your currently selected textbooks." Do NOT use outside AI memory, and NEVER output notes about using outside knowledge.
+1. STRICT TEXTBOOK GROUNDING & CLINICAL SYNTHESIS: Answer using facts present in the RETRIEVED TEXTBOOK CONTEXT. When explaining physiological mechanisms, drug classifications, or clinical phenomena (e.g. Class I sodium channel blocker kinetics / dissociation rates, local anesthetics, enzyme pathways, disease stages), synthesize all relevant textbook context provided across subclasses, drug tables, and clinical descriptions to provide a complete, comprehensive medical answer. Only declare a topic not covered if there is genuinely zero relevant medical material across all retrieved contexts. Do NOT use outside AI memory, and NEVER output notes about using outside knowledge.
 2. NO ROBOT TALK & NO PREAMBLES: Never use opening filler, greetings, or announcements (e.g., "Certainly Samuel!", "Certainly!", "Absolutely!", "Sure thing!", "Here is the figure you requested", "I have attached the authentic textbook figure below", "Based on the retrieved context...", "According to this textbook..."). Jump DIRECTLY into the medical explanation starting immediately with 📖 *IN-DEPTH EXPLANATION*. Zero conversational filler.
-3. NO QUOTATION BLOCKS OR CITATION LISTS: Do NOT output raw verbatim quotation excerpts or citation footers (e.g. do NOT output '📚 CITATIONS' or quote raw text). Explain the core medical facts directly, clearly, and authoritatively in your own words.
+3. ZERO CITATION BLOCKS & ZERO QUOTATIONS: Absolutely NEVER output citation footers, '📚 CITATIONS', or list textbook names at the end. The system handles all source tracking. Deliver clear, direct, and authoritative medical explanations in your own words.
 4. SIMPLIFY COMPLEX WORDS: Whenever you use complex medical jargon or high-level pathology terms, immediately simplify and explain them in clear, intuitive terms so students can grasp the underlying concepts effortlessly.
 5. HIGHLIGHT IMPORTANT TERMS: Bold key terms, mechanisms, and diagnostic criteria so the text is visually clear and easy to read.
 6. CONVERSATIONAL SOCRATIC CO-PILOT: Engage students naturally. When they ask hypothetical "what if" questions or follow-ups, synthesize textbook principles with common-sense medical reasoning.
@@ -709,12 +709,18 @@ def format_whatsapp_text(text: str) -> str:
     # 2. Deterministically strip fabricated figure/table citations
     text = strip_figure_citations(text)
 
+    # 2.5. Deterministically strip any citation section or textbook footnote lists
+    text = re.sub(r'(?mi)^\s*📚\s*\*?CITATIONS\*?[\s\S]*$', '', text)
+    text = re.sub(r'(?mi)^\s*\*?CITATIONS:\*?[\s\S]*$', '', text)
+    text = re.sub(r'(?mi)^\s*📚\s*\*?TEXTBOOK CITATIONS\*?[\s\S]*$', '', text)
+    text = re.sub(r'(?mi)^\s*-\s+(?:Robbins|Lippincott|Guyton|Moore|Hoffbrand|Jawetz|Sembulingam|Katzung|Ganong|Kumar)[^\n]*$', '', text)
+
     # 3. Remove markdown hashes (e.g. ### Header -> Header)
     text = re.sub(r'^\s*#{1,6}\s*', '', text, flags=re.MULTILINE)
     text = text.replace('###', '').replace('##', '')
 
     # 3.5. Ensure section headers with emojis are formatted with bold tags (e.g. 📖 IN-DEPTH EXPLANATION -> 📖 *IN-DEPTH EXPLANATION*)
-    text = re.sub(r'(?m)^([📖💡📚🎯🔑])\s*([^*\n]+?)\s*$', r'\1 *\2*', text)
+    text = re.sub(r'(?m)^([📖💡🎯🔑])\s*([^*\n]+?)\s*$', r'\1 *\2*', text)
 
     # 4. Fix double asterisks **text** -> *text*
     text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
@@ -1113,10 +1119,39 @@ def get_explicit_book_override(user_msg: str, preferred_books: list) -> list:
             
     return override_books if override_books else preferred_books
 
+MEDICAL_TYPOS_MAP = {
+    "disassociation": "dissociation",
+    "disassociate": "dissociate",
+    "metabolsim": "metabolism",
+    "pharamcology": "pharmacology",
+    "pharmaclogy": "pharmacology",
+    "pathyphysiology": "pathophysiology",
+    "pathophyisology": "pathophysiology",
+    "hypetension": "hypertension",
+    "arrythmia": "arrhythmia",
+    "arythmia": "arrhythmia",
+    "arrhthmia": "arrhythmia",
+    "antiarrhytmic": "antiarrhythmic",
+    "antiarrythmic": "antiarrhythmic",
+    "antiarrthymic": "antiarrhythmic",
+    "glomeular": "glomerular",
+    "glomerlar": "glomerular",
+    "heamatology": "haematology",
+    "haemtology": "haematology",
+    "mycardial": "myocardial",
+    "infarction": "infarction",
+    "pnuemonia": "pneumonia",
+    "pnemonia": "pneumonia"
+}
+
 def extract_medical_terms(user_msg: str) -> list:
-    """Instantly extract clean medical keywords by normalizing typos, preserving short medical terms (B-cell, T-cell), and stripping filler words."""
-    # 1. Normalize common student typos (e.g., 'b cel' -> 'b cell', 't cel' -> 't cell')
-    msg = re.sub(r'\b([bt])\s*cel\b', r'\1 cell', user_msg, flags=re.IGNORECASE)
+    """Instantly extract clean medical keywords by normalizing typos, expanding clinical synonyms/subclasses, preserving short medical terms (B-cell, T-cell), and stripping filler words."""
+    # 1. Normalize common student typos
+    msg = user_msg
+    for typo, correction in MEDICAL_TYPOS_MAP.items():
+        msg = re.sub(rf'\b{re.escape(typo)}\b', correction, msg, flags=re.IGNORECASE)
+        
+    msg = re.sub(r'\b([bt])\s*cel\b', r'\1 cell', msg, flags=re.IGNORECASE)
     msg = re.sub(r'\bcel\b', 'cell', msg, flags=re.IGNORECASE)
     
     msg_cleaned = re.sub(r'[^\w\s]', ' ', msg)
@@ -1129,7 +1164,7 @@ def extract_medical_terms(user_msg: str) -> list:
     ]
     
     if not meaningful_words:
-        return [user_msg]
+        return [msg.strip()]
         
     phrases = []
     current_phrase = []
@@ -1149,6 +1184,25 @@ def extract_medical_terms(user_msg: str) -> list:
     joined_query = " ".join(meaningful_words)
     if joined_query and joined_query not in phrases:
         phrases.insert(0, joined_query)
+
+    # 2. Clinical Domain Multi-Angle Expansion
+    joined_lower = joined_query.lower()
+    if "sodium channel" in joined_lower and ("block" in joined_lower or "kinetic" in joined_lower or "dissociation" in joined_lower or "rate" in joined_lower):
+        for exp in ["class I antiarrhythmics sodium channel kinetics", "class IA IB IC rate of dissociation recovery", "sodium channel blockers use dependence unbinding"]:
+            if exp not in phrases:
+                phrases.append(exp)
+    elif "action potential" in joined_lower:
+        for exp in ["cardiac action potential phases ion currents", "ventricular action potential phase 0 1 2 3 4"]:
+            if exp not in phrases:
+                phrases.append(exp)
+    elif "pneumonia" in joined_lower:
+        for exp in ["lobar pneumonia stages congestion red grey hepatization", "bronchopneumonia pathology histology"]:
+            if exp not in phrases:
+                phrases.append(exp)
+    elif "carcinoid" in joined_lower:
+        for exp in ["carcinoid syndrome serotonin 5-HIAA flushing diarrhea", "neuroendocrine tumor carcinoid heart disease"]:
+            if exp not in phrases:
+                phrases.append(exp)
         
     print(f"[SEARCH] Extracted search keywords: {phrases} (from: '{user_msg}')")
     return phrases
@@ -1268,7 +1322,7 @@ async def search_single_book(query_vector: list, book: str, limit: int = 4) -> l
             pass
     return []
 
-async def search_qdrant(query_text: str, limit: int = 4, preferred_books: list = None) -> list:
+async def search_qdrant(query_text: str, limit: int = 8, preferred_books: list = None) -> list:
     """Search Qdrant in PARALLEL across all selected textbooks for sub-second retrieval."""
     try:
         loop = asyncio.get_running_loop()
@@ -1294,23 +1348,36 @@ async def search_qdrant(query_text: str, limit: int = 4, preferred_books: list =
         return []
 
 async def multi_search_qdrant(search_terms: list, preferred_books: list = None) -> list:
-    """Run separate Qdrant searches for each extracted medical keyword CONCURRENTLY, then deduplicate"""
+    """Run separate Qdrant searches for each extracted medical keyword CONCURRENTLY, with automatic cross-textbook safety net if single book context is sparse."""
     seen_texts = set()
     all_results = []
     
-    # Run all searches concurrently!
-    tasks = [search_qdrant(term, limit=4, preferred_books=preferred_books) for term in search_terms]
+    # Run all searches concurrently across preferred books with limit=8
+    tasks = [search_qdrant(term, limit=8, preferred_books=preferred_books) for term in search_terms]
     results_list = await asyncio.gather(*tasks)
     
     for results in results_list:
         for point in results:
-            text_key = point.payload.get("text", "")[:100]
+            text_key = point.payload.get("text", "")[:120]
             if text_key not in seen_texts:
                 seen_texts.add(text_key)
                 all_results.append(point)
     
-    # Cap at 10 results max to optimize prompt processing speed while keeping 100% medical depth
-    all_results = all_results[:10]
+    # Cross-Textbook Safety Net: If preferred book returned < 5 chunks, also search across all textbooks in parallel!
+    if len(all_results) < 5 and preferred_books:
+        print(f"[CROSS-BOOK SAFETY NET] Preferred books returned only {len(all_results)} chunks. Searching across full medical library...")
+        fallback_tasks = [search_qdrant(term, limit=8, preferred_books=None) for term in search_terms[:3]]
+        fallback_results_list = await asyncio.gather(*fallback_tasks)
+        for results in fallback_results_list:
+            for point in results:
+                text_key = point.payload.get("text", "")[:120]
+                if text_key not in seen_texts:
+                    seen_texts.add(text_key)
+                    all_results.append(point)
+    
+    # Sort points by score descending and cap at 15 points
+    all_results.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
+    all_results = all_results[:15]
     print(f"📚 Multi-search returned {len(all_results)} unique chunks from {len(search_terms)} keyword(s) with filter {preferred_books}")
     return all_results
 
