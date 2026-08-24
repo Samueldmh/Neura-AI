@@ -267,15 +267,8 @@ async def check_and_send_inactivity_reminders(force_ignore_quiet_hours: bool = F
             
             topic_snippet = last_topic[:100] if last_topic else "High-Yield Clinical Concepts"
             
-            # Send message with 1-tap interactive practice buttons
-            await send_whatsapp_interactive_button(
-                phone,
-                streak_msg,
-                [
-                    {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice Daily MCQs"},
-                    {"id": "START_STUDY_SESSION", "title": "📚 Start Study Session"}
-                ]
-            )
+            # Send reminder message directly
+            await send_whatsapp_cloud_msg(phone, streak_msg)
             
             # Mark reminder sent date to ensure strict 1-per-day cap
             await users_col.update_one(
@@ -2820,17 +2813,18 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         }
                     )
                 
-                clean_topic_label = clean_topic
-                if len(clean_topic_label) > 90:
-                    clean_topic_label = clean_topic_label[:87] + "..."
-                topic_snippet = clean_topic[:100]
-                await send_whatsapp_interactive_button(
-                    sender_phone,
-                    f"Ready to practice MCQs on *{clean_topic_label}*?",
-                    [
-                        {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice MCQs"}
-                    ]
-                )
+                # [DISABLED] Automatic follow-up Practice MCQs interactive button per user request
+                # clean_topic_label = clean_topic
+                # if len(clean_topic_label) > 90:
+                #     clean_topic_label = clean_topic_label[:87] + "..."
+                # topic_snippet = clean_topic[:100]
+                # await send_whatsapp_interactive_button(
+                #     sender_phone,
+                #     f"Ready to practice MCQs on *{clean_topic_label}*?",
+                #     [
+                #         {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice MCQs"}
+                #     ]
+                # )
                 return
 
         # ⚡ Step 1: Speculative Parallel Execution (Concurrent Vector Retrieval + Typo Normalization)
@@ -2985,22 +2979,22 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         if not is_not_covered and len(ai_answer) > 100:
             TOPIC_CACHE.set(search_term, ai_answer, formatted_context, preferred_books=preferred_books_list)
 
-        # Attach interactive follow-up button for quick MCQ generation ONLY if it was a valid medical answer
-        if not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
-            try:
-                clean_topic_label = clean_topic
-                if len(clean_topic_label) > 90:
-                    clean_topic_label = clean_topic_label[:87] + "..."
-                topic_snippet = clean_topic[:100]
-                await send_whatsapp_interactive_button(
-                    sender_phone,
-                    f"Ready to practice MCQs on *{clean_topic_label}*?",
-                    [
-                        {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice MCQs"}
-                    ]
-                )
-            except Exception as btn_err:
-                print(f"⚠️ Non-critical error sending interactive button: {btn_err}")
+        # [DISABLED] Automatic follow-up Practice MCQs button per user request
+        # if not user_msg.startswith("GENERATE_QUIZ") and not is_not_covered:
+        #     try:
+        #         clean_topic_label = clean_topic
+        #         if len(clean_topic_label) > 90:
+        #             clean_topic_label = clean_topic_label[:87] + "..."
+        #         topic_snippet = clean_topic[:100]
+        #         await send_whatsapp_interactive_button(
+        #             sender_phone,
+        #             f"Ready to practice MCQs on *{clean_topic_label}*?",
+        #             [
+        #                 {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice MCQs"}
+        #             ]
+        #         )
+        #     except Exception as btn_err:
+        #         print(f"⚠️ Non-critical error sending interactive button: {btn_err}")
 
     except Exception as e:
         print(f"ERROR in process_whatsapp_message: {str(e)}")
