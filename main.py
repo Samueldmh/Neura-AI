@@ -3142,6 +3142,32 @@ async def admin_stats(request: Request):
         "recent_broadcasts": recent_broadcasts
     }
 
+@app.get("/admin/api/students")
+async def admin_students(request: Request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    if token not in ADMIN_SESSIONS:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    if users_col is None:
+        return {"students": []}
+        
+    cursor = users_col.find({}).sort("_id", -1)
+    students = []
+    async for u in cursor:
+        students.append({
+            "user_id": u.get("user_id", ""),
+            "name": u.get("name", "Student"),
+            "level": u.get("level", "Unset"),
+            "wallet_balance_ngn": round(float(u.get("wallet_balance_ngn", 0.0)), 2),
+            "total_spent_ngn": round(float(u.get("total_spent_ngn", 0.0)), 2),
+            "study_streak_days": int(u.get("study_streak_days", 1)),
+            "last_study_date": u.get("last_study_date", "N/A"),
+            "preferred_books_list": u.get("preferred_books_list", []),
+            "onboarding_step": u.get("onboarding_step", "COMPLETED"),
+            "reminders_enabled": u.get("reminders_enabled", True)
+        })
+    return {"students": students}
+
 @app.post("/admin/api/broadcast")
 async def admin_broadcast(req: BroadcastRequest, request: Request, background_tasks: BackgroundTasks):
     token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
@@ -3165,272 +3191,499 @@ async def admin_broadcast(req: BroadcastRequest, request: Request, background_ta
 @app.get("/admin")
 async def admin_dashboard_page():
     html_content = r"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NEURA AI - Admin Broadcast Hub</title>
+  <title>NEURA AI — Executive Clinical Admin Hub</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#f0f9ff',
+              100: '#e0f2fe',
+              400: '#38bdf8',
+              500: '#0ea5e9',
+              600: '#0284c7',
+              700: '#0369a1',
+              900: '#0c4a6e',
+            },
+            surface: {
+              base: '#0B0F19',
+              card: '#111827',
+              elevated: '#161F30',
+              border: 'rgba(255, 255, 255, 0.08)',
+              subtle: 'rgba(255, 255, 255, 0.04)'
+            }
+          }
+        }
+      }
+    }
+  </script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
-    body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #0B1120; color: #E2E8F0; }
-    .whatsapp-bg { background-color: #0b141a; background-image: radial-gradient(#1e293b 1px, transparent 1px); background-size: 16px 16px; }
-    .glass-card { background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
-    .glass-card-hover:hover { border-color: rgba(56, 189, 248, 0.3); transform: translateY(-2px); transition: all 0.2s ease; }
-    .wa-bubble { background: #005c4b; color: #e9edef; border-radius: 12px 12px 2px 12px; }
+    body { background-color: #0B0F19; color: #E2E8F0; font-family: 'Plus Jakarta Sans', sans-serif; }
+    .glass-surface { background: rgba(17, 24, 39, 0.85); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .glass-surface-hover:hover { border-color: rgba(56, 189, 248, 0.35); box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 15px -3px rgba(56, 189, 248, 0.15); transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+    .whatsapp-bg { background-color: #0c1317; background-image: radial-gradient(#1e293b 1px, transparent 1px); background-size: 18px 18px; }
+    .wa-bubble { background: #005c4b; color: #e9edef; border-radius: 14px 14px 2px 14px; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.8); border-radius: 9999px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #0284c7; }
+    .tab-active { background: #0284c7 !important; color: #ffffff !important; box-shadow: 0 4px 14px rgba(2, 132, 199, 0.35); }
   </style>
 </head>
-<body class="min-h-screen flex flex-col">
+<body class="min-h-screen flex flex-col antialiased selection:bg-brand-500 selection:text-white">
 
-  <!-- LOGIN MODAL -->
-  <div id="login-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-    <div class="glass-card w-full max-w-md p-8 rounded-2xl shadow-2xl border border-sky-500/20 text-center">
-      <div class="w-16 h-16 bg-gradient-to-tr from-sky-500 to-indigo-600 rounded-2xl mx-auto flex items-center justify-center text-white text-2xl shadow-lg shadow-sky-500/30 mb-6">
+  <!-- ================= AUTHENTICATION MODAL ================= -->
+  <div id="login-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-xl p-4">
+    <div class="glass-surface w-full max-w-md p-8 rounded-3xl shadow-2xl border border-brand-500/20 text-center relative overflow-hidden">
+      <div class="absolute -top-24 -right-24 w-48 h-48 bg-brand-500/20 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="absolute -bottom-24 -left-24 w-48 h-48 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none"></div>
+      
+      <div class="w-16 h-16 bg-gradient-to-tr from-brand-600 to-indigo-600 rounded-2xl mx-auto flex items-center justify-center text-white text-3xl shadow-xl shadow-brand-500/25 mb-6 border border-white/10">
         🧠
       </div>
-      <h2 class="text-2xl font-bold text-white tracking-tight">NEURA AI Admin</h2>
-      <p class="text-slate-400 text-sm mt-1 mb-6">Enter master password to access broadcast hub</p>
+      <h2 class="text-2xl font-extrabold text-white tracking-tight">NEURA AI Admin</h2>
+      <p class="text-slate-400 text-sm mt-1 mb-8">Executive Control, Directory & Broadcast Suite</p>
       
       <div class="space-y-4 text-left">
         <div>
-          <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Master Password</label>
+          <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">Master Security Password</label>
           <div class="relative">
             <input type="password" id="admin-pass" placeholder="••••••••••••" 
-                   class="w-full px-4 py-3 bg-slate-900/90 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-sky-500 transition-colors">
-            <button onclick="togglePass()" type="button" class="absolute right-3 top-3.5 text-slate-400 hover:text-white">
+                   class="w-full px-4 py-3.5 bg-slate-900/90 border border-slate-700/80 rounded-xl text-white text-sm focus:outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-400/20 transition-all">
+            <button onclick="togglePass()" type="button" class="absolute right-3.5 top-3.5 text-slate-400 hover:text-white transition-colors">
               <i id="pass-icon" class="fa-regular fa-eye"></i>
             </button>
           </div>
         </div>
-        <p id="login-err" class="text-rose-400 text-xs font-medium hidden">⚠️ Invalid password. Please check your credentials.</p>
+        <p id="login-err" class="text-rose-400 text-xs font-semibold hidden flex items-center gap-1.5 pt-1">
+          <i class="fa-solid fa-circle-exclamation"></i> <span>Incorrect password. Please verify credentials.</span>
+        </p>
         <button onclick="performLogin()" id="login-btn"
-                class="w-full py-3.5 px-4 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-semibold rounded-xl shadow-lg shadow-sky-500/25 transition-all flex items-center justify-center gap-2">
-          <span>Unlock Admin Hub</span>
+                class="w-full py-3.5 px-5 bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-brand-600/30 transition-all flex items-center justify-center gap-2">
+          <span>Authenticate & Access Suite</span>
           <i class="fa-solid fa-arrow-right text-xs"></i>
         </button>
       </div>
     </div>
   </div>
 
-  <!-- MAIN DASHBOARD -->
+  <!-- ================= MAIN APPLICATION ================= -->
   <div id="dashboard-content" class="hidden flex-1 flex flex-col">
-    <!-- TOP NAVBAR -->
-    <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <div class="w-10 h-10 bg-gradient-to-tr from-sky-500 to-indigo-600 rounded-xl flex items-center justify-center text-white text-lg font-bold shadow-md shadow-sky-500/20">
-          🧠
+    <!-- TOP HEADER -->
+    <header class="border-b border-slate-800/80 bg-slate-900/70 backdrop-blur-xl sticky top-0 z-40 px-6 py-3.5">
+      <div class="max-w-7xl mx-auto flex items-center justify-between">
+        <!-- BRAND -->
+        <div class="flex items-center gap-4">
+          <div class="w-10 h-10 bg-gradient-to-tr from-brand-600 to-indigo-600 rounded-xl flex items-center justify-center text-white text-xl shadow-md shadow-brand-500/20 border border-white/10">
+            🧠
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h1 class="text-lg font-black text-white tracking-tight">NEURA AI</h1>
+              <span class="px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider bg-brand-500/10 text-brand-400 border border-brand-500/20 rounded-md">PRO ADMIN</span>
+            </div>
+            <p class="text-xs text-slate-400 font-medium flex items-center gap-1.5 mt-0.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>All Systems Live & Synchronized</span>
+            </p>
+          </div>
         </div>
-        <div>
-          <h1 class="text-lg font-bold text-white leading-none">NEURA AI</h1>
-          <span class="text-xs text-sky-400 font-medium tracking-wide flex items-center gap-1.5 mt-1">
-            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Broadcast & Student Analytics Hub
-          </span>
+
+        <!-- NAVIGATION TABS -->
+        <nav class="hidden md:flex items-center gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800/80 text-xs font-semibold">
+          <button onclick="switchTab('students')" id="tab-btn-students" class="px-4 py-2 rounded-lg text-slate-300 hover:text-white transition-all flex items-center gap-2 tab-active">
+            <i class="fa-solid fa-users"></i>
+            <span>Students & Wallets</span>
+            <span id="nav-student-count" class="px-1.5 py-0.2 bg-white/20 text-white rounded text-[10px] font-bold">--</span>
+          </button>
+          <button onclick="switchTab('broadcast')" id="tab-btn-broadcast" class="px-4 py-2 rounded-lg text-slate-400 hover:text-white transition-all flex items-center gap-2">
+            <i class="fa-solid fa-bullhorn"></i>
+            <span>Broadcast Studio</span>
+          </button>
+          <button onclick="switchTab('analytics')" id="tab-btn-analytics" class="px-4 py-2 rounded-lg text-slate-400 hover:text-white transition-all flex items-center gap-2">
+            <i class="fa-solid fa-chart-pie"></i>
+            <span>Analytics</span>
+          </button>
+          <button onclick="switchTab('history')" id="tab-btn-history" class="px-4 py-2 rounded-lg text-slate-400 hover:text-white transition-all flex items-center gap-2">
+            <i class="fa-solid fa-clock-rotate-left"></i>
+            <span>History</span>
+          </button>
+        </nav>
+
+        <!-- ACTIONS -->
+        <div class="flex items-center gap-2.5">
+          <button onclick="loadAllData()" title="Sync Live Data" class="px-3.5 py-2 bg-slate-800/90 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl border border-slate-700 flex items-center gap-2 transition-all">
+            <i id="sync-icon" class="fa-solid fa-arrows-rotate"></i>
+            <span class="hidden sm:inline">Sync Data</span>
+          </button>
+          <button onclick="performLogout()" title="Logout" class="px-3.5 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold rounded-xl border border-rose-500/20 flex items-center gap-2 transition-all">
+            <i class="fa-solid fa-arrow-right-from-bracket"></i>
+            <span class="hidden sm:inline">Exit</span>
+          </button>
         </div>
       </div>
-      
-      <div class="flex items-center gap-3">
-        <button onclick="loadDashboardData()" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 flex items-center gap-2 transition-colors">
-          <i class="fa-solid fa-arrows-rotate"></i> Refresh
+
+      <!-- MOBILE NAV TABS -->
+      <div class="flex md:hidden items-center justify-between gap-1 mt-3 pt-3 border-t border-slate-800 overflow-x-auto custom-scrollbar text-xs font-semibold">
+        <button onclick="switchTab('students')" id="m-tab-btn-students" class="px-3 py-1.5 rounded-lg text-slate-300 tab-active flex items-center gap-1.5 whitespace-nowrap">
+          <i class="fa-solid fa-users"></i> Students
         </button>
-        <button onclick="performLogout()" class="px-3.5 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-semibold rounded-lg border border-rose-500/20 flex items-center gap-2 transition-colors">
-          <i class="fa-solid fa-arrow-right-from-bracket"></i> Logout
+        <button onclick="switchTab('broadcast')" id="m-tab-btn-broadcast" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
+          <i class="fa-solid fa-bullhorn"></i> Broadcast
+        </button>
+        <button onclick="switchTab('analytics')" id="m-tab-btn-analytics" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
+          <i class="fa-solid fa-chart-pie"></i> Stats
+        </button>
+        <button onclick="switchTab('history')" id="m-tab-btn-history" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
+          <i class="fa-solid fa-clock-rotate-left"></i> History
         </button>
       </div>
     </header>
 
     <!-- CONTENT WRAPPER -->
-    <main class="max-w-7xl w-full mx-auto p-6 space-y-6 flex-1">
-      <!-- STATS KPI ROW -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div class="glass-card p-5 rounded-2xl glass-card-hover flex items-center justify-between">
-          <div>
-            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Registered Students</p>
-            <h3 id="stat-total-students" class="text-2xl font-extrabold text-white mt-1">--</h3>
+    <main class="max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6 flex-1">
+      
+      <!-- TOP EXECUTIVE KPI SUMMARY CARDS -->
+      <section class="grid grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-5">
+        <!-- TOTAL STUDENTS -->
+        <div class="glass-surface p-4 sm:p-5 rounded-2xl glass-surface-hover relative overflow-hidden">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total Registered</span>
+            <div class="w-8 h-8 rounded-lg bg-brand-500/10 text-brand-400 flex items-center justify-center text-sm font-bold">
+              <i class="fa-solid fa-user-graduate"></i>
+            </div>
           </div>
-          <div class="w-12 h-12 bg-sky-500/10 text-sky-400 rounded-xl flex items-center justify-center text-xl">
-            <i class="fa-solid fa-user-graduate"></i>
-          </div>
+          <h3 id="stat-total-students" class="text-2xl sm:text-3xl font-black text-white mt-2">--</h3>
+          <p class="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
+            <span class="text-emerald-400 font-semibold"><i class="fa-solid fa-arrow-trend-up"></i> Live MongoDB</span>
+          </p>
         </div>
 
-        <div class="glass-card p-5 rounded-2xl glass-card-hover flex items-center justify-between">
-          <div>
-            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active in Last 24 Hours</p>
-            <h3 id="stat-active-24h" class="text-2xl font-extrabold text-emerald-400 mt-1">--</h3>
+        <!-- ACTIVE 24H -->
+        <div class="glass-surface p-4 sm:p-5 rounded-2xl glass-surface-hover relative overflow-hidden">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Active Today (24h)</span>
+            <div class="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center text-sm font-bold">
+              <i class="fa-solid fa-bolt"></i>
+            </div>
           </div>
-          <div class="w-12 h-12 bg-emerald-500/10 text-emerald-400 rounded-xl flex items-center justify-center text-xl">
-            <i class="fa-solid fa-bolt"></i>
-          </div>
+          <h3 id="stat-active-24h" class="text-2xl sm:text-3xl font-black text-emerald-400 mt-2">--</h3>
+          <p class="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
+            <span class="text-emerald-400 font-semibold"><i class="fa-solid fa-comment-dots"></i> Direct WA Ready</span>
+          </p>
         </div>
 
-        <div class="glass-card p-5 rounded-2xl glass-card-hover flex items-center justify-between">
-          <div>
-            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Student Wallets</p>
-            <h3 id="stat-wallets" class="text-2xl font-extrabold text-amber-400 mt-1">₦--</h3>
+        <!-- WALLETS SUM -->
+        <div class="glass-surface p-4 sm:p-5 rounded-2xl glass-surface-hover relative overflow-hidden">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total Wallet Balances</span>
+            <div class="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center text-sm font-bold">
+              <i class="fa-solid fa-wallet"></i>
+            </div>
           </div>
-          <div class="w-12 h-12 bg-amber-500/10 text-amber-400 rounded-xl flex items-center justify-center text-xl">
-            <i class="fa-solid fa-wallet"></i>
-          </div>
+          <h3 id="stat-wallets" class="text-2xl sm:text-3xl font-black text-amber-400 mt-2">₦--</h3>
+          <p class="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
+            <span class="text-slate-300 font-semibold">Student Prepaid Deposits</span>
+          </p>
         </div>
 
-        <div class="glass-card p-5 rounded-2xl glass-card-hover flex items-center justify-between">
-          <div>
-            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Top Class Level</p>
-            <h3 id="stat-top-level" class="text-2xl font-extrabold text-indigo-400 mt-1">--</h3>
+        <!-- TOP CLASS -->
+        <div class="glass-surface p-4 sm:p-5 rounded-2xl glass-surface-hover relative overflow-hidden">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Top Class Level</span>
+            <div class="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center text-sm font-bold">
+              <i class="fa-solid fa-graduation-cap"></i>
+            </div>
           </div>
-          <div class="w-12 h-12 bg-indigo-500/10 text-indigo-400 rounded-xl flex items-center justify-center text-xl">
-            <i class="fa-solid fa-award"></i>
-          </div>
+          <h3 id="stat-top-level" class="text-2xl sm:text-3xl font-black text-indigo-400 mt-2">--</h3>
+          <p class="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
+            <span class="text-slate-300 font-semibold">Most Active MBBS Tier</span>
+          </p>
         </div>
-      </div>
+      </section>
 
-      <!-- MAIN COMPOSER + PREVIEW GRID -->
-      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <!-- COMPOSER (7 cols) -->
-        <div class="lg:col-span-7 glass-card p-6 rounded-2xl space-y-5">
-          <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+      <!-- ================= TAB 1: STUDENT DIRECTORY & WALLETS ================= -->
+      <section id="view-students" class="space-y-4">
+        <!-- CONTROLS & FILTER BAR -->
+        <div class="glass-surface p-4 sm:p-5 rounded-2xl space-y-3.5">
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div>
               <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                <i class="fa-solid fa-bullhorn text-sky-400"></i> New WhatsApp Broadcast
+                <i class="fa-solid fa-users text-brand-400"></i> Registered Student Directory
               </h2>
-              <p class="text-xs text-slate-400 mt-0.5">Send real-time announcements directly to students' WhatsApp</p>
+              <p class="text-xs text-slate-400 mt-0.5">Live database of all MBBS students, active balances, streaks & curriculum choices</p>
             </div>
-            <span class="text-xs font-semibold px-2.5 py-1 bg-sky-500/10 text-sky-400 border border-sky-500/20 rounded-full">
-              Meta Cloud API v19.0
-            </span>
+
+            <!-- SEARCH BAR -->
+            <div class="relative w-full md:w-80">
+              <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-slate-400 text-xs"></i>
+              <input type="text" id="student-search" oninput="filterStudentsTable()" placeholder="Search by name, phone or class..."
+                     class="w-full pl-9 pr-4 py-2 bg-slate-900/90 border border-slate-700/80 rounded-xl text-white text-xs placeholder:text-slate-500 focus:outline-none focus:border-brand-400 transition-all">
+            </div>
           </div>
 
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Target Audience</label>
-              <select id="broadcast-target" class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-sky-500">
-                <option value="ALL">🌟 All Registered Students (100%)</option>
-                <option value="200L">🩺 200 Level Students</option>
-                <option value="300L">🩺 300 Level Students</option>
-                <option value="400L">🩺 400 Level Students</option>
-                <option value="500L">🩺 500 Level Students</option>
-                <option value="600L">🩺 600 Level (Finals)</option>
+          <!-- FILTER PILLS -->
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
+            <!-- LEVEL FILTER -->
+            <div class="flex flex-wrap items-center gap-1 text-xs">
+              <span class="text-slate-400 font-semibold mr-1 text-[11px] uppercase tracking-wider">Level:</span>
+              <button onclick="setLevelFilter('ALL')" id="lvl-filter-ALL" class="lvl-btn px-2.5 py-1 rounded-lg font-bold bg-brand-600 text-white transition-all">All</button>
+              <button onclick="setLevelFilter('200L')" id="lvl-filter-200L" class="lvl-btn px-2.5 py-1 rounded-lg font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">200L</button>
+              <button onclick="setLevelFilter('300L')" id="lvl-filter-300L" class="lvl-btn px-2.5 py-1 rounded-lg font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">300L</button>
+              <button onclick="setLevelFilter('400L')" id="lvl-filter-400L" class="lvl-btn px-2.5 py-1 rounded-lg font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">400L</button>
+              <button onclick="setLevelFilter('500L')" id="lvl-filter-500L" class="lvl-btn px-2.5 py-1 rounded-lg font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">500L</button>
+              <button onclick="setLevelFilter('600L')" id="lvl-filter-600L" class="lvl-btn px-2.5 py-1 rounded-lg font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">600L</button>
+            </div>
+
+            <!-- WALLET FILTER -->
+            <div class="flex items-center gap-2 text-xs">
+              <span id="filtered-count" class="text-slate-400 font-medium">Showing -- students</span>
+              <select id="wallet-filter" onchange="filterStudentsTable()" class="px-2.5 py-1 bg-slate-900 border border-slate-700 rounded-lg text-slate-300 text-xs focus:outline-none focus:border-brand-400">
+                <option value="ALL">All Wallets</option>
+                <option value="FUNDED">Funded (&gt; ₦0)</option>
+                <option value="ZERO">Zero Balance (₦0)</option>
               </select>
             </div>
-
-            <div>
-              <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Delivery Strategy</label>
-              <select id="broadcast-mode" class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-sky-500">
-                <option value="smart">⚡ Smart Hybrid (Direct + Template Fallback)</option>
-                <option value="direct_only">💬 Direct Message Only (Active 24h Window)</option>
-                <option value="template_only">📋 Template Only (neura_announcement)</option>
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <div class="flex items-center justify-between mb-1.5">
-              <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Announcement Message</label>
-              <div class="flex items-center gap-1">
-                <button type="button" onclick="insertFormatting('*', '*')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-bold border border-slate-700">B</button>
-                <button type="button" onclick="insertFormatting('_', '_')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs italic border border-slate-700">I</button>
-                <button type="button" onclick="insertEmoji('🧠')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs border border-slate-700">🧠</button>
-                <button type="button" onclick="insertEmoji('⚡')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs border border-slate-700">⚡</button>
-              </div>
-            </div>
-            <textarea id="broadcast-msg" rows="7" oninput="updateLivePreview()" placeholder="Type your broadcast announcement here... Use *bold* for emphasis."
-                      class="w-full p-4 bg-slate-900 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-sky-500 transition-colors leading-relaxed"></textarea>
-            <div class="flex items-center justify-between text-xs text-slate-500 mt-1">
-              <span>Supports WhatsApp bold (*text*) and italics (_text_)</span>
-              <span id="char-count">0 characters</span>
-            </div>
-          </div>
-
-          <div class="pt-2">
-            <button onclick="confirmBroadcast()" id="send-broadcast-btn"
-                    class="w-full py-3.5 px-6 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2">
-              <i class="fa-solid fa-paper-plane"></i>
-              <span>Dispatch Broadcast Announcement</span>
-            </button>
           </div>
         </div>
 
-        <!-- WHATSAPP PREVIEW (5 cols) -->
-        <div class="lg:col-span-5 glass-card p-6 rounded-2xl flex flex-col">
-          <div class="border-b border-slate-800 pb-3 mb-4 flex items-center justify-between">
-            <h3 class="text-sm font-bold text-slate-300 flex items-center gap-2">
-              <i class="fa-brands fa-whatsapp text-emerald-400 text-lg"></i> Live WhatsApp Screen Preview
-            </h3>
-            <span class="text-[11px] text-slate-400">Recipient View</span>
+        <!-- STUDENTS DATA TABLE -->
+        <div class="glass-surface rounded-2xl overflow-hidden shadow-xl border border-slate-800/80">
+          <div class="overflow-x-auto custom-scrollbar">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-900/90 text-slate-400 uppercase font-bold text-[10px] tracking-wider border-b border-slate-800">
+                <tr>
+                  <th class="py-3.5 px-4">Student Profile</th>
+                  <th class="py-3.5 px-4">WhatsApp Phone Number</th>
+                  <th class="py-3.5 px-4">MBBS Level</th>
+                  <th class="py-3.5 px-4">Wallet Balance</th>
+                  <th class="py-3.5 px-4">Total Spent</th>
+                  <th class="py-3.5 px-4">Streak</th>
+                  <th class="py-3.5 px-4">Preferred Textbooks</th>
+                  <th class="py-3.5 px-4">Last Active</th>
+                  <th class="py-3.5 px-4 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody id="students-tbody" class="divide-y divide-slate-800/60 text-slate-300">
+                <tr>
+                  <td colspan="9" class="py-12 text-center text-slate-500">
+                    <div class="inline-block animate-spin text-brand-400 text-2xl mb-2"><i class="fa-solid fa-circle-notch"></i></div>
+                    <p class="text-xs font-semibold">Loading student directory from MongoDB...</p>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= TAB 2: BROADCAST STUDIO ================= -->
+      <section id="view-broadcast" class="hidden space-y-6">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <!-- COMPOSER CARD (7 Cols) -->
+          <div class="lg:col-span-7 glass-surface p-6 rounded-2xl space-y-5">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div>
+                <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                  <i class="fa-solid fa-bullhorn text-brand-400"></i> New WhatsApp Broadcast Announcement
+                </h2>
+                <p class="text-xs text-slate-400 mt-0.5">Deliver instant announcements to students' WhatsApp chats</p>
+              </div>
+              <span class="text-xs font-bold px-3 py-1 bg-brand-500/10 text-brand-400 border border-brand-500/20 rounded-full">
+                Meta Cloud API v19.0
+              </span>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">Target Audience</label>
+                <select id="broadcast-target" class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-semibold focus:outline-none focus:border-brand-400">
+                  <option value="ALL">🌟 All Registered Students (100%)</option>
+                  <option value="200L">🩺 200 Level Students Only</option>
+                  <option value="300L">🩺 300 Level Students Only</option>
+                  <option value="400L">🩺 400 Level Students Only</option>
+                  <option value="500L">🩺 500 Level Students Only</option>
+                  <option value="600L">🩺 600 Level (Finals) Only</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">Delivery Strategy</label>
+                <select id="broadcast-mode" class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-semibold focus:outline-none focus:border-brand-400">
+                  <option value="smart">⚡ Smart Hybrid (Direct + Template Fallback)</option>
+                  <option value="direct_only">💬 Direct Message Only (Active 24h Window)</option>
+                  <option value="template_only">📋 Template Only (neura_announcement)</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <label class="text-xs font-bold text-slate-300 uppercase tracking-wider">Announcement Text</label>
+                <div class="flex items-center gap-1.5">
+                  <button type="button" onclick="insertFormatting('*', '*')" title="Bold text" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-bold border border-slate-700"><b>B</b></button>
+                  <button type="button" onclick="insertFormatting('_', '_')" title="Italic text" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs italic border border-slate-700"><i>I</i></button>
+                  <button type="button" onclick="insertEmoji('🧠')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs border border-slate-700">🧠</button>
+                  <button type="button" onclick="insertEmoji('⚡')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs border border-slate-700">⚡</button>
+                  <button type="button" onclick="insertEmoji('📚')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs border border-slate-700">📚</button>
+                </div>
+              </div>
+              <textarea id="broadcast-msg" rows="7" oninput="updateLivePreview()" placeholder="Type your broadcast announcement here... Use *bold* for emphasis and _italic_ for notes."
+                        class="w-full p-4 bg-slate-900 border border-slate-700 rounded-2xl text-white text-xs leading-relaxed focus:outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-400/20 transition-all font-sans"></textarea>
+              <div class="flex items-center justify-between text-[11px] text-slate-500 mt-1.5 px-1">
+                <span>Supports WhatsApp formatting: <code class="text-brand-400">*bold*</code>, <code class="text-brand-400">_italic_</code></span>
+                <span id="char-count" class="font-mono">0 chars</span>
+              </div>
+            </div>
+
+            <div class="pt-2">
+              <button onclick="confirmBroadcast()" id="send-broadcast-btn"
+                      class="w-full py-4 px-6 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold rounded-2xl shadow-xl shadow-emerald-600/25 transition-all flex items-center justify-center gap-2 text-sm">
+                <i class="fa-solid fa-paper-plane"></i>
+                <span>Dispatch Announcement to Selected Students</span>
+              </button>
+            </div>
           </div>
 
-          <!-- PHONE MOCKUP -->
-          <div class="flex-1 whatsapp-bg rounded-2xl p-4 border border-slate-800 flex flex-col justify-end min-h-[340px] shadow-inner relative overflow-hidden">
-            <!-- WA CHAT BUBBLE -->
-            <div class="wa-bubble p-3.5 max-w-[90%] self-start shadow-md text-sm space-y-1.5">
-              <div class="text-xs font-bold text-emerald-300 flex items-center gap-1 mb-1">
-                <span>🧠 NEURA AI Broadcast</span>
-              </div>
-              <div id="preview-text" class="text-slate-100 text-xs sm:text-sm whitespace-pre-wrap leading-relaxed">
-                Hello Samuel! 👋
-                
+          <!-- WHATSAPP PHONE PREVIEW (5 Cols) -->
+          <div class="lg:col-span-5 glass-surface p-6 rounded-2xl flex flex-col">
+            <div class="border-b border-slate-800 pb-3 mb-4 flex items-center justify-between">
+              <h3 class="text-xs font-bold text-slate-300 flex items-center gap-2 uppercase tracking-wider">
+                <i class="fa-brands fa-whatsapp text-emerald-400 text-base"></i> Live WhatsApp Recipient Screen
+              </h3>
+              <span class="text-[10px] font-mono text-slate-500">Preview Mode</span>
+            </div>
+
+            <!-- PHONE CONTAINER -->
+            <div class="flex-1 whatsapp-bg rounded-2xl p-4 border border-slate-800/90 flex flex-col justify-end min-h-[380px] shadow-inner relative overflow-hidden">
+              <div class="wa-bubble p-4 max-w-[92%] self-start text-xs space-y-2">
+                <div class="text-[11px] font-extrabold text-emerald-300 flex items-center gap-1.5 border-b border-white/10 pb-1.5">
+                  <span>🧠 NEURA AI Official Broadcast</span>
+                </div>
+                <div id="preview-text" class="text-slate-100 text-xs whitespace-pre-wrap leading-relaxed">
+                  Hello Samuel! 👋
+                  
 Type your announcement on the left to see how it renders live on students' WhatsApp screens in real-time.
-              </div>
-              <div class="text-[10px] text-slate-300 text-right mt-1 flex items-center justify-end gap-1">
-                <span id="preview-time">12:00</span>
-                <i class="fa-solid fa-check-double text-sky-300 text-[10px]"></i>
+                </div>
+                <div class="text-[10px] text-slate-300/80 text-right mt-1.5 flex items-center justify-end gap-1 font-mono">
+                  <span id="preview-time">12:00</span>
+                  <i class="fa-solid fa-check-double text-sky-300 text-[9px]"></i>
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <!-- BROADCAST HISTORY TABLE -->
-      <div class="glass-card p-6 rounded-2xl space-y-4">
-        <div class="flex items-center justify-between border-b border-slate-800 pb-4">
-          <h3 class="text-base font-bold text-white flex items-center gap-2">
-            <i class="fa-solid fa-clock-rotate-left text-slate-400"></i> Recent Broadcast History
-          </h3>
-          <span class="text-xs text-slate-400">Last 10 Dispatches</span>
-        </div>
+      <!-- ================= TAB 3: ANALYTICS & METRICS ================= -->
+      <section id="view-analytics" class="hidden space-y-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- LEVEL BREAKDOWN -->
+          <div class="glass-surface p-6 rounded-2xl space-y-4">
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <i class="fa-solid fa-chart-column text-brand-400"></i> Student Enrollment by MBBS Class
+            </h3>
+            <div id="level-chart-container" class="space-y-3 pt-2">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
 
-        <div class="overflow-x-auto">
-          <table class="w-full text-left text-xs">
-            <thead class="bg-slate-900/80 text-slate-400 uppercase font-semibold border-b border-slate-800">
-              <tr>
-                <th class="py-3 px-4">Date & Time</th>
-                <th class="py-3 px-4">Target Audience</th>
-                <th class="py-3 px-4">Message Snippet</th>
-                <th class="py-3 px-4">Delivered</th>
-                <th class="py-3 px-4">Failed</th>
-                <th class="py-3 px-4">Status</th>
-              </tr>
-            </thead>
-            <tbody id="history-tbody" class="divide-y divide-slate-800/60 text-slate-300">
-              <tr>
-                <td colspan="6" class="py-6 text-center text-slate-500">No previous broadcasts recorded yet.</td>
-              </tr>
-            </tbody>
-          </table>
+          <!-- FINANCIAL & ENGAGEMENT SUMMARY -->
+          <div class="glass-surface p-6 rounded-2xl space-y-4">
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <i class="fa-solid fa-coins text-amber-400"></i> Wallet & Prepaid Financial Health
+            </h3>
+            <div class="space-y-4 pt-2">
+              <div class="flex items-center justify-between p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+                <span class="text-xs text-slate-400">Total User Funds in Escrow:</span>
+                <span id="analytics-wallet-total" class="text-sm font-black text-amber-400">₦--</span>
+              </div>
+              <div class="flex items-center justify-between p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+                <span class="text-xs text-slate-400">Total Revenue Billed on Queries:</span>
+                <span id="analytics-spent-total" class="text-sm font-black text-emerald-400">₦--</span>
+              </div>
+              <div class="flex items-center justify-between p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+                <span class="text-xs text-slate-400">Average Wallet Balance / Student:</span>
+                <span id="analytics-avg-wallet" class="text-sm font-black text-white">₦--</span>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
+      </section>
+
+      <!-- ================= TAB 4: BROADCAST HISTORY ================= -->
+      <section id="view-history" class="hidden space-y-4">
+        <div class="glass-surface p-6 rounded-2xl space-y-4">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+            <div>
+              <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-clock-rotate-left text-slate-400"></i> Broadcast Dispatch History & Logs
+              </h3>
+              <p class="text-xs text-slate-400 mt-0.5">Review delivery rates, target recipients, and completion status</p>
+            </div>
+          </div>
+
+          <div class="overflow-x-auto custom-scrollbar">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-900/90 text-slate-400 uppercase font-bold text-[10px] tracking-wider border-b border-slate-800">
+                <tr>
+                  <th class="py-3 px-4">Date & Time</th>
+                  <th class="py-3 px-4">Target Audience</th>
+                  <th class="py-3 px-4">Message Snippet</th>
+                  <th class="py-3 px-4">Delivered</th>
+                  <th class="py-3 px-4">Failed</th>
+                  <th class="py-3 px-4">Status</th>
+                </tr>
+              </thead>
+              <tbody id="history-tbody" class="divide-y divide-slate-800/60 text-slate-300">
+                <tr>
+                  <td colspan="6" class="py-8 text-center text-slate-500">No broadcast dispatches recorded yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 
-  <!-- CONFIRMATION MODAL -->
-  <div id="confirm-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 hidden">
-    <div class="glass-card w-full max-w-md p-6 rounded-2xl text-center space-y-4 border border-emerald-500/30">
-      <div class="w-14 h-14 bg-emerald-500/10 text-emerald-400 rounded-2xl mx-auto flex items-center justify-center text-2xl">
+  <!-- ================= CONFIRMATION MODAL ================= -->
+  <div id="confirm-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 hidden">
+    <div class="glass-surface w-full max-w-md p-6 rounded-3xl text-center space-y-4 border border-emerald-500/30 shadow-2xl">
+      <div class="w-14 h-14 bg-emerald-500/10 text-emerald-400 rounded-2xl mx-auto flex items-center justify-center text-2xl border border-emerald-500/20">
         📢
       </div>
-      <h3 class="text-lg font-bold text-white">Confirm Broadcast Dispatch</h3>
+      <h3 class="text-lg font-bold text-white">Confirm Broadcast Announcement</h3>
       <p id="confirm-details" class="text-slate-300 text-xs leading-relaxed">
-        Are you sure you want to send this broadcast announcement to all registered students?
+        Are you sure you want to dispatch this announcement to the selected audience?
       </p>
       <div class="flex items-center gap-3 pt-2">
-        <button onclick="closeConfirmModal()" class="flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-xs border border-slate-700">Cancel</button>
-        <button onclick="executeConfirmedBroadcast()" id="modal-confirm-btn" class="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs shadow-lg shadow-emerald-500/20">Yes, Send Now 🚀</button>
+        <button onclick="closeConfirmModal()" class="flex-1 py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs border border-slate-700 transition-colors">Cancel</button>
+        <button onclick="executeConfirmedBroadcast()" id="modal-confirm-btn" class="flex-1 py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl text-xs shadow-lg shadow-emerald-600/25 transition-all">Yes, Dispatch Now 🚀</button>
       </div>
     </div>
   </div>
 
+  <!-- ================= JAVASCRIPT APP LOGIC ================= -->
   <script>
     let authToken = localStorage.getItem("neura_admin_token") || "";
+    let rawStudentsList = [];
+    let activeLevelFilter = "ALL";
 
     function togglePass() {
       const p = document.getElementById("admin-pass");
@@ -3454,7 +3707,8 @@ Type your announcement on the left to see how it renders live on students' Whats
       const btn = document.getElementById("login-btn");
       
       err.classList.add("hidden");
-      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Checking...';
+      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Authenticating...';
+      btn.disabled = true;
       
       try {
         const res = await fetch("/admin/api/login", {
@@ -3470,19 +3724,21 @@ Type your announcement on the left to see how it renders live on students' Whats
           showDashboard();
         } else {
           err.classList.remove("hidden");
-          btn.innerHTML = '<span>Unlock Admin Hub</span> <i class="fa-solid fa-arrow-right text-xs"></i>';
+          btn.innerHTML = '<span>Authenticate & Access Suite</span> <i class="fa-solid fa-arrow-right text-xs"></i>';
+          btn.disabled = false;
         }
       } catch (e) {
-        err.innerText = "Network error. Please try again.";
+        err.innerHTML = '<span>Network error. Please try again.</span>';
         err.classList.remove("hidden");
-        btn.innerHTML = '<span>Unlock Admin Hub</span>';
+        btn.innerHTML = '<span>Authenticate & Access Suite</span>';
+        btn.disabled = false;
       }
     }
 
     function showDashboard() {
       document.getElementById("login-modal").classList.add("hidden");
       document.getElementById("dashboard-content").classList.remove("hidden");
-      loadDashboardData();
+      loadAllData();
     }
 
     function performLogout() {
@@ -3493,62 +3749,272 @@ Type your announcement on the left to see how it renders live on students' Whats
       document.getElementById("admin-pass").value = "";
     }
 
-    async function loadDashboardData() {
-      if (!authToken) return;
-      try {
-        const res = await fetch("/admin/api/stats", {
-          headers: { "Authorization": "Bearer " + authToken }
-        });
-        if (res.status === 401) {
-          performLogout();
-          return;
+    function switchTab(tabKey) {
+      const tabs = ['students', 'broadcast', 'analytics', 'history'];
+      tabs.forEach(t => {
+        const view = document.getElementById('view-' + t);
+        const btn = document.getElementById('tab-btn-' + t);
+        const mBtn = document.getElementById('m-tab-btn-' + t);
+        if (t === tabKey) {
+          view.classList.remove('hidden');
+          btn?.classList.add('tab-active');
+          mBtn?.classList.add('tab-active');
+        } else {
+          view.classList.add('hidden');
+          btn?.classList.remove('tab-active');
+          mBtn?.classList.remove('tab-active');
         }
-        const data = await res.json();
-        document.getElementById("stat-total-students").innerText = data.total_students || "0";
-        document.getElementById("stat-active-24h").innerText = data.active_24h || "0";
-        document.getElementById("stat-wallets").innerText = "₦" + (data.total_wallet_balance_ngn || 0).toLocaleString();
-        
-        // Find top class
-        const dist = data.level_distribution || {};
-        let topLvl = "None";
-        let maxCount = -1;
-        for (let [lvl, count] of Object.entries(dist)) {
-          if (count > maxCount && lvl !== "Other") {
-            maxCount = count;
-            topLvl = lvl;
-          }
-        }
-        document.getElementById("stat-top-level").innerText = topLvl;
+      });
+    }
 
-        // Render history table
-        const tbody = document.getElementById("history-tbody");
-        if (data.recent_broadcasts && data.recent_broadcasts.length > 0) {
-          tbody.innerHTML = data.recent_broadcasts.map(b => `
-            <tr class="hover:bg-slate-800/40 transition-colors">
-              <td class="py-3 px-4 font-mono text-slate-400">${b.started_at || "Recent"}</td>
-              <td class="py-3 px-4"><span class="px-2 py-0.5 bg-sky-500/10 text-sky-300 rounded font-semibold">${b.target_level}</span></td>
-              <td class="py-3 px-4 text-slate-300 max-w-xs truncate">${b.message}</td>
-              <td class="py-3 px-4 font-bold text-emerald-400">${b.sent_count}</td>
-              <td class="py-3 px-4 text-slate-400">${b.failed_count}</td>
-              <td class="py-3 px-4"><span class="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full font-semibold">${b.status}</span></td>
-            </tr>
-          `).join("");
-        }
+    async function loadAllData() {
+      if (!authToken) return;
+      const syncIcon = document.getElementById("sync-icon");
+      syncIcon?.classList.add("fa-spin");
+      
+      try {
+        await Promise.all([loadStats(), loadStudents()]);
       } catch (e) {
-        console.error(e);
+        console.error("Sync error:", e);
+      } finally {
+        setTimeout(() => syncIcon?.classList.remove("fa-spin"), 600);
       }
+    }
+
+    async function loadStats() {
+      const res = await fetch("/admin/api/stats", {
+        headers: { "Authorization": "Bearer " + authToken }
+      });
+      if (res.status === 401) { performLogout(); return; }
+      const data = await res.json();
+      
+      document.getElementById("stat-total-students").innerText = data.total_students || "0";
+      document.getElementById("stat-active-24h").innerText = data.active_24h || "0";
+      document.getElementById("stat-wallets").innerText = "₦" + (data.total_wallet_balance_ngn || 0).toLocaleString();
+      document.getElementById("analytics-wallet-total").innerText = "₦" + (data.total_wallet_balance_ngn || 0).toLocaleString();
+      
+      // Top class
+      const dist = data.level_distribution || {};
+      let topLvl = "None";
+      let maxCount = -1;
+      let totalAssigned = 0;
+      for (let [lvl, count] of Object.entries(dist)) {
+        if (lvl !== "Other") totalAssigned += count;
+        if (count > maxCount && lvl !== "Other") {
+          maxCount = count;
+          topLvl = lvl;
+        }
+      }
+      document.getElementById("stat-top-level").innerText = topLvl;
+
+      // Render chart
+      const chartContainer = document.getElementById("level-chart-container");
+      chartContainer.innerHTML = Object.entries(dist).map(([lvl, count]) => {
+        const pct = totalAssigned > 0 ? Math.round((count / (data.total_students || 1)) * 100) : 0;
+        return `
+          <div class="space-y-1">
+            <div class="flex items-center justify-between text-xs font-semibold">
+              <span class="text-slate-300">${lvl}</span>
+              <span class="text-slate-400">${count} students (${pct}%)</span>
+            </div>
+            <div class="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-slate-800">
+              <div class="bg-brand-500 h-full rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      // History Table
+      const hbody = document.getElementById("history-tbody");
+      if (data.recent_broadcasts && data.recent_broadcasts.length > 0) {
+        hbody.innerHTML = data.recent_broadcasts.map(b => `
+          <tr class="hover:bg-slate-800/40 transition-colors">
+            <td class="py-3 px-4 font-mono text-slate-400">${b.started_at || "Recent"}</td>
+            <td class="py-3 px-4"><span class="px-2.5 py-0.5 bg-brand-500/10 text-brand-300 rounded-md font-bold text-[11px]">${b.target_level}</span></td>
+            <td class="py-3 px-4 text-slate-300 max-w-xs truncate">${b.message}</td>
+            <td class="py-3 px-4 font-bold text-emerald-400">${b.sent_count}</td>
+            <td class="py-3 px-4 text-slate-400 font-mono">${b.failed_count}</td>
+            <td class="py-3 px-4"><span class="px-2.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full font-bold text-[10px]">${b.status}</span></td>
+          </tr>
+        `).join("");
+      }
+    }
+
+    async function loadStudents() {
+      const res = await fetch("/admin/api/students", {
+        headers: { "Authorization": "Bearer " + authToken }
+      });
+      if (res.status === 401) { performLogout(); return; }
+      const data = await res.json();
+      rawStudentsList = data.students || [];
+      
+      document.getElementById("nav-student-count").innerText = rawStudentsList.length;
+      
+      let totalSpent = 0;
+      rawStudentsList.forEach(s => totalSpent += (s.total_spent_ngn || 0));
+      document.getElementById("analytics-spent-total").innerText = "₦" + totalSpent.toLocaleString();
+      const avg = rawStudentsList.length > 0 ? Math.round(totalSpent / rawStudentsList.length) : 0;
+      document.getElementById("analytics-avg-wallet").innerText = "₦" + avg.toLocaleString();
+
+      filterStudentsTable();
+    }
+
+    function setLevelFilter(lvl) {
+      activeLevelFilter = lvl;
+      document.querySelectorAll(".lvl-btn").forEach(b => {
+        b.classList.remove("bg-brand-600", "text-white");
+        b.classList.add("bg-slate-800", "text-slate-300");
+      });
+      const activeBtn = document.getElementById("lvl-filter-" + lvl);
+      if (activeBtn) {
+        activeBtn.classList.remove("bg-slate-800", "text-slate-300");
+        activeBtn.classList.add("bg-brand-600", "text-white");
+      }
+      filterStudentsTable();
+    }
+
+    function filterStudentsTable() {
+      const query = document.getElementById("student-search").value.toLowerCase().trim();
+      const walletFilter = document.getElementById("wallet-filter").value;
+      
+      const filtered = rawStudentsList.filter(s => {
+        // Level match
+        if (activeLevelFilter !== "ALL" && s.level !== activeLevelFilter) return false;
+        
+        // Wallet match
+        if (walletFilter === "FUNDED" && s.wallet_balance_ngn <= 0) return false;
+        if (walletFilter === "ZERO" && s.wallet_balance_ngn > 0) return false;
+        
+        // Search query match
+        if (query) {
+          const matchName = (s.name || "").toLowerCase().includes(query);
+          const matchPhone = (s.user_id || "").toLowerCase().includes(query);
+          const matchLvl = (s.level || "").toLowerCase().includes(query);
+          if (!matchName && !matchPhone && !matchLvl) return false;
+        }
+        return true;
+      });
+
+      document.getElementById("filtered-count").innerText = `Showing ${filtered.length} of ${rawStudentsList.length} students`;
+      renderStudentsTable(filtered);
+    }
+
+    function renderStudentsTable(students) {
+      const tbody = document.getElementById("students-tbody");
+      if (!students || students.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="9" class="py-10 text-center text-slate-500">
+              <i class="fa-regular fa-folder-open text-2xl mb-2"></i>
+              <p class="text-xs">No registered students found matching your filter criteria.</p>
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = students.map(s => {
+        const initials = (s.name || "S").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase();
+        
+        // Class badge styling
+        let lvlBadge = "bg-slate-800 text-slate-300 border-slate-700";
+        if (s.level === "200L") lvlBadge = "bg-blue-500/10 text-blue-400 border-blue-500/20";
+        else if (s.level === "300L") lvlBadge = "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
+        else if (s.level === "400L") lvlBadge = "bg-indigo-500/10 text-indigo-400 border-indigo-500/20";
+        else if (s.level === "500L") lvlBadge = "bg-purple-500/10 text-purple-400 border-purple-500/20";
+        else if (s.level === "600L") lvlBadge = "bg-amber-500/10 text-amber-400 border-amber-500/20";
+
+        // Wallet pill
+        let walletPill = s.wallet_balance_ngn > 0 
+          ? `<span class="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg font-mono font-bold">₦${s.wallet_balance_ngn.toLocaleString('en-NG', {minimumFractionDigits: 2})}</span>`
+          : `<span class="px-2.5 py-1 bg-slate-800 text-slate-400 border border-slate-700 rounded-lg font-mono">₦0.00</span>`;
+
+        // Books pill
+        const booksCount = (s.preferred_books_list || []).length;
+        const booksText = booksCount > 0 ? `${booksCount} Textbook(s)` : "General Library";
+
+        return `
+          <tr class="hover:bg-slate-800/30 transition-colors group">
+            <!-- PROFILE -->
+            <td class="py-3 px-4">
+              <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-600 text-white font-bold flex items-center justify-center text-xs shadow-sm">
+                  ${initials}
+                </div>
+                <div>
+                  <div class="font-bold text-white flex items-center gap-1.5">
+                    <span>${s.name || "Student"}</span>
+                    ${s.onboarding_step === "COMPLETED" ? '<i class="fa-solid fa-circle-check text-emerald-400 text-[10px]" title="Onboarding Completed"></i>' : '<span class="text-[9px] px-1 py-0.2 bg-amber-500/10 text-amber-400 rounded">Setup</span>'}
+                  </div>
+                </div>
+              </div>
+            </td>
+
+            <!-- PHONE -->
+            <td class="py-3 px-4 font-mono text-slate-300">
+              <div class="flex items-center gap-2">
+                <span>${s.user_id}</span>
+                <button onclick="navigator.clipboard.writeText('${s.user_id}'); alert('Copied ${s.user_id}');" title="Copy Phone" class="text-slate-500 hover:text-white text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                  <i class="fa-regular fa-copy"></i>
+                </button>
+              </div>
+            </td>
+
+            <!-- LEVEL -->
+            <td class="py-3 px-4">
+              <span class="px-2.5 py-0.5 rounded-md font-bold text-[11px] border ${lvlBadge}">
+                ${s.level || "Unset"}
+              </span>
+            </td>
+
+            <!-- WALLET BALANCE -->
+            <td class="py-3 px-4">
+              ${walletPill}
+            </td>
+
+            <!-- SPENT -->
+            <td class="py-3 px-4 font-mono text-slate-400">
+              ₦${(s.total_spent_ngn || 0).toLocaleString('en-NG', {minimumFractionDigits: 2})}
+            </td>
+
+            <!-- STREAK -->
+            <td class="py-3 px-4 font-bold text-amber-400">
+              🔥 ${s.study_streak_days || 1}d
+            </td>
+
+            <!-- TEXTBOOKS -->
+            <td class="py-3 px-4">
+              <span class="text-slate-300 text-[11px] bg-slate-900 px-2 py-0.5 rounded border border-slate-800" title="${(s.preferred_books_list || []).join(', ')}">
+                ${booksText}
+              </span>
+            </td>
+
+            <!-- LAST ACTIVE -->
+            <td class="py-3 px-4 font-mono text-slate-400 text-[11px]">
+              ${s.last_study_date || "Recent"}
+            </td>
+
+            <!-- ACTIONS -->
+            <td class="py-3 px-4 text-center">
+              <a href="https://wa.me/${s.user_id}" target="_blank" class="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors">
+                <i class="fa-brands fa-whatsapp"></i> Chat
+              </a>
+            </td>
+          </tr>
+        `;
+      }).join("");
     }
 
     function updateLivePreview() {
       const raw = document.getElementById("broadcast-msg").value;
-      document.getElementById("char-count").innerText = raw.length + " characters";
+      document.getElementById("char-count").innerText = raw.length + " chars";
       
       let formatted = raw
         .replace(/\*(.*?)\*/g, '<b class="font-bold text-white">$1</b>')
         .replace(/_(.*?)_/g, '<i class="italic text-slate-200">$1</i>');
         
       if (!formatted.trim()) {
-        formatted = "Hello Samuel! 👋\\n\\nType your announcement on the left to see how it renders live on students' WhatsApp screens.";
+        formatted = "Hello Samuel! 👋\\n\\nType your announcement on the left to see how it renders live on students' WhatsApp screens in real-time.";
       }
       document.getElementById("preview-text").innerHTML = formatted;
       
@@ -3578,10 +4044,10 @@ Type your announcement on the left to see how it renders live on students' Whats
       const msg = document.getElementById("broadcast-msg").value.trim();
       const target = document.getElementById("broadcast-target").value;
       if (!msg) {
-        alert("Please enter a message to broadcast!");
+        alert("Please enter an announcement text to broadcast!");
         return;
       }
-      document.getElementById("confirm-details").innerText = `You are about to dispatch this announcement to target audience: ${target}. Are you ready?`;
+      document.getElementById("confirm-details").innerText = `You are about to dispatch this WhatsApp announcement to target audience: ${target}. Are you ready?`;
       document.getElementById("confirm-modal").classList.remove("hidden");
     }
 
@@ -3614,17 +4080,17 @@ Type your announcement on the left to see how it renders live on students' Whats
         
         if (res.ok) {
           closeConfirmModal();
-          alert("🎉 Broadcast initiated successfully! The system is delivering the messages in the background.");
+          alert("🎉 Broadcast initiated successfully! Dispatches are processing in the background.");
           document.getElementById("broadcast-msg").value = "";
           updateLivePreview();
-          setTimeout(loadDashboardData, 1500);
+          setTimeout(loadAllData, 1500);
         } else {
           alert("Broadcast failed to initialize. Please check connection.");
         }
       } catch (e) {
         alert("Error sending broadcast: " + e.message);
       } finally {
-        btn.innerHTML = 'Yes, Send Now 🚀';
+        btn.innerHTML = 'Yes, Dispatch Now 🚀';
         btn.disabled = false;
       }
     }
@@ -3638,4 +4104,5 @@ Type your announcement on the left to see how it renders live on students' Whats
 </html>
 """
     return HTMLResponse(content=html_content)
+
 
