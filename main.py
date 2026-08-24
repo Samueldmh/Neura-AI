@@ -1841,21 +1841,22 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
         
     user_doc = await users_col.find_one({"user_id": sender_phone})
     
-    # 1. New user
-    if not user_doc:
-        await users_col.insert_one({
-            "user_id": sender_phone,
-            "onboarding_step": "ASK_NAME"
-        })
+    # 1. New user or user with missing/None onboarding step
+    if not user_doc or not user_doc.get("onboarding_step"):
+        await users_col.update_one(
+            {"user_id": sender_phone},
+            {"$set": {"onboarding_step": "ASK_NAME"}},
+            upsert=True
+        )
         welcome_msg = (
-            "Hello! 👋 I'm *NEURA AI*, your elite medical study assistant.\n\n"
-            "I can answer medical questions directly from your textbooks with exact citations, or generate practice MCQs for your MBBS exams!\n\n"
-            "To give you the best personalized study experience, what is your first name?"
+            "Hello! 👋 I'm *NEURA AI*, your clinical co-pilot and medical study assistant.\n\n"
+            "I'm here to help you master complex clinical concepts, diagnose medical cases, and practice high-yield exam MCQs tailored to your level.\n\n"
+            "To get started, what is your first name?"
         )
         await send_whatsapp_cloud_msg(sender_phone, welcome_msg)
         return True
         
-    step = user_doc.get("onboarding_step")
+    step = str(user_doc.get("onboarding_step") or "")
     name = user_doc.get("name", "Student")
     level = user_doc.get("level", "")
     
