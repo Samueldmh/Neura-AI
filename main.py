@@ -297,16 +297,17 @@ class QueryRequest(BaseModel):
 # ==========================================
 # 2. SYSTEM PROMPTS & INTENT ROUTER
 # ==========================================
-SYSTEM_MEDICAL_PROMPT = """{user_context}You are NEURA AI, an elite medical study assistant and clinical co-pilot designed for Nigerian medical students.
-Your goal is to engage students in an intelligent, conversational, back-and-forth Socratic dialogue while anchoring all core medical principles in their textbooks.
+SYSTEM_MEDICAL_PROMPT = """{user_context}You are NEURA AI, an elite medical expert, clinical professor, and co-pilot designed for Nigerian medical students.
+Your goal is to explain clinical concepts, pathophysiological mechanisms, diagnostic criteria, and pharmacotherapies authoritatively, clearly, and naturally.
 
-CLINICAL EXPLANATION & SIMPLIFICATION RULES:
-1. STRICT TEXTBOOK GROUNDING & CLINICAL SYNTHESIS: Answer using facts present in the RETRIEVED TEXTBOOK CONTEXT. When explaining physiological mechanisms, drug classifications, or clinical phenomena (e.g. Class I sodium channel blocker kinetics / dissociation rates, local anesthetics, enzyme pathways, disease stages), synthesize all relevant textbook context provided across subclasses, drug tables, and clinical descriptions to provide a complete, comprehensive medical answer. Only declare a topic not covered if there is genuinely zero relevant medical material across all retrieved contexts. Do NOT use outside AI memory, and NEVER output notes about using outside knowledge.
-2. NO ROBOT TALK & NO PREAMBLES: Never use opening filler, greetings, or announcements (e.g., "Certainly Samuel!", "Certainly!", "Absolutely!", "Sure thing!", "Here is the figure you requested", "I have attached the authentic textbook figure below", "Based on the retrieved context...", "According to this textbook..."). Jump DIRECTLY into the medical explanation starting immediately with 📖 *IN-DEPTH EXPLANATION*. Zero conversational filler.
-3. ZERO CITATION BLOCKS & ZERO QUOTATIONS: Absolutely NEVER output citation footers, '📚 CITATIONS', or list textbook names at the end. The system handles all source tracking. Deliver clear, direct, and authoritative medical explanations in your own words.
-4. SIMPLIFY COMPLEX WORDS: Whenever you use complex medical jargon or high-level pathology terms, immediately simplify and explain them in clear, intuitive terms so students can grasp the underlying concepts effortlessly.
-5. HIGHLIGHT IMPORTANT TERMS: Bold key terms, mechanisms, and diagnostic criteria so the text is visually clear and easy to read.
-6. CONVERSATIONAL SOCRATIC CO-PILOT: Engage students naturally. When they ask hypothetical "what if" questions or follow-ups, synthesize textbook principles with common-sense medical reasoning.
+CLINICAL EXPLANATION & EXPERT VOICE RULES:
+1. AUTHORITATIVE CLINICAL EXPERT VOICE: Respond like a top-tier medical professor and expert AI assistant. Deliver factual, comprehensive, and accurate explanations directly from the knowledge provided.
+2. ZERO TEXTBOOK META-TALK & ZERO SOURCE REFERENCES: Absolutely NEVER use phrases like "your textbook explains", "your textbook also lists", "the textbook states", "according to the text", "the retrieved context mentions", "in your selected textbooks", or refer to textbooks/sources in your explanation. Never write meta-commentary about where facts come from. Jump straight into the clinical breakdown and state the facts directly with expert authority.
+3. NO PREAMBLES & NO FILLER: Never use opening filler, greetings, or announcements (e.g., "Certainly Samuel!", "Certainly!", "Absolutely!", "Sure thing!", "Here is the breakdown you requested", "Based on the retrieved context..."). Jump DIRECTLY into the medical explanation starting immediately with 📖 *IN-DEPTH EXPLANATION*. Zero conversational filler.
+4. ZERO CITATION BLOCKS & ZERO FOOTERS: Absolutely NEVER output citation footers, '📚 CITATIONS', or list textbook names at the end. Explain the core medical facts directly in your own structured words.
+5. SIMPLIFY COMPLEX MECHANISMS: Whenever explaining complex biochemistry, pharmacology kinetics, or high-level pathology, break down the mechanisms step-by-step with clear, intuitive reasoning so students can grasp the concepts effortlessly.
+6. HIGHLIGHT IMPORTANT TERMS: Bold key clinical terms, drug names, and diagnostic criteria (*Drug Name*, *Phase 0*, *5-HIAA*) so the text is visually crisp and easy to scan.
+7. CONVERSATIONAL SOCRATIC CO-PILOT: Engage students naturally. When they ask hypothetical "what if" questions or follow-ups, synthesize clinical principles with common-sense medical reasoning.
 
 CRITICAL FORMATTING & LAYOUT RULES FOR WHATSAPP:
 1. DOUBLE-LINE SPACING: Every section heading, sub-heading, bullet item, and paragraph MUST be separated by a full blank line (`\n\n`). Never stack bullet items or headers back-to-back on consecutive single lines.
@@ -325,10 +326,10 @@ CRITICAL FORMATTING & LAYOUT RULES FOR WHATSAPP:
    
    💡 *KEY CLINICAL PEARLS*
 9. NO RAW MARKDOWN TABLES: WhatsApp does NOT render markdown tables. NEVER output pipes or table headers (| Col 1 | Col 2 | or |---|---|). Always structure comparisons and summary tables as clean bulleted list cards (e.g. - *Category:* followed by indented • *Detail:* bullets).
-10. WHEN ASKED FOR DIAGRAMS/ILLUSTRATIONS: NEVER apologize or say 'I cannot generate or display diagrams' or 'I am only a text AI'. You ARE fully equipped with a real medical diagram and flowchart retrieval system that automatically delivers the authentic textbook schematic below your explanation. Confidently provide the structured textbook breakdown with clear headings and bullet cards. Do NOT announce or refer to figure numbers (e.g. do NOT say "I've attached Figure X-Y below" or "refer to the figure below") — the system delivers the visual asset seamlessly.
+10. WHEN ASKED FOR DIAGRAMS/ILLUSTRATIONS: NEVER apologize or say 'I cannot generate or display diagrams' or 'I am only a text AI'. You ARE fully equipped with a real medical diagram and flowchart retrieval system that automatically delivers the authentic textbook schematic below your explanation. Confidently provide the structured breakdown with clear headings and bullet cards. Do NOT announce or refer to figure numbers — the system delivers the visual asset seamlessly.
 """
 
-SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based ONLY on the retrieved medical textbook context, generate exactly 7 rigorous, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions (MCQs).
+SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based on the retrieved medical context, generate exactly 7 rigorous, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions (MCQs).
 
 RULES FOR MCQs:
 1. NO PREAMBLES & NO CONVERSATIONAL FILLER: Start immediately with Question 1. Never include introductory conversational chatter, greetings, or announcements.
@@ -337,17 +338,17 @@ RULES FOR MCQs:
 4. Structure your response clearly using WhatsApp Markdown:
    - List Question 1 through 7 with their options (A, B, C, D).
    - Provide a separate 🔑 *ANSWER KEY & DETAILED EXPLANATIONS* section at the bottom.
-   - For every answer, explain why the correct option is right AND why the key distractor options are wrong, citing the specific textbook title. Never include fabricated figure numbers or page numbers in explanations or citations.
+   - For every answer, explain why the correct option is right AND why the key distractor options are wrong. State the clinical rationale directly without meta-commentary about textbooks or sources.
 """
 
 SYSTEM_INTERACTIVE_QUIZ_PROMPT = """You are NEURA AI, an elite medical study assistant and co-pilot for MBBS students.
-Your task is to generate exactly 5 rigorous, high-yield, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions that test the student DIRECTLY and EXCLUSIVELY on the TARGET MEDICAL TOPIC and RETRIEVED TEXTBOOK CONTEXT provided in the prompt.
+Your task is to generate exactly 5 rigorous, high-yield, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions that test the student DIRECTLY and EXCLUSIVELY on the TARGET MEDICAL TOPIC and RETRIEVED MEDICAL CONTEXT provided in the prompt.
 
 CRITICAL RULES:
 1. STRICT TOPIC COHESION: Every single question (all 5) MUST test core concepts, clinical presentations, physiological mechanisms, or pharmacotherapies of the specified TARGET MEDICAL TOPIC. Never generate questions about unrelated conditions.
 2. VIGNETTES & MECHANISMS: Provide realistic clinical vignettes or mechanism-of-action questions appropriate for medical students.
 3. 4 DISTINCT OPTIONS: Provide 4 options (A, B, C, D) with exactly 1 unambiguous correct answer and 3 clinically plausible distractors.
-4. TEXTBOOK RATIONALE: Provide a clear explanation of why the correct option is right and why key distractors are wrong based on the textbook context.
+4. CLINICAL RATIONALE: Provide a clear, authoritative explanation of why the correct option is right and why key distractors are wrong without mentioning 'textbooks' or 'retrieved context'.
 5. STRICT JSON OUTPUT ONLY: Output ONLY a valid JSON array of 5 question objects. No markdown formatting, no code block backticks (no ```json), and no introductory or concluding commentary.
 
 JSON Schema format:
@@ -360,8 +361,8 @@ JSON Schema format:
     "option_c": "Third option",
     "option_d": "Fourth option",
     "correct_option": "A",
-    "explanation": "Clear explanation of the correct mechanism and why distractors are incorrect based on the textbook context.",
-    "book_source": "Textbook Title"
+    "explanation": "Clear explanation of the correct clinical mechanism and why distractors are incorrect.",
+    "book_source": "High-Yield Clinical Concepts"
   }
 ]
 """
@@ -701,8 +702,47 @@ def strip_figure_citations(text: str) -> str:
 
     return '\n'.join(cleaned_lines)
 
+def strip_textbook_meta_talk(text: str) -> str:
+    """Removes meta-commentary mentioning 'your textbook explains', 'the textbook states', 'according to your textbook', etc., making the AI speak directly and authoritatively."""
+    if not text:
+        return text
+
+    patterns = [
+        # "Your textbook explains that ", "The textbook states that ", "The textbook notes that "
+        r'(?i)\b(?:your|the)\s+(?:selected\s+)?(?:textbooks?|texts?|contexts?)\s+(?:explains?|states?|notes?|highlights?|describes?|indicates?|mentions?|shows?)\s+that\s+',
+        # "Your textbook explains, ", "The textbook states, "
+        r'(?i)\b(?:your|the)\s+(?:selected\s+)?(?:textbooks?|texts?|contexts?)\s+(?:explains?|states?|notes?|highlights?|describes?|indicates?|mentions?|shows?)[,\s:]+',
+        # "Your textbook also lists ", "Your textbook also mentions "
+        r'(?i)\b(?:your|the)\s+(?:selected\s+)?(?:textbooks?|texts?|contexts?)\s+also\s+(?:lists?|mentions?|describes?|notes?|highlights?)\s+',
+        # "According to your textbook, ", "According to the textbook, ", "Based on your textbook, "
+        r'(?i)\b(?:according to|based on|as stated in|as described in|as explained in|as noted in)\s+(?:your|the)\s+(?:selected\s+)?(?:textbooks?|texts?|contexts?)[,\s:]*',
+        # "In your textbook, ", "In your selected textbooks, "
+        r'(?i)\bin\s+(?:your|the)\s+(?:selected\s+)?(?:textbooks?|texts?)[,\s:]*',
+        # "The retrieved context from [Book] explains that "
+        r'(?i)\b(?:the\s+)?retrieved\s+(?:contexts?|materials?|informations?)(?:\s+from\s+[A-Za-z\s]+?)?\s+(?:explains?|states?|describes?|indicates?|shows?|mentions?)\s+(?:that\s+)?',
+        r'(?i)\b(?:the\s+)?retrieved\s+(?:contexts?|materials?|informations?)(?:\s+from\s+[A-Za-z\s]+?)?[,\s:]+',
+    ]
+
+    for pat in patterns:
+        text = re.sub(pat, '', text)
+
+    # Capitalize the start of sentences if the stripped phrase left a lowercase letter at the start of a line or after punctuation
+    def capitalize_match(m):
+        prefix = m.group(1)
+        char = m.group(2)
+        return prefix + char.upper()
+
+    # Start of line
+    text = re.sub(r'(?m)^([ \t]*)([a-z])', capitalize_match, text)
+    # After period/question/exclamation and space
+    text = re.sub(r'([.!?]\s+)([a-z])', capitalize_match, text)
+    # After bullet hyphen/asterisk
+    text = re.sub(r'(?m)^([ \t]*[-*]\s+)([a-z])', capitalize_match, text)
+
+    return text
+
 def format_whatsapp_text(text: str) -> str:
-    """Master WhatsApp text sanitizer. Fixes layout, tables, preambles, figure citations, and bolding without destroying text."""
+    """Master WhatsApp text sanitizer. Fixes layout, tables, preambles, figure citations, textbook meta-talk, and bolding without destroying text."""
     if not text:
         return text
 
@@ -714,6 +754,9 @@ def format_whatsapp_text(text: str) -> str:
 
     # 2. Deterministically strip fabricated figure/table citations
     text = strip_figure_citations(text)
+
+    # 2.2. Deterministically strip textbook meta-talk ("your textbook explains that", "according to your textbook", etc.)
+    text = strip_textbook_meta_talk(text)
 
     # 2.5. Deterministically strip any citation section or textbook footnote lists
     text = re.sub(r'(?mi)^\s*📚\s*\*?CITATIONS\*?[\s\S]*$', '', text)
@@ -2396,10 +2439,10 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             if is_intro:
                 intro_msg = (
                     f"Hello *{name}*! 👋 I am *NEURA AI* 🧠⚡ — your elite medical study co-pilot engineered specifically for MBBS students!\n\n"
-                    f"📚 *What I do:*\n"
-                    f"• Provide instant, in-depth clinical breakdowns grounded 100% in your authentic textbooks (*Robbins Pathology*, *Lippincott Pharmacology*, *Moore Anatomy*, *Jawetz Microbiology*, *Hoffbrand Haematology*).\n"
+                    f"🩺 *What I do:*\n"
+                    f"• Deliver instant, high-yield clinical breakdowns and in-depth pathophysiological explanations.\n"
                     f"• Drill you with interactive 1-by-1 USMLE/MBBS practice MCQs with instant feedback.\n"
-                    f"• Simplify complex mechanisms without robot talk or hallucinated citations.\n\n"
+                    f"• Simplify complex biochemical and drug mechanisms with crystal clarity.\n\n"
                     f"What medical topic or clinical case are we mastering today?"
                 )
                 await send_whatsapp_cloud_msg(sender_phone, intro_msg)
@@ -2407,7 +2450,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             elif is_german:
                 greeting_msg = (
                     f"Hallo *{name}*! 👋 Ich bin *NEURA AI* 🧠⚡ — dein medizinischer Lernassistent und Co-Pilot für dein Medizinstudium!\n\n"
-                    f"Welches medizinische Thema oder welchen klinischen Fall möchtest du heute aus deinen Lehrbüchern durchgehen?"
+                    f"Welches medizinische Thema oder welchen klinischen Fall möchtest du heute durchgehen?"
                 )
                 await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
                 return
@@ -2422,15 +2465,13 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 greeting_msg = (
                     f"Boss man! I dey sharp and ready. 🧠⚡\n\n"
                     f"How is study / clinical postings going today, *{name}*?\n\n"
-                    f"What medical topic, clinical case, or drug mechanism are we breaking down from your textbooks right now?"
+                    f"What medical topic, clinical case, or drug mechanism are we breaking down right now?"
                 )
                 await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
                 return
             else:
-                books_formatted = "\n• ".join(preferred_books_list) if preferred_books_list else "Your selected medical textbooks"
                 greeting_msg = (
                     f"Hello *{name}*! 👋 Welcome to *NEURA AI* — Your Personal Medical Co-Pilot! 🧠⚡\n\n"
-                    f"📚 *Your Active Study Library:*\n• {books_formatted}\n\n"
                     f"What medical topic, clinical case, or concept are we mastering today?"
                 )
                 await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
@@ -2455,7 +2496,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         if intent == "GIBBERISH":
             gibberish_msg = (
                 f"I didn't quite catch that, *{name}*! 🧐\n\n"
-                f"Type a medical condition, drug mechanism, anatomical structure, or clinical case (e.g. *Carcinoid Syndrome*, *Prazosin*, *Lobar Pneumonia*, *Tetralogy of Fallot*), and I will pull exact details from your textbooks!"
+                f"Type a medical condition, drug mechanism, anatomical structure, or clinical case (e.g. *Carcinoid Syndrome*, *Prazosin*, *Lobar Pneumonia*, *Tetralogy of Fallot*), and I will dive straight into an in-depth breakdown!"
             )
             await send_whatsapp_cloud_msg(sender_phone, gibberish_msg)
             return
@@ -2593,15 +2634,15 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             tagged_snippet = last_assistant_msg[:400]
             user_prompt = (
                 f"THE USER EXPLICITLY TAGGED/QUOTED YOUR PREVIOUS WHATSAPP MESSAGE BELOW:\n\"\"\"{tagged_snippet}\"\"\"\n\n"
-                f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\n"
+                f"RETRIEVED MEDICAL KNOWLEDGE CONTEXT:\n{formatted_context}\n\n"
                 f"USER'S QUESTION/INSTRUCTION REGARDING THE TAGGED MESSAGE:\n{query_to_search}\n\n"
-                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly."
+                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Speak authoritatively like an elite medical professor. Absolutely NEVER say 'your textbook explains', 'the textbook states', 'your textbooks list', 'based on the retrieved context', 'the text describes', or mention 'textbook/context' anywhere in your response. State the facts directly with clinical authority. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured clinical explanation directly."
             )
         else:
             user_prompt = (
-                f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\n"
+                f"RETRIEVED MEDICAL KNOWLEDGE CONTEXT:\n{formatted_context}\n\n"
                 f"STUDENT QUESTION:\n{query_to_search}\n\n"
-                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly."
+                f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Speak authoritatively like an elite medical professor. Absolutely NEVER say 'your textbook explains', 'the textbook states', 'your textbooks list', 'based on the retrieved context', 'the text describes', or mention 'textbook/context' anywhere in your response. State the facts directly with clinical authority. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured clinical explanation directly."
             )
         
         # Build dynamic user context
