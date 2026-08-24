@@ -452,7 +452,8 @@ async def classify_intent(message: str) -> str:
             }
             resp = await shared_http_client.post(url, headers=headers, json=payload)
             if resp.status_code == 200:
-                cat = resp.json()["choices"][0]["message"]["content"].strip().upper()
+                choice_msg = resp.json().get("choices", [{}])[0].get("message", {})
+                cat = (choice_msg.get("content") or "").strip().upper()
                 for valid in ["GREETING", "GRATITUDE", "ACKNOWLEDGMENT", "GIBBERISH", "QUIZ", "MEDICAL"]:
                     if valid in cat:
                         return valid
@@ -464,7 +465,7 @@ async def classify_intent(message: str) -> str:
         return "GIBBERISH"
     return "MEDICAL"
 
-async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history: list = None) -> str:
+async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history: list = None, max_tokens: int = 1000) -> str:
     if not OPENROUTER_API_KEY:
         raise ValueError("OPENROUTER_API_KEY environment variable is not set on Render!")
         
@@ -485,7 +486,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
         "model": "deepseek/deepseek-v4-flash",
         "messages": messages,
         "temperature": 0.2,
-        "max_tokens": 900,
+        "max_tokens": max_tokens,
         "provider": {
             "order": ["DeepSeek", "Together", "Fireworks", "Hyperbolic", "Novita"],
             "allow_fallbacks": True
@@ -2014,7 +2015,7 @@ async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list
     )
 
     try:
-        json_raw = await call_openrouter_llm(SYSTEM_INTERACTIVE_QUIZ_PROMPT, user_prompt)
+        json_raw = await call_openrouter_llm(SYSTEM_INTERACTIVE_QUIZ_PROMPT, user_prompt, max_tokens=2200)
         
         # Robust JSON Array extraction
         quiz_questions = None
