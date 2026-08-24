@@ -509,7 +509,27 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
         print(f"OpenRouter Error Status {response.status_code}: {response.text}")
         raise HTTPException(status_code=500, detail=f"OpenRouter Error: {response.text}")
     data = response.json()
-    return data["choices"][0]["message"]["content"]
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    content = message.get("content") or message.get("reasoning") or ""
+
+    if not content and response.status_code == 200:
+        print("⚠️ OpenRouter returned empty content, retrying with fallback provider order...")
+        payload["provider"] = {
+            "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
+            "allow_fallbacks": True
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as retry_client:
+                retry_res = await retry_client.post(url, headers=headers, json=payload)
+                if retry_res.status_code == 200:
+                    retry_data = retry_res.json()
+                    retry_msg = (retry_data.get("choices") or [{}])[0].get("message") or {}
+                    content = retry_msg.get("content") or retry_msg.get("reasoning") or ""
+        except Exception as retry_err:
+            print(f"Retry error: {retry_err}")
+
+    return (content or "").strip()
 
 async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str, sender_phone: str, chat_history: list = None) -> str:
     if not OPENROUTER_API_KEY:
@@ -2825,6 +2845,14 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 chat_history = user_doc["messages"][-6:]
 
         ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
+
+        if not ai_answer or not isinstance(ai_answer, str) or len(ai_answer.strip()) == 0:
+            await send_whatsapp_cloud_msg(
+                sender_phone,
+                f"I experienced a brief connection delay while analyzing *{clean_topic}*. Please tap below or re-send your question!"
+            )
+            return
+
         await send_whatsapp_cloud_msg(sender_phone, ai_answer)
 
         if chat_history_col is not None:
