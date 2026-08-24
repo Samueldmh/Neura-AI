@@ -448,7 +448,11 @@ async def classify_intent(message: str) -> str:
                     {"role": "user", "content": message}
                 ],
                 "temperature": 0.0,
-                "max_tokens": 10
+                "max_tokens": 10,
+                "provider": {
+                    "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
+                    "allow_fallbacks": True
+                }
             }
             resp = await shared_http_client.post(url, headers=headers, json=payload)
             if resp.status_code == 200:
@@ -488,7 +492,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
         "temperature": 0.2,
         "max_tokens": max_tokens,
         "provider": {
-            "order": ["DeepSeek", "Together", "Fireworks", "Hyperbolic", "Novita"],
+            "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
             "allow_fallbacks": True
         }
     }
@@ -1459,7 +1463,7 @@ async def normalize_medical_query(user_msg: str) -> dict:
         "temperature": 0.0,
         "max_tokens": 400,
         "provider": {
-            "order": ["DeepSeek", "Together", "Fireworks", "Hyperbolic", "Novita"],
+            "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
             "allow_fallbacks": True
         }
     }
@@ -1524,7 +1528,7 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
         "temperature": 0.0,
         "max_tokens": 400,
         "provider": {
-            "order": ["DeepSeek", "Together", "Fireworks", "Hyperbolic", "Novita"],
+            "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
             "allow_fallbacks": True
         }
     }
