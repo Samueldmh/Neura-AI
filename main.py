@@ -3430,7 +3430,7 @@ class BroadcastRequest(BaseModel):
     message: str
     target_level: str = "ALL"
     template_name: str = "neura_announcement"
-    mode: str = "smart" # "smart", "direct_only", "template_only"
+    mode: str = "template_only" # "template_only", "smart", "direct_only"
 
 class AdminLoginRequest(BaseModel):
     password: str
@@ -3824,7 +3824,7 @@ async def admin_broadcast(req: BroadcastRequest, request: Request, background_ta
 
 class AdminDirectMessageRequest(BaseModel):
     message: str
-    mode: str = "smart" # "smart", "template_only", "direct_only"
+    mode: str = "template_only" # "template_only", "smart", "direct_only"
     template_name: str = "neura_announcement"
 
 @app.post("/admin/api/students/{user_id}/send-message")
@@ -4413,8 +4413,8 @@ async def admin_dashboard_page():
                 <div>
                   <label class="block text-[11px] font-semibold text-[#5A5E67] uppercase tracking-wider mb-1">Dispatch Mode</label>
                   <select id="broadcast-mode" class="input-compact w-full text-xs">
-                    <option value="smart">Smart Hybrid (Direct + Auto-Template fallback for >24h inactive)</option>
-                    <option value="template_only">Template Only (neura_announcement - All Students Guaranteed)</option>
+                    <option value="template_only" selected>Direct Template (neura_announcement - 100% Delivery Guaranteed)</option>
+                    <option value="smart">Smart Hybrid (Direct + Auto-Template fallback for >24h)</option>
                     <option value="direct_only">Direct Message Only (Active 24h Session Only)</option>
                   </select>
                 </div>
@@ -5141,7 +5141,7 @@ async def admin_dashboard_page():
           },
           body: JSON.stringify({
             message: text,
-            mode: "smart",
+            mode: "template_only",
             template_name: "neura_announcement"
           })
         });
