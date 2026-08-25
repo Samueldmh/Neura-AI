@@ -1170,7 +1170,9 @@ async def mark_message_as_read(message_id: str):
         print(f"⚠️ Read/Typing status error: {e}")
 
 async def send_whatsapp_template_msg(to_number: str, template_name: str, parameters: list, language_code: str = "en") -> bool:
-    """Sends a Meta Pre-Approved Template Message (Utility / Marketing) to a student."""
+    """Sends a Meta Pre-Approved Template Message (Utility / Marketing) to a student.
+    Handles templates with Header + Body parameters (like neura_announcement: {{student_name}} in Header, {{announcement_text}} in Body).
+    """
     if not to_number or not WHATSAPP_TOKEN:
         return False
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
@@ -1178,7 +1180,35 @@ async def send_whatsapp_template_msg(to_number: str, template_name: str, paramet
         "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
         "Content-Type": "application/json"
     }
-    body_parameters = [{"type": "text", "text": str(p)} for p in parameters]
+    
+    # Structure components specifically for neura_announcement (Header = name, Body = announcement)
+    if template_name == "neura_announcement" and len(parameters) >= 2:
+        student_name = str(parameters[0])
+        announcement_text = str(parameters[1])
+        components = [
+            {
+                "type": "header",
+                "parameters": [
+                    {"type": "text", "text": student_name}
+                ]
+            },
+            {
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": announcement_text}
+                ]
+            }
+        ]
+    else:
+        # Standard body-only parameters fallback
+        body_parameters = [{"type": "text", "text": str(p)} for p in parameters]
+        components = [
+            {
+                "type": "body",
+                "parameters": body_parameters
+            }
+        ]
+
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -1187,16 +1217,16 @@ async def send_whatsapp_template_msg(to_number: str, template_name: str, paramet
         "template": {
             "name": template_name,
             "language": {"code": language_code},
-            "components": [
-                {
-                    "type": "body",
-                    "parameters": body_parameters
-                }
-            ]
+            "components": components
         }
     }
     try:
         res = await shared_http_client.post(url, headers=headers, json=payload)
+        if res.status_code != 200:
+            print(f"⚠️ Meta Template Send Failed ({res.status_code}) to {to_number}: {res.text}")
+            print(f"📦 Sent Payload was: {json.dumps(payload)}")
+        else:
+            print(f"✅ Meta Template Successfully Delivered ({template_name}) to {to_number}")
         return res.status_code == 200
     except Exception as e:
         print(f"⚠️ Template send error to {to_number}: {e}")
