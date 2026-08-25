@@ -1197,6 +1197,9 @@ async def send_whatsapp_template_msg(to_number: str, template_name: str, paramet
     }
     try:
         res = await shared_http_client.post(url, headers=headers, json=payload)
+        if res.status_code != 200:
+            print(f"⚠️ Meta Template Send Failed ({res.status_code}) to {to_number}: {res.text}")
+            print(f"📦 Sent Payload was: {json.dumps(payload)}")
         return res.status_code == 200
     except Exception as e:
         print(f"⚠️ Template send error to {to_number}: {e}")
