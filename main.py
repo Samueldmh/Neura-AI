@@ -83,9 +83,9 @@ qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=30, max_connections=60))
 embedding_pool = ThreadPoolExecutor(max_workers=4)
 
-# Model Architecture & Provider Routing (openai/gpt-oss-120b with Groq priority and dynamic reasoning control)
+# Model Architecture & Provider Routing (openai/gpt-oss-120b with Ultra-Fast LPU/RDU/WSE silicon priority)
 DEFAULT_MODEL = "openai/gpt-oss-120b"
-DEFAULT_PROVIDER_ORDER = ["Groq", "Together", "Fireworks", "Novita", "DeepInfra", "SiliconFlow", "StreamLake", "DeepSeek"]
+DEFAULT_PROVIDER_ORDER = ["Cerebras", "SambaNova", "Groq", "Together", "Novita", "SiliconFlow", "DeepInfra"]
 
 def get_reasoning_config(prompt: str = "", is_micro: bool = False) -> dict:
     """Returns dynamic reasoning configuration:
@@ -1965,9 +1965,9 @@ async def multi_search_qdrant(search_terms: list, preferred_books: list = None) 
     dt_multi = time.perf_counter() - t_multi_start
     print(f"⏱️ [MULTI-SEARCH TIMER] multi_search_qdrant ({len(search_terms)} terms) finished in {dt_multi:.3f}s (Total Deduplicated Chunks: {len(all_results)})")
     
-    # Sort points by score descending and cap at 15 points
+    # Sort points by score descending and cap at 9 points for high-density, low-latency prompt context
     all_results.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
-    all_results = all_results[:15]
+    all_results = all_results[:9]
     print(f"📚 Multi-search returned {len(all_results)} unique chunks from {len(search_terms)} keyword(s) with filter {preferred_books}")
     return all_results
 
@@ -2973,7 +2973,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                                 seen_p_keys.add(p_key)
                                 search_res.append(p)
                         search_res.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
-                        search_res = search_res[:15]
+                        search_res = search_res[:9]
 
         # Step 4: If still 0 chunks found even after fallback, emergency scan across full library
         if not search_res:
@@ -2994,7 +2994,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             return
 
         context_blocks = []
-        for idx, point in enumerate(search_res, 1):
+        for idx, point in enumerate(search_res[:9], 1):
             p = point.payload
             page_str = p.get('page_number') or p.get('chunk_index', 'N/A')
             book_str = p.get('book_title', 'Textbook')
