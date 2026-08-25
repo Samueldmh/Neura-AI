@@ -83,8 +83,8 @@ qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=30, max_connections=60))
 embedding_pool = ThreadPoolExecutor(max_workers=4)
 
-# OpenRouter Provider Routing: Prioritize Groq's custom LPU hardware (400-800+ tok/s) with seamless GPU fallbacks
-DEFAULT_PROVIDER_ORDER = ["Groq", "Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"]
+# OpenRouter Provider Routing: Prioritize highest throughput endpoints (SiliconFlow, DeepInfra, Novita, Groq, Together) with seamless fallbacks
+DEFAULT_PROVIDER_ORDER = ["SiliconFlow", "DeepInfra", "Novita", "StreamLake", "Together", "Fireworks", "DeepSeek", "Groq"]
 
 def get_embedding_sync(text: str):
     return list(embedder.embed(text))[0]
