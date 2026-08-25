@@ -969,6 +969,7 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
     else:
         chunks = [message_text]
 
+    all_success = True
     for chunk in chunks:
         payload = {
             "messaging_product": "whatsapp",
@@ -980,17 +981,27 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
                 "body": chunk
             }
         }
+        status_ok = False
         try:
             res = await shared_http_client.post(url, headers=headers, json=payload)
+            status_ok = (res.status_code == 200)
         except Exception:
-            async with httpx.AsyncClient(timeout=20.0) as fallback_client:
-                res = await fallback_client.post(url, headers=headers, json=payload)
-        print(f"Meta Graph API Send Status {res.status_code}: {res.text}")
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as fallback_client:
+                    res = await fallback_client.post(url, headers=headers, json=payload)
+                    status_ok = (res.status_code == 200)
+            except Exception:
+                status_ok = False
+        if not status_ok:
+            all_success = False
+        print(f"Meta Graph API Send Status {res.status_code if 'res' in locals() else 'ERR'}: {getattr(res, 'text', '')}")
         
     try:
         asyncio.create_task(log_user_chat_message(to_number, "assistant", message_text, msg_type="text"))
     except Exception:
         pass
+
+    return all_success
 
 async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_text: str, options: list):
     """Sends an Interactive List Message (max 10 options)"""
@@ -3954,6 +3965,48 @@ async def admin_broadcast(req: BroadcastRequest, request: Request, background_ta
     )
     return {"status": "started", "broadcast_id": broadcast_id}
 
+class AdminDirectMessageRequest(BaseModel):
+    message: str
+    mode: str = "smart" # "smart", "template_only", "direct_only"
+    template_name: str = "neura_announcement"
+
+@app.post("/admin/api/students/{user_id}/send-message")
+async def admin_send_student_message(user_id: str, req: AdminDirectMessageRequest, request: Request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    if token not in ADMIN_SESSIONS:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    msg_text = (req.message or "").strip()
+    if not msg_text:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+        
+    student_name = "Student"
+    if users_col is not None:
+        user_doc = await users_col.find_one({"user_id": user_id})
+        if user_doc:
+            student_name = user_doc.get("name", "Student")
+            
+    success = False
+    delivery_channel = "direct"
+    
+    if req.mode == "template_only":
+        success = await send_whatsapp_template_msg(user_id, req.template_name, [student_name, msg_text])
+        delivery_channel = f"template:{req.template_name}"
+    elif req.mode == "direct_only":
+        success = await send_whatsapp_cloud_msg(user_id, msg_text)
+        delivery_channel = "direct"
+    else: # smart hybrid (try direct session first, auto fallback to Meta template if outside 24h window)
+        success = await send_whatsapp_cloud_msg(user_id, msg_text)
+        if not success:
+            print(f"[SMART ROUTING] Direct send to {user_id} unconfirmed. Auto-falling back to template '{req.template_name}'...")
+            success = await send_whatsapp_template_msg(user_id, req.template_name, [student_name, msg_text])
+            delivery_channel = f"template:{req.template_name}"
+            
+    if success:
+        return {"status": "success", "channel": delivery_channel, "user_id": user_id}
+    else:
+        raise HTTPException(status_code=500, detail=f"Failed to deliver message via {delivery_channel}")
+
 @app.get("/admin")
 async def admin_dashboard_page():
     html_content = r"""<!DOCTYPE html>
@@ -4466,6 +4519,17 @@ async def admin_dashboard_page():
                   Select a candidate from the left panel to inspect the full chronological transcript.
                 </div>
               </div>
+
+              <!-- DIRECT MESSAGE COMPOSER FOR ADMIN (WITH AUTOMATIC 24H TEMPLATE DISPATCH) -->
+              <div id="chat-composer-bar" class="p-2.5 bg-[#F0F2F5] border-t border-[#E4E6EA] flex items-center gap-2">
+                <input type="text" id="direct-msg-input" placeholder="Type a direct reply or announcement..."
+                       onkeydown="if(event.key==='Enter') sendDirectStudentMessage()"
+                       class="flex-1 input-compact text-xs py-1.5 px-3 bg-white rounded border border-[#E4E6EA]">
+                <button type="button" onclick="sendDirectStudentMessage()" id="direct-msg-send-btn"
+                        class="btn-primary text-xs py-1.5 px-3 inline-flex items-center gap-1.5 whitespace-nowrap bg-[#008069] hover:bg-[#006A57] text-white">
+                  <i class="fa-solid fa-paper-plane text-xs"></i> <span>Send</span>
+                </button>
+              </div>
             </div>
 
           </div>
@@ -4498,8 +4562,9 @@ async def admin_dashboard_page():
                 <div>
                   <label class="block text-[11px] font-semibold text-[#5A5E67] uppercase tracking-wider mb-1">Dispatch Mode</label>
                   <select id="broadcast-mode" class="input-compact w-full text-xs">
-                    <option value="standard">Standard Session (24h Active)</option>
-                    <option value="template">Utility Template Message</option>
+                    <option value="smart">Smart Hybrid (Direct + Auto-Template fallback for >24h inactive)</option>
+                    <option value="template_only">Template Only (neura_announcement - All Students Guaranteed)</option>
+                    <option value="direct_only">Direct Message Only (Active 24h Session Only)</option>
                   </select>
                 </div>
               </div>
@@ -5204,6 +5269,54 @@ async def admin_dashboard_page():
       } finally {
         btn.innerHTML = 'Confirm Dispatch';
         btn.disabled = false;
+      }
+    }
+
+    async function sendDirectStudentMessage() {
+      if (!currentSelectedUserId) {
+        alert("Please select a candidate first.");
+        return;
+      }
+      const input = document.getElementById("direct-msg-input");
+      const text = (input?.value || "").trim();
+      if (!text) return;
+
+      const btn = document.getElementById("direct-msg-send-btn");
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-xs"></i> <span>Sending...</span>';
+      }
+
+      try {
+        const res = await fetch(`/admin/api/students/${currentSelectedUserId}/send-message`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + authToken
+          },
+          body: JSON.stringify({
+            message: text,
+            mode: "smart",
+            template_name: "neura_announcement"
+          })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          input.value = "";
+          // Reload transcript immediately to reflect the new message
+          await loadConversationForUser(currentSelectedUserId);
+        } else {
+          const err = await res.json();
+          alert("Failed to send message: " + (err.detail || "Unknown error"));
+        }
+      } catch (e) {
+        alert("Error sending message: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-paper-plane text-xs"></i> <span>Send</span>';
+        }
       }
     }
 
