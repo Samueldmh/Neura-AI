@@ -87,7 +87,11 @@ embedding_pool = ThreadPoolExecutor(max_workers=4)
 DEFAULT_PROVIDER_ORDER = ["SiliconFlow", "DeepInfra", "Novita", "StreamLake", "Together", "Fireworks", "DeepSeek", "Groq"]
 
 def get_embedding_sync(text: str):
-    return list(embedder.embed(text))[0]
+    t0 = time.perf_counter()
+    vec = list(embedder.embed(text))[0]
+    dt = time.perf_counter() - t0
+    print(f"⏱️ [EMBED TIMER] FastEmbed on '{text[:45]}...' took {dt*1000:.1f}ms ({dt:.3f}s)")
+    return vec
 
 print(f"MONGO_URI Present: {bool(MONGO_URI)}")
 mongo_client = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
@@ -519,6 +523,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
     if not OPENROUTER_API_KEY:
         raise ValueError("OPENROUTER_API_KEY environment variable is not set on Render!")
         
+    t_start = time.perf_counter()
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
@@ -558,6 +563,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
     choice = (data.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     content = message.get("content") or message.get("reasoning") or ""
+    provider_used = data.get("provider", "UnknownProvider")
 
     if not content and response.status_code == 200:
         print("⚠️ OpenRouter returned empty content, retrying with fallback provider order...")
@@ -572,9 +578,12 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
                     retry_data = retry_res.json()
                     retry_msg = (retry_data.get("choices") or [{}])[0].get("message") or {}
                     content = retry_msg.get("content") or retry_msg.get("reasoning") or ""
+                    provider_used = retry_data.get("provider", provider_used)
         except Exception as retry_err:
             print(f"Retry error: {retry_err}")
 
+    dt = time.perf_counter() - t_start
+    print(f"⏱️ [LLM TIMER] call_openrouter_llm completed in {dt:.3f}s (Provider: {provider_used}, Tokens Generated: ~{len(content.split())*4/3:.0f})")
     return (content or "").strip()
 
 async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str, sender_phone: str, chat_history: list = None) -> str:
@@ -1600,6 +1609,7 @@ def clean_medical_topic_title(raw_query: str, corrected_topic: str = "") -> str:
 
 def extract_medical_terms(user_msg: str) -> list:
     """Instantly extract clean medical keywords by normalizing typos, expanding clinical synonyms/subclasses, preserving short medical terms (B-cell, T-cell), and stripping filler words."""
+    t0 = time.perf_counter()
     msg = user_msg
     # 0. Expand clinical acronyms before stop-word removal (prevents "ALL", "AML", "DKA" from being stripped)
     for pat, repl in MEDICAL_ACRONYMS_MAP.items():
@@ -1664,11 +1674,12 @@ def extract_medical_terms(user_msg: str) -> list:
             if exp not in phrases:
                 phrases.append(exp)
         
-    print(f"[SEARCH] Extracted search keywords: {phrases} (from: '{user_msg}')")
+    print(f"⏱️ [KEYWORD TIMER] extract_medical_terms finished in {(time.perf_counter() - t0)*1000:.2f}ms -> {phrases}")
     return phrases
 
 async def normalize_medical_query(user_msg: str) -> dict:
     """Upfront Micro-LLM normalizer: resolves typos, abbreviations, and expands clinical concepts into standard textbook search queries."""
+    t_start = time.perf_counter()
     fallback_result = {"search_keywords": extract_medical_terms(user_msg), "corrected_topic": user_msg}
     if not OPENROUTER_API_KEY:
         return fallback_result
@@ -1706,13 +1717,16 @@ async def normalize_medical_query(user_msg: str) -> dict:
     }
     try:
         res = await shared_http_client.post(url, headers=headers, json=payload)
+        dt = time.perf_counter() - t_start
         if res.status_code == 200:
             text = res.json()["choices"][0]["message"]["content"]
             parsed = extract_json_from_llm(text)
             if isinstance(parsed, dict) and "search_keywords" in parsed:
+                print(f"⏱️ [NORMALIZER TIMER] normalize_medical_query completed in {dt:.3f}s -> {parsed.get('search_keywords')}")
                 return parsed
+        print(f"⏱️ [NORMALIZER TIMER] normalize_medical_query HTTP {res.status_code} in {dt:.3f}s")
     except Exception as e:
-        print(f"⚠️ Micro-LLM normalizer error: {e}")
+        print(f"⚠️ Micro-LLM normalizer error ({time.perf_counter() - t_start:.3f}s): {e}")
 
     return fallback_result
 
@@ -1720,6 +1734,7 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
     """Evaluates whether retrieved textbook chunks sufficiently cover the student's question before declaring a topic missing.
     If inadequate due to synonym mismatch, narrow search, or hierarchical difference, returns re-anchored queries for second-pass scan.
     """
+    t_start = time.perf_counter()
     if not OPENROUTER_API_KEY or not retrieved_points:
         return {"is_adequate": bool(retrieved_points), "is_genuinely_absent": not bool(retrieved_points), "re_anchored_queries": []}
 
@@ -1771,13 +1786,16 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
     }
     try:
         res = await shared_http_client.post(url, headers=headers, json=payload)
+        dt = time.perf_counter() - t_start
         if res.status_code == 200:
             text = res.json()["choices"][0]["message"]["content"]
             parsed = extract_json_from_llm(text)
             if isinstance(parsed, dict) and "is_adequate" in parsed:
+                print(f"⏱️ [EVALUATOR TIMER] evaluate_retrieval_adequacy completed in {dt:.3f}s (Adequate: {parsed.get('is_adequate')})")
                 return parsed
+        print(f"⏱️ [EVALUATOR TIMER] evaluate_retrieval_adequacy HTTP {res.status_code} in {dt:.3f}s")
     except Exception as e:
-        print(f"⚠️ Micro-LLM retrieval evaluator error: {e}")
+        print(f"⚠️ Micro-LLM retrieval evaluator error ({time.perf_counter() - t_start:.3f}s): {e}")
 
     return {"is_adequate": True, "is_genuinely_absent": False, "re_anchored_queries": []}
 
@@ -1805,6 +1823,7 @@ def extract_book_keywords(preferred_books: list) -> list:
 async def search_single_book(query_vector: list, book: str, limit: int = 4) -> list:
     if not book or not isinstance(book, str) or book.startswith("Skip"):
         return []
+    t0 = time.perf_counter()
     try:
         res = await qdrant.query_points(
             collection_name=COLLECTION_NAME,
@@ -1856,31 +1875,41 @@ async def search_single_book(query_vector: list, book: str, limit: int = 4) -> l
 
 async def search_qdrant(query_text: str, limit: int = 8, preferred_books: list = None) -> list:
     """Search Qdrant in PARALLEL across all selected textbooks for sub-second retrieval."""
+    t_start = time.perf_counter()
     try:
         loop = asyncio.get_running_loop()
+        t_embed_start = time.perf_counter()
         query_vector = await loop.run_in_executor(embedding_pool, get_embedding_sync, query_text)
+        dt_embed = time.perf_counter() - t_embed_start
 
         if not preferred_books:
+            t_qdrant_start = time.perf_counter()
             res = await qdrant.query_points(
                 collection_name=COLLECTION_NAME,
                 query=query_vector,
                 limit=limit
             )
+            dt_total = time.perf_counter() - t_start
+            print(f"⏱️ [QDRANT TIMER] search_qdrant(all_books, '{query_text[:30]}') finished in {dt_total:.3f}s (Embed: {dt_embed*1000:.1f}ms, Qdrant: {(time.perf_counter()-t_qdrant_start)*1000:.1f}ms, Chunks: {len(res.points)})")
             return res.points
 
         # Query all selected textbooks concurrently in parallel!
+        t_qdrant_start = time.perf_counter()
         tasks = [search_single_book(query_vector, b, limit=limit) for b in preferred_books if b and not b.startswith("Skip")]
         book_results = await asyncio.gather(*tasks)
         all_points = [p for sub in book_results for p in sub]
         all_points.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
+        dt_total = time.perf_counter() - t_start
+        print(f"⏱️ [QDRANT TIMER] search_qdrant({len(preferred_books)} books, '{query_text[:30]}') finished in {dt_total:.3f}s (Embed: {dt_embed*1000:.1f}ms, Qdrant: {(time.perf_counter()-t_qdrant_start)*1000:.1f}ms, Chunks: {len(all_points)})")
         return all_points
 
     except Exception as outer_e:
-        print(f"❌ Error in search_qdrant: {outer_e}")
+        print(f"❌ Error in search_qdrant ({time.perf_counter() - t_start:.3f}s): {outer_e}")
         return []
 
 async def multi_search_qdrant(search_terms: list, preferred_books: list = None) -> list:
     """Run separate Qdrant searches for each extracted medical keyword CONCURRENTLY, with automatic cross-textbook safety net if single book context is sparse."""
+    t_multi_start = time.perf_counter()
     seen_texts = set()
     all_results = []
     
@@ -1906,6 +1935,9 @@ async def multi_search_qdrant(search_terms: list, preferred_books: list = None) 
                 if text_key not in seen_texts:
                     seen_texts.add(text_key)
                     all_results.append(point)
+    
+    dt_multi = time.perf_counter() - t_multi_start
+    print(f"⏱️ [MULTI-SEARCH TIMER] multi_search_qdrant ({len(search_terms)} terms) finished in {dt_multi:.3f}s (Total Deduplicated Chunks: {len(all_results)})")
     
     # Sort points by score descending and cap at 15 points
     all_results.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
@@ -2489,6 +2521,8 @@ async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_r
 
 async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, is_tagged_reply: bool = False):
     """Internal task to run RAG & OpenRouter LLM and send WhatsApp reply"""
+    req_t0 = time.perf_counter()
+    print(f"\n🚀 [PIPELINE START] Received message from {sender_phone}: '{user_msg[:60]}'")
     try:
         # Log incoming user message for admin conversation transcript and diagnostics
         try:
@@ -2510,6 +2544,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         # Update daily study streak and activity timestamp
         streak = await update_user_study_streak(sender_phone)
+        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] User profile loaded: '{name}' ({level}), Streak: {streak}d")
 
         # Handle Start Study Session button from reminder
         if user_msg == "START_STUDY_SESSION":
@@ -2727,7 +2762,9 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             return
 
         query_to_search = user_msg
+        t_intent_start = time.perf_counter()
         intent = await classify_intent(user_msg)
+        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Intent classified: '{intent}' (took {(time.perf_counter()-t_intent_start)*1000:.1f}ms)")
         
         if intent == "GREETING":
             clean_msg = user_msg.strip().lower()
@@ -2863,21 +2900,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         }
                     )
                 
-                # [DISABLED] Automatic follow-up Practice MCQs interactive button per user request
-                # clean_topic_label = clean_topic
-                # if len(clean_topic_label) > 90:
-                #     clean_topic_label = clean_topic_label[:87] + "..."
-                # topic_snippet = clean_topic[:100]
-                # await send_whatsapp_interactive_button(
-                #     sender_phone,
-                #     f"Ready to practice MCQs on *{clean_topic_label}*?",
-                #     [
-                #         {"id": f"GENERATE_QUIZ:{topic_snippet}", "title": "📝 Practice MCQs"}
-                #     ]
-                # )
-                return
-
-        # ⚡ Step 1: Speculative Parallel Execution (Concurrent Vector Retrieval + Typo Normalization)
+                # [DISABLED] Automatic follow-up Practice MCQs interactive button per user r        # ⚡ Step 1: Speculative Parallel Execution (Concurrent Vector Retrieval + Typo Normalization)
+        t_parallel_start = time.perf_counter()
         local_terms = extract_medical_terms(search_term)
         active_books = get_explicit_book_override(search_term, preferred_books_list)
 
@@ -2886,6 +2910,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         task_search = multi_search_qdrant(local_terms, preferred_books=active_books)
 
         normalized_data, search_res = await asyncio.gather(task_norm, task_search)
+        dt_parallel = time.perf_counter() - t_parallel_start
+        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Speculative Parallel Retrieval & Normalization finished in {dt_parallel:.3f}s (Initial Chunks: {len(search_res)})")
 
         clean_topic = clean_medical_topic_title(search_term, normalized_data.get("corrected_topic", ""))
         medical_terms = normalized_data.get("search_keywords") or local_terms
@@ -2899,6 +2925,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         eval_result = {"is_adequate": True, "is_genuinely_absent": False}
 
         if not is_high_confidence:
+            print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Running fallback evaluation (High-Confidence: {is_high_confidence})...")
             # Fallback path for ambiguous or 0-chunk queries
             if not search_res:
                 print(f"[SEARCH FALLBACK] 0 chunks with local terms. Re-querying with normalized terms: {medical_terms}")
@@ -2993,17 +3020,23 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             if user_doc and "messages" in user_doc:
                 chat_history = user_doc["messages"][-6:]
 
+        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Dispatching to Main Medical LLM ({len(context_blocks)} chunks, ~{len(formatted_context)} context chars)...")
+        t_llm_start = time.perf_counter()
         ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
+        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Main Medical LLM finished in {time.perf_counter()-t_llm_start:.3f}s")
 
         if not ai_answer or not isinstance(ai_answer, str) or len(ai_answer.strip()) == 0:
             await send_whatsapp_cloud_msg(
-                sender_phone,
+                sender_phone, 
                 f"I experienced a brief connection delay while analyzing *{clean_topic}*. Please tap below or re-send your question!"
             )
             return
 
         streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
+        t_wa_start = time.perf_counter()
         await send_whatsapp_cloud_msg(sender_phone, ai_answer + streak_footer)
+        dt_total = time.perf_counter() - req_t0
+        print(f"🎉 [PIPELINE COMPLETE | TOTAL: {dt_total:.3f}s] Delivered response to {sender_phone} via WhatsApp Cloud API in {(time.perf_counter()-t_wa_start)*1000:.1f}ms")
 
         if chat_history_col is not None:
             new_msgs = [
