@@ -3869,6 +3869,25 @@ async def admin_dashboard_page():
       border-left: 3px solid var(--text-primary);
     }
 
+    /* Authentic WhatsApp Theme for Transcript Area */
+    .wa-chat-bg {
+      background-color: #EFEAE2;
+      background-image: radial-gradient(#D1C7B7 0.85px, transparent 0.85px);
+      background-size: 16px 16px;
+    }
+    .wa-bubble-user {
+      background-color: #D9FDD3;
+      border-radius: 8px 8px 2px 8px;
+      box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+      color: #111B21;
+    }
+    .wa-bubble-ai {
+      background-color: #FFFFFF;
+      border-radius: 8px 8px 8px 2px;
+      box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+      color: #111B21;
+    }
+
     .custom-scrollbar::-webkit-scrollbar { width: 5px; height: 5px; }
     .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
     .custom-scrollbar::-webkit-scrollbar-thumb { background: #D0D4DA; border-radius: 2px; }
@@ -4104,19 +4123,19 @@ async def admin_dashboard_page():
             </div>
 
             <!-- RIGHT TRANSCRIPT STREAM -->
-            <div class="lg:col-span-8 card flex flex-col h-full overflow-hidden">
+            <div class="lg:col-span-8 card flex flex-col h-full overflow-hidden border border-[#E4E6EA] shadow-xs">
               <!-- HEADER -->
-              <div class="p-3 border-b border-[#E4E6EA] flex items-center justify-between bg-[#F1F2F4]">
+              <div class="p-3 border-b border-[#E4E6EA] flex items-center justify-between bg-[#F0F2F5]">
                 <div class="flex items-center gap-2.5">
-                  <div id="chat-header-avatar" class="w-7 h-7 rounded bg-[#17181A] text-white font-bold text-xs flex items-center justify-center">
+                  <div id="chat-header-avatar" class="w-8 h-8 rounded-full bg-[#008069] text-white font-bold text-xs flex items-center justify-center shadow-xs">
                     --
                   </div>
                   <div>
                     <div class="flex items-center gap-1.5">
-                      <span id="chat-header-name" class="font-bold text-xs text-[#17181A]">Select a candidate</span>
+                      <span id="chat-header-name" class="font-semibold text-xs text-[#111B21]">Select a candidate</span>
                       <span id="chat-header-level" class="badge-status-neutral text-[10px]">--</span>
                     </div>
-                    <div class="text-[11px] text-[#5A5E67]">
+                    <div class="text-[11px] text-[#667781]">
                       <span id="chat-header-phone" class="font-mono">--</span> &bull; <span id="chat-header-streak">--</span>
                     </div>
                   </div>
@@ -4124,22 +4143,22 @@ async def admin_dashboard_page():
 
                 <div class="flex items-center gap-2">
                   <input type="text" id="in-chat-search" oninput="filterInChatMessages()" placeholder="Search in transcript..."
-                         class="input-compact text-xs py-0.5 px-2 w-36 sm:w-44 hidden sm:block">
-                  <a id="chat-header-wa-btn" href="#" target="_blank" class="btn-secondary text-[11px] py-1 px-2">
-                    <span>Open WhatsApp</span>
+                         class="input-compact text-xs py-0.5 px-2 w-36 sm:w-44 hidden sm:block bg-white">
+                  <a id="chat-header-wa-btn" href="#" target="_blank" class="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center gap-1 text-[#008069] border-[#008069]/30 hover:bg-[#008069]/5">
+                    <i class="fa-brands fa-whatsapp text-xs"></i> <span>WhatsApp</span>
                   </a>
                 </div>
               </div>
 
               <!-- DIAGNOSTIC BANNER -->
-              <div id="chat-diagnostic-banner" class="hidden p-2 bg-[#FDEDEC] border-b border-[#F5B7B1] text-xs font-semibold text-[#C0392B] flex items-center justify-between">
+              <div id="chat-diagnostic-banner" class="hidden p-2 bg-[#FEF7EC] border-b border-[#FAD7A0] text-xs font-semibold text-[#B7791F] flex items-center justify-between">
                 <span id="chat-diagnostic-text">Diagnostic alert detected in this session</span>
                 <span class="badge-status-warning text-[10px]">ALERT</span>
               </div>
 
-              <!-- MESSAGES STREAM -->
-              <div id="chat-stream-container" class="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-white">
-                <div class="text-center py-20 text-xs text-[#9298A3]">
+              <!-- MESSAGES STREAM (AUTHENTIC WHATSAPP WALLPAPER & BUBBLES) -->
+              <div id="chat-stream-container" class="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar wa-chat-bg">
+                <div class="m-auto text-center text-[#667781] p-8 text-xs">
                   Select a candidate from the left panel to inspect the full chronological transcript.
                 </div>
               </div>
@@ -4202,20 +4221,23 @@ async def admin_dashboard_page():
             </div>
 
             <!-- RIGHT PREVIEW -->
-            <div class="lg:col-span-5 card p-4 space-y-2.5 bg-[#F1F2F4]">
-              <div class="flex items-center justify-between border-b border-[#E4E6EA] pb-2 text-xs font-bold text-[#17181A]">
+            <div class="lg:col-span-5 card p-4 space-y-2.5 bg-[#F0F2F5]">
+              <div class="flex items-center justify-between border-b border-[#E4E6EA] pb-2 text-xs font-bold text-[#111B21]">
                 <span>WhatsApp Client Preview</span>
-                <span id="preview-time" class="font-mono text-[11px] text-[#5A5E67]">--:--</span>
+                <span id="preview-time" class="font-mono text-[11px] text-[#667781]">--:--</span>
               </div>
 
-              <div class="card p-3.5 bg-white min-h-[200px] text-xs space-y-1.5">
-                <div class="text-[10px] font-bold uppercase tracking-wider text-[#5A5E67]">NEURA AI Broadcast</div>
-                <div id="preview-text" class="text-xs text-[#17181A] whitespace-pre-wrap leading-relaxed">
-                  Type your announcement on the left to see live rendering.
+              <div class="wa-chat-bg p-3.5 rounded min-h-[220px] flex flex-col justify-start">
+                <div class="wa-bubble-ai p-3 text-xs space-y-1">
+                  <div class="text-[10px] font-bold uppercase tracking-wider text-[#008069] border-b border-[#E9EDEF] pb-0.5">NEURA AI Broadcast</div>
+                  <div id="preview-text" class="text-xs text-[#111B21] whitespace-pre-wrap leading-relaxed">
+                    Type your announcement on the left to see live rendering.
+                  </div>
+                  <div class="text-[10px] text-[#667781] text-right font-sans mt-0.5" id="preview-time-footer">--:--</div>
                 </div>
               </div>
               
-              <div class="text-[11px] text-[#5A5E67]">
+              <div class="text-[11px] text-[#667781]">
                 Dispatches execute asynchronously with automatic exponential backoff.
               </div>
             </div>
@@ -4716,13 +4738,15 @@ async def admin_dashboard_page():
 
       if (highlightQuery) {
         const regex = new RegExp(`(${highlightQuery})`, "gi");
-        html = html.replace(regex, '<mark class="bg-[#F1F2F4] text-[#17181A] font-bold px-0.5">$1</mark>');
+        html = html.replace(regex, '<mark class="bg-[#FFF3CD] text-[#111B21] font-bold px-0.5 rounded">$1</mark>');
       }
 
       html = html
-        .replace(/\*(.*?)\*/g, '<b class="font-bold text-[#17181A]">$1</b>')
-        .replace(/_(.*?)_/g, '<i class="italic text-[#5A5E67]">$1</i>')
-        .replace(/`([^`]+)`/g, '<code class="bg-[#F1F2F4] px-1 py-0.5 rounded font-mono text-[11px] border border-[#E4E6EA]">$1</code>');
+        .replace(/\*(.*?)\*/g, '<b class="font-bold text-[#111B21]">$1</b>')
+        .replace(/_(.*?)_/g, '<i class="italic text-[#3B4A54]">$1</i>')
+        .replace(/~([^~]+)~/g, '<s class="line-through text-[#667781]">$1</s>')
+        .replace(/```([\s\S]*?)```/g, '<pre class="bg-[#F0F2F5] p-2 rounded font-mono text-[11px] border border-[#E9EDEF] overflow-x-auto my-1 text-[#111B21]"><code>$1</code></pre>')
+        .replace(/`([^`]+)`/g, '<code class="bg-[#F0F2F5] px-1 py-0.5 rounded font-mono text-[11px] text-[#111B21] border border-[#E9EDEF]">$1</code>');
 
       return html;
     }
@@ -4731,7 +4755,7 @@ async def admin_dashboard_page():
       const container = document.getElementById("chat-stream-container");
       if (!messages || messages.length === 0) {
         container.innerHTML = `
-          <div class="m-auto text-center text-[#9298A3] p-8 text-xs">
+          <div class="m-auto text-center text-[#667781] p-8 text-xs">
             No message interactions recorded.
           </div>
         `;
@@ -4747,24 +4771,27 @@ async def admin_dashboard_page():
         if (isUser) {
           return `
             <div class="flex justify-end items-end gap-2">
-              <div class="bg-[#F1F2F4] border border-[#E4E6EA] rounded p-2.5 max-w-[85%] sm:max-w-[75%] space-y-0.5">
-                <div class="text-[10px] font-bold text-[#5A5E67]">Candidate</div>
-                <div class="text-xs text-[#17181A] whitespace-pre-wrap leading-relaxed">${formatted}</div>
-                <div class="text-[10px] text-[#9298A3] text-right font-mono mt-1">${timeStr}</div>
+              <div class="wa-bubble-user p-2.5 max-w-[85%] sm:max-w-[75%] space-y-0.5">
+                <div class="text-[10px] font-semibold text-[#008069]">Candidate</div>
+                <div class="text-xs text-[#111B21] whitespace-pre-wrap leading-relaxed">${formatted}</div>
+                <div class="text-[10px] text-[#667781] text-right font-sans flex items-center justify-end gap-1 mt-0.5">
+                  <span>${timeStr}</span>
+                  <i class="fa-solid fa-check-double text-[#53bdeb] text-[10px]"></i>
+                </div>
               </div>
             </div>
           `;
         } else {
           return `
             <div class="flex justify-start items-end gap-2">
-              <div class="bg-white border border-[#E4E6EA] rounded p-3 max-w-[90%] sm:max-w-[80%] space-y-1 shadow-xs">
-                <div class="text-[10px] font-bold text-[#17181A] border-b border-[#E4E6EA] pb-1 mb-1 flex items-center justify-between">
+              <div class="wa-bubble-ai p-3 max-w-[90%] sm:max-w-[80%] space-y-1">
+                <div class="text-[11px] font-bold text-[#008069] border-b border-[#E9EDEF] pb-1 mb-1 flex items-center justify-between">
                   <span>NEURA AI Clinical Engine</span>
-                  ${m.metadata?.msg_type ? `<span class="text-[9px] font-mono text-[#5A5E67]">(${m.metadata.msg_type})</span>` : ''}
+                  ${m.metadata?.msg_type ? `<span class="text-[9px] font-mono text-[#667781]">(${m.metadata.msg_type})</span>` : ''}
                 </div>
-                ${hasIssue ? '<div class="mb-1 text-[10px] font-bold text-[#C0392B] bg-[#FDEDEC] border border-[#F5B7B1] px-1.5 py-0.5 rounded w-max">Diagnostic Alert</div>' : ''}
-                <div class="text-xs text-[#17181A] whitespace-pre-wrap leading-relaxed">${formatted}</div>
-                <div class="text-[10px] text-[#9298A3] text-right font-mono mt-1">${timeStr}</div>
+                ${hasIssue ? '<div class="mb-1 text-[10px] font-bold text-[#B7791F] bg-[#FEF7EC] border border-[#FAD7A0] px-1.5 py-0.5 rounded w-max">Diagnostic Alert</div>' : ''}
+                <div class="text-xs text-[#111B21] whitespace-pre-wrap leading-relaxed">${formatted}</div>
+                <div class="text-[10px] text-[#667781] text-right font-sans mt-0.5">${timeStr}</div>
               </div>
             </div>
           `;
@@ -4780,8 +4807,9 @@ async def admin_dashboard_page():
       document.getElementById("char-count").innerText = raw.length + " chars";
       
       let formatted = raw
-        .replace(/\*(.*?)\*/g, '<b class="font-bold text-[#17181A]">$1</b>')
-        .replace(/_(.*?)_/g, '<i class="italic text-[#5A5E67]">$1</i>');
+        .replace(/\*(.*?)\*/g, '<b class="font-bold text-[#111B21]">$1</b>')
+        .replace(/_(.*?)_/g, '<i class="italic text-[#3B4A54]">$1</i>')
+        .replace(/~([^~]+)~/g, '<s class="line-through text-[#667781]">$1</s>');
         
       if (!formatted.trim()) {
         formatted = "Type announcement on the left to see live rendering.";
@@ -4789,7 +4817,10 @@ async def admin_dashboard_page():
       document.getElementById("preview-text").innerHTML = formatted;
       
       const now = new Date();
-      document.getElementById("preview-time").innerText = now.getHours().toString().padStart(2, '0') + ":" + now.getMinutes().toString().padStart(2, '0');
+      const timeFormatted = now.getHours().toString().padStart(2, '0') + ":" + now.getMinutes().toString().padStart(2, '0');
+      document.getElementById("preview-time").innerText = timeFormatted;
+      const footerTime = document.getElementById("preview-time-footer");
+      if (footerTime) footerTime.innerText = timeFormatted;
     }
 
     function insertFormatting(prefix, suffix) {
