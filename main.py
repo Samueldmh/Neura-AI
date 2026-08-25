@@ -4112,8 +4112,147 @@ async def admin_dashboard_page():
       </header>
 
       <!-- CONTENT WRAPPER -->
-      <main class="w-full p-4 sm:p-6 lg:p-8 space-y-6 flex-1">
+      <main class="w-full p-4 sm:p-6 lg:p-8 space-y-8 flex-1">
       
+      <!-- ================= REACT BITS PRO: HERO 1 (TWO-COLUMN WITH CTA & SOCIAL PROOF) ================= -->
+      <section class="glass-card rounded-3xl p-6 sm:p-8 lg:p-10 relative overflow-hidden border border-lime-accent/20 shadow-2xl transition-all duration-300">
+        <!-- Ambient background glows -->
+        <div class="absolute -top-24 -right-24 w-80 h-80 bg-lime-accent/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="absolute -bottom-24 -left-24 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center relative z-10">
+          
+          <!-- LEFT COLUMN: HEADLINE, COPY, CTA & SOCIAL PROOF -->
+          <div class="lg:col-span-7 space-y-6">
+            <!-- STATUS BADGE PILL -->
+            <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#1B1E24] border border-lime-accent/30 text-lime-accent text-xs font-bold shadow-sm">
+              <span class="w-2 h-2 rounded-full bg-lime-accent animate-ping"></span>
+              <span class="tracking-wide">NEURA AI 2.0 • CLINICAL INTELLIGENCE SUITE</span>
+            </div>
+
+            <!-- HERO HEADLINE -->
+            <h1 class="text-3xl sm:text-4xl lg:text-5xl font-black text-white tracking-tight leading-[1.15]">
+              Empowering <span class="text-transparent bg-clip-text bg-gradient-to-r from-lime-accent via-emerald-300 to-lime-accent">Clinical Excellence</span> for Next-Gen Medical Doctors.
+            </h1>
+
+            <!-- HERO COPY -->
+            <p class="text-slate-300 text-sm sm:text-base leading-relaxed max-w-2xl font-normal">
+              The high-yield medical AI hub for Nigerian MBBS candidates. Real-time RAG textbook retrieval across Robbins, Kumar &amp; Clark, Jawetz, and Ganong, paired with live diagnostic chat transcripts, automated study streaks, and high-precision WhatsApp dispatches.
+            </p>
+
+            <!-- CALL TO ACTION (CTA) GROUP -->
+            <div class="flex flex-wrap items-center gap-3 pt-2">
+              <button onclick="switchTab('broadcast')" class="px-5 py-3 rounded-xl bg-lime-accent hover:bg-lime-hover text-black font-extrabold text-xs sm:text-sm shadow-lg shadow-lime-accent/25 hover:shadow-lime-accent/40 transition-all flex items-center gap-2 transform active:scale-95">
+                <i class="fa-solid fa-bullhorn text-xs"></i>
+                <span>Launch WhatsApp Broadcast</span>
+              </button>
+              <button onclick="switchTab('chats')" class="px-5 py-3 rounded-xl bg-[#1B1E24] hover:bg-[#252A33] text-white font-bold text-xs sm:text-sm border border-obsidian-border hover:border-slate-600 transition-all flex items-center gap-2 transform active:scale-95">
+                <i class="fa-solid fa-comments text-lime-accent text-xs"></i>
+                <span>Inspect Transcripts</span>
+              </button>
+              <button onclick="loadAllData()" title="Sync Real-Time Data" class="p-3 rounded-xl bg-[#1B1E24] hover:bg-[#252A33] text-slate-300 hover:text-white border border-obsidian-border transition-all flex items-center justify-center">
+                <i class="fa-solid fa-arrows-rotate text-lime-accent text-sm"></i>
+              </button>
+            </div>
+
+            <!-- SOCIAL PROOF & TRUST BADGES -->
+            <div class="pt-6 border-t border-obsidian-border flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6">
+              <!-- AVATAR GROUP -->
+              <div class="flex items-center">
+                <div class="flex -space-x-2.5 overflow-hidden">
+                  <div class="inline-block h-8 w-8 rounded-full ring-2 ring-[#14161A] bg-emerald-500/20 text-emerald-300 font-bold flex items-center justify-center text-[10px] border border-emerald-500/40">SO</div>
+                  <div class="inline-block h-8 w-8 rounded-full ring-2 ring-[#14161A] bg-lime-500/20 text-lime-accent font-bold flex items-center justify-center text-[10px] border border-lime-500/40">FA</div>
+                  <div class="inline-block h-8 w-8 rounded-full ring-2 ring-[#14161A] bg-blue-500/20 text-blue-300 font-bold flex items-center justify-center text-[10px] border border-blue-500/40">DA</div>
+                  <div class="inline-block h-8 w-8 rounded-full ring-2 ring-[#14161A] bg-purple-500/20 text-purple-300 font-bold flex items-center justify-center text-[10px] border border-purple-500/40">AO</div>
+                  <div class="inline-block h-8 w-8 rounded-full ring-2 ring-[#14161A] bg-[#1B1E24] text-slate-200 font-bold flex items-center justify-center text-[9px] border border-slate-700">+500</div>
+                </div>
+              </div>
+
+              <!-- RATING & TEXT -->
+              <div class="space-y-0.5">
+                <div class="flex items-center gap-1 text-amber-400 text-xs">
+                  <i class="fa-solid fa-star"></i>
+                  <i class="fa-solid fa-star"></i>
+                  <i class="fa-solid fa-star"></i>
+                  <i class="fa-solid fa-star"></i>
+                  <i class="fa-solid fa-star"></i>
+                  <span class="font-extrabold text-white text-xs ml-1">4.98 / 5.0</span>
+                </div>
+                <p class="text-[11px] text-slate-400 font-medium">Trusted by MBBS candidates across Nigeria</p>
+              </div>
+
+              <!-- STAT STRIP -->
+              <div class="hidden sm:flex items-center gap-3 pl-4 border-l border-obsidian-border text-[11px] text-slate-400 font-mono">
+                <span class="flex items-center gap-1"><i class="fa-solid fa-bolt text-lime-accent text-[9px]"></i> 0.8s RAG</span>
+                <span>•</span>
+                <span class="flex items-center gap-1"><i class="fa-solid fa-book-medical text-emerald-400 text-[9px]"></i> 100% Grounded</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT COLUMN: INTERACTIVE CLINICAL PREVIEW WINDOW MOCKUP -->
+          <div class="lg:col-span-5 relative">
+            <div class="bg-[#0D0F12] border border-obsidian-border rounded-2xl p-4 sm:p-5 shadow-2xl space-y-3 relative">
+              <!-- MOCKUP WINDOW HEADER -->
+              <div class="flex items-center justify-between pb-3 border-b border-obsidian-border text-xs">
+                <div class="flex items-center gap-1.5">
+                  <span class="w-2.5 h-2.5 rounded-full bg-[#ff5f56]"></span>
+                  <span class="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]"></span>
+                  <span class="w-2.5 h-2.5 rounded-full bg-[#27c93f]"></span>
+                  <span class="ml-2 font-mono text-[10px] text-slate-400">node:neura-clinical-engine</span>
+                </div>
+                <div class="flex items-center gap-1.5 px-2 py-0.5 rounded bg-lime-accent/10 border border-lime-accent/20 text-lime-accent text-[10px] font-bold">
+                  <span class="w-1.5 h-1.5 rounded-full bg-lime-accent animate-pulse"></span>
+                  <span>ONLINE</span>
+                </div>
+              </div>
+
+              <!-- SIMULATED REAL-TIME WHATSAPP CLINICAL INTERACTION -->
+              <div class="space-y-2.5 pt-1 font-sans">
+                <!-- USER QUESTION BUBBLE -->
+                <div class="flex justify-end">
+                  <div class="wa-bubble-user p-2.5 max-w-[90%] text-[11px] space-y-0.5">
+                    <p class="font-bold text-lime-accent text-[10px]">Student (500L)</p>
+                    <p class="text-slate-200">Explain the pathophysiology of Nephrotic Syndrome in simple terms.</p>
+                  </div>
+                </div>
+
+                <!-- AI RESPONSE BUBBLE -->
+                <div class="flex justify-start">
+                  <div class="wa-bubble-ai p-3 max-w-[95%] text-[11px] space-y-1.5 border border-emerald-500/30 shadow-md">
+                    <div class="font-black text-emerald-300 text-[10px] flex items-center justify-between">
+                      <span>🧠 NEURA AI • Clinical Tutor</span>
+                      <span class="font-mono text-[9px] text-slate-300">Robbins Path L3</span>
+                    </div>
+                    <p class="text-white font-bold"># *NEPHROTIC SYNDROME*</p>
+                    <p class="text-slate-200 leading-snug">
+                      Podocyte injury causes massive *proteinuria* (&gt;3.5g/24h), *hypoalbuminemia*, and severe *generalized edema*.
+                    </p>
+                    <div class="bg-black/30 p-1.5 rounded border border-white/10 text-[10px] text-slate-300">
+                      &gt; *Key Takeaway:* Loss of negative charge on glomerular basement membrane leads to albumin filtration.
+                    </div>
+                    <p class="text-[9px] text-amber-300 italic font-mono pt-0.5">_🔥 5-Day Study Streak_</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- FLOATING LIVE TELEMETRY PILLS -->
+              <div class="grid grid-cols-2 gap-2 pt-2 text-[10px] font-mono">
+                <div class="bg-[#14161A] p-2 rounded-xl border border-obsidian-border flex items-center justify-between">
+                  <span class="text-slate-400">Total Students</span>
+                  <span id="hero-stat-students" class="text-lime-accent font-bold">--</span>
+                </div>
+                <div class="bg-[#14161A] p-2 rounded-xl border border-obsidian-border flex items-center justify-between">
+                  <span class="text-slate-400">Active (24h)</span>
+                  <span id="hero-stat-active" class="text-emerald-400 font-bold">--</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
       <!-- TOP EXECUTIVE KPI SUMMARY CARDS (Inspired by Dribbble UI) -->
       <section class="grid grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-5">
         <!-- TOTAL STUDENTS -->
@@ -4704,6 +4843,10 @@ Type your announcement on the left to see how it renders live on students' Whats
       document.getElementById("stat-active-24h").innerText = data.active_24h || "0";
       document.getElementById("stat-wallets").innerText = "₦" + (data.total_wallet_balance_ngn || 0).toLocaleString();
       document.getElementById("analytics-wallet-total").innerText = "₦" + (data.total_wallet_balance_ngn || 0).toLocaleString();
+      const hss = document.getElementById("hero-stat-students");
+      if (hss) hss.innerText = data.total_students || "0";
+      const hsa = document.getElementById("hero-stat-active");
+      if (hsa) hsa.innerText = data.active_24h || "0";
       
       // Top class
       const dist = data.level_distribution || {};
