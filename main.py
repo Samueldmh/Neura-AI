@@ -83,6 +83,9 @@ qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=30, max_connections=60))
 embedding_pool = ThreadPoolExecutor(max_workers=4)
 
+# OpenRouter Provider Routing: Prioritize Groq's custom LPU hardware (400-800+ tok/s) with seamless GPU fallbacks
+DEFAULT_PROVIDER_ORDER = ["Groq", "Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"]
+
 def get_embedding_sync(text: str):
     return list(embedder.embed(text))[0]
 
@@ -493,7 +496,7 @@ async def classify_intent(message: str) -> str:
                 "temperature": 0.0,
                 "max_tokens": 10,
                 "provider": {
-                    "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
+                    "order": DEFAULT_PROVIDER_ORDER,
                     "allow_fallbacks": True
                 }
             }
@@ -537,7 +540,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
         "temperature": 0.2,
         "max_tokens": max_tokens,
         "provider": {
-            "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
+            "order": DEFAULT_PROVIDER_ORDER,
             "allow_fallbacks": True
         }
     }
@@ -559,7 +562,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
     if not content and response.status_code == 200:
         print("⚠️ OpenRouter returned empty content, retrying with fallback provider order...")
         payload["provider"] = {
-            "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
+            "order": DEFAULT_PROVIDER_ORDER,
             "allow_fallbacks": True
         }
         try:
@@ -598,7 +601,11 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": 2500,
-        "stream": True
+        "stream": True,
+        "provider": {
+            "order": DEFAULT_PROVIDER_ORDER,
+            "allow_fallbacks": True
+        }
     }
     
     full_text = ""
@@ -1693,7 +1700,7 @@ async def normalize_medical_query(user_msg: str) -> dict:
         "temperature": 0.0,
         "max_tokens": 500,
         "provider": {
-            "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
+            "order": DEFAULT_PROVIDER_ORDER,
             "allow_fallbacks": True
         }
     }
@@ -1758,7 +1765,7 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
         "temperature": 0.0,
         "max_tokens": 500,
         "provider": {
-            "order": ["Together", "Fireworks", "DeepSeek", "Novita", "Hyperbolic"],
+            "order": DEFAULT_PROVIDER_ORDER,
             "allow_fallbacks": True
         }
     }
