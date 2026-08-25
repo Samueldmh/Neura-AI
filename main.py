@@ -3665,6 +3665,7 @@ async def admin_dashboard_page():
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NEURA AI — Executive Clinical Control Hub</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ogl@1.0.11/dist/ogl.umd.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3698,8 +3699,8 @@ async def admin_dashboard_page():
     }
   </script>
   <style>
-    body { background-color: #0B0C0E; color: #E2E8F0; font-family: 'Plus Jakarta Sans', sans-serif; }
-    .glass-card { background: #14161A; border: 1px solid #232730; }
+    body { background-color: #0B0C0E; color: #E2E8F0; font-family: 'Plus Jakarta Sans', sans-serif; overflow-x: hidden; }
+    .glass-card { background: rgba(20, 22, 26, 0.85); backdrop-filter: blur(16px); border: 1px solid #232730; }
     .glass-card-hover:hover { border-color: rgba(200, 249, 59, 0.4); box-shadow: 0 12px 30px -8px rgba(0, 0, 0, 0.6), 0 0 20px -3px rgba(200, 249, 59, 0.15); transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
     .whatsapp-bg { background-color: #090B0E; background-image: radial-gradient(#1e2430 1px, transparent 1px); background-size: 18px 18px; }
     .wa-bubble-ai { background: #004d3e; color: #e9edef; border-radius: 14px 14px 14px 2px; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
@@ -3710,9 +3711,124 @@ async def admin_dashboard_page():
     .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #C8F93B; }
     .tab-active { background: #C8F93B !important; color: #0B0C0E !important; font-weight: 800 !important; box-shadow: 0 0 20px rgba(200, 249, 59, 0.35) !important; }
     .chat-thread-active { background: rgba(200, 249, 59, 0.08) !important; border-color: rgba(200, 249, 59, 0.5) !important; }
+
+    /* ================= REACT BITS: LIQUID CHROME ================= */
+    #liquid-chrome-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0.28;
+    }
+    #liquid-chrome-canvas canvas {
+      width: 100% !important;
+      height: 100% !important;
+      display: block;
+    }
+
+    /* ================= REACT BITS: LINE SIDEBAR ================= */
+    .line-sidebar {
+      --accent-color: #C8F93B;
+      --text-color: #94A3B8;
+      --marker-color: #334155;
+      --marker-length: 46px;
+      --marker-gap: 8px;
+      --tick-scale: 0.5;
+      --max-shift: 22px;
+      --item-gap: 18px;
+      --font-size: 0.90rem;
+      --smoothing: 100ms;
+
+      position: relative;
+      display: flex;
+      justify-content: flex-start;
+      user-select: none;
+      width: 100%;
+    }
+
+    .line-sidebar--markers {
+      padding-left: calc(var(--marker-length) + var(--marker-gap));
+    }
+
+    .line-sidebar__list {
+      list-style: none;
+      margin: 0;
+      padding: 0.5rem 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--item-gap);
+      width: 100%;
+    }
+
+    .line-sidebar__item {
+      position: relative;
+      cursor: pointer;
+    }
+
+    .line-sidebar__item::before {
+      content: '';
+      position: absolute;
+      inset: -6px -32px;
+    }
+
+    .line-sidebar__label {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      font-size: var(--font-size);
+      font-weight: 700;
+      line-height: 1.2;
+      color: color-mix(in srgb, var(--accent-color) calc(var(--effect, 0) * 100%), var(--text-color));
+      transform: translateX(calc(var(--effect, 0) * var(--max-shift)));
+      transition: color 0.15s ease;
+    }
+
+    .line-sidebar__index {
+      font-family: 'JetBrains Mono', monospace;
+      margin-right: 0.6rem;
+      font-size: 0.82em;
+      font-weight: 700;
+      opacity: calc(0.55 + var(--effect, 0) * 0.45);
+      color: color-mix(in srgb, var(--accent-color) calc(var(--effect, 0) * 100%), #64748b);
+    }
+
+    .line-sidebar__marker {
+      position: absolute;
+      top: 50%;
+      left: calc(-1 * var(--marker-length) - var(--marker-gap));
+      height: 2px;
+      width: var(--marker-length);
+      background-color: color-mix(in srgb, var(--accent-color) calc(var(--effect, 0) * 100%), var(--marker-color));
+      transform-origin: left center;
+      transform: translateY(-50%) scaleX(calc(0.7 + var(--effect, 0) * 0.5));
+      border-radius: 1px;
+    }
+
+    .line-sidebar--markers .line-sidebar__item:not(:last-child)::after {
+      content: '';
+      position: absolute;
+      top: calc(100% + var(--item-gap) / 2);
+      left: calc(-1 * var(--marker-length) - var(--marker-gap));
+      height: 1.5px;
+      width: calc(var(--marker-length) * var(--tick-scale));
+      background-color: var(--marker-color);
+      opacity: 0.45;
+      transform: translateY(-50%);
+      border-radius: 1px;
+    }
+
+    .line-sidebar--scale-tick .line-sidebar__item:not(:last-child)::after {
+      transform-origin: left center;
+      transform: translateY(-50%) scaleX(calc(0.7 + var(--effect, 0) * 0.6));
+    }
   </style>
 </head>
-<body class="min-h-screen flex flex-col antialiased selection:bg-lime-accent selection:text-black">
+<body class="min-h-screen flex flex-col antialiased selection:bg-lime-accent selection:text-black relative">
+
+  <!-- ================= LIQUID CHROME WEBGL BACKGROUND ================= -->
+  <div id="liquid-chrome-canvas"></div>
 
   <!-- ================= AUTHENTICATION MODAL ================= -->
   <div id="login-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-xl p-4">
@@ -3750,81 +3866,109 @@ async def admin_dashboard_page():
   </div>
 
   <!-- ================= MAIN APPLICATION ================= -->
-  <div id="dashboard-content" class="hidden flex-1 flex flex-col">
-    <!-- TOP HEADER -->
-    <header class="border-b border-obsidian-border bg-[#0B0C0E]/90 backdrop-blur-xl sticky top-0 z-40 px-6 py-3.5">
-      <div class="max-w-7xl mx-auto flex items-center justify-between">
+  <div id="dashboard-content" class="hidden flex-1 flex flex-col lg:flex-row relative z-10 min-h-screen">
+    
+    <!-- DESKTOP LEFT SIDEBAR WITH REACT BITS LINE SIDEBAR -->
+    <aside class="hidden lg:flex flex-col w-80 border-r border-obsidian-border bg-[#0B0C0E]/85 backdrop-blur-2xl p-6 justify-between sticky top-0 h-screen z-30 shrink-0">
+      <div class="space-y-8">
         <!-- BRAND -->
         <div class="flex items-center gap-3.5">
-          <div class="w-10 h-10 bg-[#1B1E24] border border-lime-accent/40 rounded-xl flex items-center justify-center text-lime-accent text-xl shadow-md shadow-lime-accent/10">
+          <div class="w-11 h-11 bg-[#1B1E24] border border-lime-accent/40 rounded-2xl flex items-center justify-center text-lime-accent text-2xl shadow-xl shadow-lime-accent/15">
             🧠
           </div>
           <div>
             <div class="flex items-center gap-2">
-              <h1 class="text-lg font-black text-white tracking-tight">NEURA AI</h1>
-              <span class="px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider bg-lime-accent/10 text-lime-accent border border-lime-accent/30 rounded-md">EXECUTIVE SUITE</span>
+              <h1 class="text-xl font-black text-white tracking-tight">NEURA AI</h1>
+              <span class="px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider bg-lime-accent/10 text-lime-accent border border-lime-accent/30 rounded-md">SUITE</span>
             </div>
             <p class="text-xs text-slate-400 font-medium flex items-center gap-1.5 mt-0.5">
               <span class="w-2 h-2 rounded-full bg-lime-accent animate-pulse shadow-[0_0_8px_#C8F93B]"></span>
-              <span>All Systems Synchronized</span>
+              <span>Executive Control Hub</span>
             </p>
           </div>
         </div>
 
-        <!-- NAVIGATION TABS -->
-        <nav class="hidden lg:flex items-center gap-1 bg-[#14161A] p-1.5 rounded-2xl border border-obsidian-border text-xs font-semibold">
-          <button onclick="switchTab('students')" id="tab-btn-students" class="px-3.5 py-2 rounded-xl text-slate-300 hover:text-white transition-all flex items-center gap-2 tab-active">
-            <i class="fa-solid fa-users"></i>
-            <span>Registered Students</span>
-            <span id="nav-student-count" class="px-1.5 py-0.2 bg-black/40 text-black font-bold rounded text-[10px]">--</span>
-          </button>
-          <button onclick="switchTab('chats')" id="tab-btn-chats" class="px-3.5 py-2 rounded-xl text-slate-400 hover:text-white transition-all flex items-center gap-2">
-            <i class="fa-solid fa-comments"></i>
-            <span>User Chats & Transcripts</span>
-            <span id="nav-chat-issues" class="px-1.5 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[10px] font-bold hidden">⚠️ Issues</span>
-          </button>
-          <button onclick="switchTab('broadcast')" id="tab-btn-broadcast" class="px-3.5 py-2 rounded-xl text-slate-400 hover:text-white transition-all flex items-center gap-2">
-            <i class="fa-solid fa-bullhorn"></i>
-            <span>Broadcasts</span>
-          </button>
-          <button onclick="switchTab('analytics')" id="tab-btn-analytics" class="px-3.5 py-2 rounded-xl text-slate-400 hover:text-white transition-all flex items-center gap-2">
-            <i class="fa-solid fa-chart-pie"></i>
-            <span>Analytics</span>
-          </button>
-        </nav>
-
-        <!-- ACTIONS -->
-        <div class="flex items-center gap-2.5">
-          <button onclick="loadAllData()" title="Sync Live Data" class="px-3.5 py-2 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 text-xs font-bold rounded-xl border border-obsidian-border flex items-center gap-2 transition-all">
-            <i id="sync-icon" class="fa-solid fa-arrows-rotate text-lime-accent"></i>
-            <span class="hidden sm:inline">Sync Data</span>
-          </button>
-          <button onclick="performLogout()" title="Logout" class="px-3.5 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold rounded-xl border border-rose-500/20 flex items-center gap-2 transition-all">
-            <i class="fa-solid fa-arrow-right-from-bracket"></i>
-            <span class="hidden sm:inline">Exit</span>
-          </button>
+        <!-- LINE SIDEBAR NAVIGATION -->
+        <div class="space-y-3 pt-4 border-t border-obsidian-border">
+          <div class="text-[10px] font-extrabold uppercase tracking-widest text-slate-500 px-2">Navigation Matrix</div>
+          <div id="admin-line-sidebar-container" class="pl-2"></div>
         </div>
       </div>
 
-      <!-- MOBILE / TABLET NAV TABS -->
-      <div class="flex lg:hidden items-center justify-between gap-1 mt-3 pt-3 border-t border-obsidian-border overflow-x-auto custom-scrollbar text-xs font-semibold">
-        <button onclick="switchTab('students')" id="m-tab-btn-students" class="px-3 py-1.5 rounded-lg text-slate-300 tab-active flex items-center gap-1.5 whitespace-nowrap">
-          <i class="fa-solid fa-users"></i> Students
-        </button>
-        <button onclick="switchTab('chats')" id="m-tab-btn-chats" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
-          <i class="fa-solid fa-comments"></i> Chats
-        </button>
-        <button onclick="switchTab('broadcast')" id="m-tab-btn-broadcast" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
-          <i class="fa-solid fa-bullhorn"></i> Broadcast
-        </button>
-        <button onclick="switchTab('analytics')" id="m-tab-btn-analytics" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
-          <i class="fa-solid fa-chart-pie"></i> Stats
-        </button>
+      <!-- SIDEBAR FOOTER ACTIONS -->
+      <div class="pt-6 border-t border-obsidian-border space-y-3">
+        <div class="flex items-center justify-between text-xs text-slate-400 px-1">
+          <span class="flex items-center gap-1.5"><i class="fa-solid fa-server text-lime-accent text-[10px]"></i> Live Sync</span>
+          <span id="sidebar-student-count" class="font-mono text-white font-bold bg-[#1B1E24] px-2 py-0.5 rounded border border-obsidian-border">-- Students</span>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <button onclick="loadAllData()" title="Sync Live Data" class="py-2.5 px-3 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 text-xs font-bold rounded-xl border border-obsidian-border flex items-center justify-center gap-2 transition-all">
+            <i id="sync-icon-sidebar" class="fa-solid fa-arrows-rotate text-lime-accent"></i>
+            <span>Sync</span>
+          </button>
+          <button onclick="performLogout()" title="Logout" class="py-2.5 px-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold rounded-xl border border-rose-500/20 flex items-center justify-center gap-2 transition-all">
+            <i class="fa-solid fa-arrow-right-from-bracket"></i>
+            <span>Exit</span>
+          </button>
+        </div>
       </div>
-    </header>
+    </aside>
 
-    <!-- CONTENT WRAPPER -->
-    <main class="max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6 flex-1">
+    <!-- RIGHT MAIN CONTENT AREA -->
+    <div class="flex-1 flex flex-col min-w-0">
+      <!-- TOP MOBILE HEADER & BREADCRUMB -->
+      <header class="border-b border-obsidian-border bg-[#0B0C0E]/90 backdrop-blur-xl sticky top-0 z-40 px-4 sm:px-6 py-3.5 flex flex-col gap-3">
+        <div class="flex items-center justify-between">
+          <!-- MOBILE BRAND (Visible on small screens) -->
+          <div class="flex lg:hidden items-center gap-3">
+            <div class="w-9 h-9 bg-[#1B1E24] border border-lime-accent/40 rounded-xl flex items-center justify-center text-lime-accent text-lg shadow-sm">
+              🧠
+            </div>
+            <div>
+              <h1 class="text-base font-black text-white">NEURA AI</h1>
+              <p class="text-[10px] text-slate-400">Executive Control Hub</p>
+            </div>
+          </div>
+
+          <!-- DESKTOP TOP BREADCRUMB -->
+          <div class="hidden lg:flex items-center gap-3">
+            <span class="text-xs font-bold text-slate-400 uppercase tracking-wider" id="current-view-title"><i class="fa-solid fa-users text-lime-accent mr-1.5"></i> Registered Students Directory</span>
+          </div>
+
+          <!-- RIGHT ACTIONS -->
+          <div class="flex items-center gap-2.5">
+            <span id="nav-chat-issues" class="px-2.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-bold hidden flex items-center gap-1.5">
+              <i class="fa-solid fa-triangle-exclamation"></i> <span>Diagnostic Issues</span>
+            </span>
+            <button onclick="loadAllData()" title="Sync Live Data" class="px-3.5 py-2 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 text-xs font-bold rounded-xl border border-obsidian-border flex items-center gap-2 transition-all">
+              <i id="sync-icon" class="fa-solid fa-arrows-rotate text-lime-accent"></i>
+              <span class="hidden sm:inline">Sync Live</span>
+            </button>
+            <button onclick="performLogout()" class="lg:hidden px-3 py-2 bg-rose-500/10 text-rose-400 text-xs font-bold rounded-xl border border-rose-500/20">
+              <i class="fa-solid fa-arrow-right-from-bracket"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- MOBILE / TABLET NAV TABS (Fallback for touch screens) -->
+        <div class="flex lg:hidden items-center justify-between gap-1 pt-2 border-t border-obsidian-border overflow-x-auto custom-scrollbar text-xs font-semibold">
+          <button onclick="switchTab('students')" id="m-tab-btn-students" class="px-3 py-1.5 rounded-lg text-slate-300 tab-active flex items-center gap-1.5 whitespace-nowrap">
+            <i class="fa-solid fa-users"></i> Students
+          </button>
+          <button onclick="switchTab('chats')" id="m-tab-btn-chats" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
+            <i class="fa-solid fa-comments"></i> Chats
+          </button>
+          <button onclick="switchTab('broadcast')" id="m-tab-btn-broadcast" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
+            <i class="fa-solid fa-bullhorn"></i> Broadcast
+          </button>
+          <button onclick="switchTab('analytics')" id="m-tab-btn-analytics" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
+            <i class="fa-solid fa-chart-pie"></i> Stats
+          </button>
+        </div>
+      </header>
+
+      <!-- CONTENT WRAPPER -->
+      <main class="w-full p-4 sm:p-6 lg:p-8 space-y-6 flex-1">
       
       <!-- TOP EXECUTIVE KPI SUMMARY CARDS -->
       <section class="grid grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-5">
@@ -4280,6 +4424,13 @@ Type your announcement on the left to see how it renders live on students' Whats
       document.getElementById("admin-pass").value = "";
     }
 
+    const VIEW_TITLES = {
+      'students': '<i class="fa-solid fa-users text-lime-accent mr-1.5"></i> Registered Students Directory',
+      'chats': '<i class="fa-solid fa-comments text-lime-accent mr-1.5"></i> User Chats & Transcripts Studio',
+      'broadcast': '<i class="fa-solid fa-bullhorn text-lime-accent mr-1.5"></i> WhatsApp Broadcast Studio',
+      'analytics': '<i class="fa-solid fa-chart-pie text-lime-accent mr-1.5"></i> Cohort Analytics & Telemetry'
+    };
+
     function switchTab(tabKey) {
       const tabs = ['students', 'chats', 'broadcast', 'analytics'];
       tabs.forEach(t => {
@@ -4296,6 +4447,16 @@ Type your announcement on the left to see how it renders live on students' Whats
           mBtn?.classList.remove('tab-active');
         }
       });
+
+      const titleEl = document.getElementById('current-view-title');
+      if (titleEl && VIEW_TITLES[tabKey]) {
+        titleEl.innerHTML = VIEW_TITLES[tabKey];
+      }
+
+      if (window.lineSidebarController) {
+        window.lineSidebarController.setActiveKey(tabKey);
+      }
+
       if (tabKey === 'chats' && (!rawChatThreads || rawChatThreads.length === 0)) {
         loadRecentChats();
       }
@@ -4366,6 +4527,8 @@ Type your announcement on the left to see how it renders live on students' Whats
       rawStudentsList = data.students || [];
       
       document.getElementById("nav-student-count").innerText = rawStudentsList.length;
+      const ssc = document.getElementById("sidebar-student-count");
+      if (ssc) ssc.innerText = `${rawStudentsList.length} Students`;
       
       let totalQueries = 0;
       rawStudentsList.forEach(s => totalQueries += (s.total_queries_count || 0));
@@ -4859,6 +5022,253 @@ Type your announcement on the left to see how it renders live on students' Whats
         btn.disabled = false;
       }
     }
+
+    // ================= REACT BITS: LIQUID CHROME SHADER =================
+    function initLiquidChrome() {
+      const container = document.getElementById("liquid-chrome-canvas");
+      if (!container || typeof ogl === "undefined") return;
+
+      try {
+        const { Renderer, Program, Mesh, Triangle } = ogl;
+        const renderer = new Renderer({ antialias: true, alpha: true });
+        const gl = renderer.gl;
+        gl.clearColor(0, 0, 0, 0);
+
+        const vertexShader = `
+          attribute vec2 position;
+          attribute vec2 uv;
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = vec4(position, 0.0, 1.0);
+          }
+        `;
+
+        const fragmentShader = `
+          precision highp float;
+          uniform float uTime;
+          uniform vec3 uResolution;
+          uniform vec3 uBaseColor;
+          uniform float uAmplitude;
+          uniform float uFrequencyX;
+          uniform float uFrequencyY;
+          uniform vec2 uMouse;
+          varying vec2 vUv;
+
+          vec4 renderImage(vec2 uvCoord) {
+              vec2 fragCoord = uvCoord * uResolution.xy;
+              vec2 uv = (2.0 * fragCoord - uResolution.xy) / min(uResolution.x, uResolution.y);
+
+              for (float i = 1.0; i < 7.0; i++){
+                  uv.x += uAmplitude / i * cos(i * uFrequencyX * uv.y + uTime + uMouse.x * 3.14159);
+                  uv.y += uAmplitude / i * cos(i * uFrequencyY * uv.x + uTime + uMouse.y * 3.14159);
+              }
+
+              vec2 diff = (uvCoord - uMouse);
+              float dist = length(diff);
+              float falloff = exp(-dist * 18.0);
+              float ripple = sin(8.0 * dist - uTime * 2.0) * 0.03;
+              uv += (diff / (dist + 0.0001)) * ripple * falloff;
+
+              vec3 color = uBaseColor / abs(sin(uTime - uv.y - uv.x));
+              return vec4(color, 1.0);
+          }
+
+          void main() {
+              vec4 col = vec4(0.0);
+              int samples = 0;
+              for (int i = -1; i <= 1; i++){
+                  for (int j = -1; j <= 1; j++){
+                      vec2 offset = vec2(float(i), float(j)) * (1.0 / min(uResolution.x, uResolution.y));
+                      col += renderImage(vUv + offset);
+                      samples++;
+                  }
+              }
+              gl_FragColor = col / float(samples);
+          }
+        `;
+
+        const geometry = new Triangle(gl);
+        const program = new Program(gl, {
+          vertex: vertexShader,
+          fragment: fragmentShader,
+          uniforms: {
+            uTime: { value: 0 },
+            uResolution: {
+              value: new Float32Array([window.innerWidth, window.innerHeight, window.innerWidth / window.innerHeight])
+            },
+            uBaseColor: { value: new Float32Array([0.08, 0.11, 0.07]) },
+            uAmplitude: { value: 0.3 },
+            uFrequencyX: { value: 2.5 },
+            uFrequencyY: { value: 2.0 },
+            uMouse: { value: new Float32Array([0.5, 0.5]) }
+          }
+        });
+        const mesh = new Mesh(gl, { geometry, program });
+
+        function resize() {
+          renderer.setSize(window.innerWidth, window.innerHeight);
+          const resUniform = program.uniforms.uResolution.value;
+          resUniform[0] = gl.canvas.width;
+          resUniform[1] = gl.canvas.height;
+          resUniform[2] = gl.canvas.width / gl.canvas.height;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function handlePointer(clientX, clientY) {
+          const x = clientX / window.innerWidth;
+          const y = 1 - (clientY / window.innerHeight);
+          const mouseUniform = program.uniforms.uMouse.value;
+          mouseUniform[0] = x;
+          mouseUniform[1] = y;
+        }
+
+        window.addEventListener('mousemove', (e) => handlePointer(e.clientX, e.clientY));
+        window.addEventListener('touchmove', (e) => {
+          if (e.touches.length > 0) handlePointer(e.touches[0].clientX, e.touches[0].clientY);
+        });
+
+        let animationId;
+        function update(t) {
+          animationId = requestAnimationFrame(update);
+          program.uniforms.uTime.value = t * 0.001 * 0.35;
+          renderer.render({ scene: mesh });
+        }
+        animationId = requestAnimationFrame(update);
+
+        container.appendChild(gl.canvas);
+      } catch (err) {
+        console.warn("LiquidChrome WebGL initialization fallback:", err);
+      }
+    }
+
+    // ================= REACT BITS: LINE SIDEBAR COMPONENT =================
+    const FALLOFF_CURVES = {
+      linear: p => p,
+      smooth: p => p * p * (3 - 2 * p),
+      sharp: p => p * p * p
+    };
+
+    function initLineSidebar({
+      items = [
+        { label: 'Registered Students', key: 'students' },
+        { label: 'Chats & Transcripts', key: 'chats' },
+        { label: 'Broadcasts', key: 'broadcast' },
+        { label: 'Cohort Analytics', key: 'analytics' }
+      ],
+      proximityRadius = 100,
+      maxShift = 22,
+      falloff = 'smooth',
+      smoothing = 100,
+      defaultActive = 0,
+      onItemClick
+    } = {}) {
+      const container = document.getElementById("admin-line-sidebar-container");
+      if (!container) return;
+
+      container.innerHTML = `
+        <nav class="line-sidebar line-sidebar--markers line-sidebar--scale-tick" id="admin-line-sidebar">
+          <ul class="line-sidebar__list" id="line-sidebar-list">
+            ${items.map((item, idx) => `
+              <li class="line-sidebar__item" data-index="${idx}" data-key="${item.key}" aria-current="${defaultActive === idx ? 'true' : 'false'}">
+                <span class="line-sidebar__marker" aria-hidden="true"></span>
+                <span class="line-sidebar__label">
+                  <span class="line-sidebar__index">${String(idx + 1).padStart(2, '0')}</span>
+                  <span class="line-sidebar__text">${item.label}</span>
+                </span>
+              </li>
+            `).join('')}
+          </ul>
+        </nav>
+      `;
+
+      const list = document.getElementById("line-sidebar-list");
+      const itemEls = Array.from(list.querySelectorAll(".line-sidebar__item"));
+      let targets = new Array(items.length).fill(0);
+      let currents = new Array(items.length).fill(0);
+      let activeIdx = defaultActive;
+      let rafId = null;
+      let lastTime = 0;
+
+      function runFrame(now) {
+        const dt = Math.min((now - lastTime) / 1000, 0.05);
+        lastTime = now;
+        const tau = Math.max(smoothing, 1) / 1000;
+        const k = 1 - Math.exp(-dt / tau);
+
+        let moving = false;
+        for (let i = 0; i < itemEls.length; i++) {
+          const el = itemEls[i];
+          if (!el) continue;
+          const target = Math.max(targets[i] || 0, activeIdx === i ? 1 : 0);
+          const cur = currents[i] || 0;
+          const next = cur + (target - cur) * k;
+          const settled = Math.abs(target - next) < 0.0015;
+          const value = settled ? target : next;
+          currents[i] = value;
+          el.style.setProperty('--effect', value.toFixed(4));
+          if (!settled) moving = true;
+        }
+
+        rafId = moving ? requestAnimationFrame(runFrame) : null;
+      }
+
+      function startLoop() {
+        if (rafId != null) cancelAnimationFrame(rafId);
+        lastTime = performance.now();
+        rafId = requestAnimationFrame(runFrame);
+      }
+
+      list.addEventListener("pointermove", (e) => {
+        const rect = list.getBoundingClientRect();
+        const pointerY = e.clientY - rect.top;
+        const ease = FALLOFF_CURVES[falloff] || FALLOFF_CURVES.smooth;
+        for (let i = 0; i < itemEls.length; i++) {
+          const el = itemEls[i];
+          const center = el.offsetTop + el.offsetHeight / 2;
+          const distance = Math.abs(pointerY - center);
+          targets[i] = ease(Math.max(0, 1 - distance / proximityRadius));
+        }
+        startLoop();
+      });
+
+      list.addEventListener("pointerleave", () => {
+        targets.fill(0);
+        startLoop();
+      });
+
+      itemEls.forEach((el, idx) => {
+        el.addEventListener("click", () => {
+          activeIdx = idx;
+          itemEls.forEach((it, i) => it.setAttribute("aria-current", i === idx ? "true" : "false"));
+          startLoop();
+          const key = el.getAttribute("data-key");
+          if (onItemClick) onItemClick(idx, key);
+        });
+      });
+
+      startLoop();
+
+      window.lineSidebarController = {
+        setActiveKey: (key) => {
+          const foundIdx = items.findIndex(it => it.key === key);
+          if (foundIdx !== -1) {
+            activeIdx = foundIdx;
+            itemEls.forEach((it, i) => it.setAttribute("aria-current", i === foundIdx ? "true" : "false"));
+            startLoop();
+          }
+        }
+      };
+    }
+
+    // Initialize React Bits components
+    initLiquidChrome();
+    initLineSidebar({
+      onItemClick: (index, key) => {
+        switchTab(key);
+      }
+    });
 
     // Auto-login on load if token exists
     if (authToken) {
