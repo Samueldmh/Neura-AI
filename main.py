@@ -3659,575 +3659,456 @@ async def admin_broadcast(req: BroadcastRequest, request: Request, background_ta
 @app.get("/admin")
 async def admin_dashboard_page():
     html_content = r"""<!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NEURA AI — Executive Clinical Control Hub</title>
+  <title>NEURA AI — Clinical Administration Hub</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/ogl@1.0.11/dist/ogl.umd.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
-            mono: ['"JetBrains Mono"', 'monospace'],
-          },
-          colors: {
-            lime: {
-              accent: '#C8F93B',
-              hover: '#D4FF5E',
-              glow: 'rgba(200, 249, 59, 0.28)',
-              subtle: 'rgba(200, 249, 59, 0.12)'
-            },
-            obsidian: {
-              base: '#0B0C0E',
-              card: '#14161A',
-              elevated: '#1B1E24',
-              border: '#232730',
-              borderLight: 'rgba(255, 255, 255, 0.08)'
-            }
-          }
-        }
-      }
-    }
-  </script>
   <style>
-    body { background-color: #0B0C0E; color: #E2E8F0; font-family: 'Plus Jakarta Sans', sans-serif; overflow-x: hidden; }
-    .glass-card { background: rgba(20, 22, 26, 0.85); backdrop-filter: blur(16px); border: 1px solid #232730; }
-    .glass-card-hover:hover { border-color: rgba(200, 249, 59, 0.4); box-shadow: 0 12px 30px -8px rgba(0, 0, 0, 0.6), 0 0 20px -3px rgba(200, 249, 59, 0.15); transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
-    .whatsapp-bg { background-color: #090B0E; background-image: radial-gradient(#1e2430 1px, transparent 1px); background-size: 18px 18px; }
-    .wa-bubble-ai { background: #004d3e; color: #e9edef; border-radius: 14px 14px 14px 2px; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
-    .wa-bubble-user { background: #1B1E24; color: #f1f5f9; border-radius: 14px 14px 2px 14px; border: 1px solid #282C35; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
-    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
-    .custom-scrollbar::-webkit-scrollbar-track { background: #0F1115; }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background: #232730; border-radius: 9999px; }
-    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #C8F93B; }
-    .tab-active { background: #C8F93B !important; color: #0B0C0E !important; font-weight: 800 !important; box-shadow: 0 0 20px rgba(200, 249, 59, 0.35) !important; }
-    .chat-thread-active { background: rgba(200, 249, 59, 0.08) !important; border-color: rgba(200, 249, 59, 0.5) !important; }
-
-    /* ================= REACT BITS: LIQUID CHROME ================= */
-    #liquid-chrome-canvas {
-      position: fixed;
-      inset: 0;
-      width: 100vw;
-      height: 100vh;
-      pointer-events: none;
-      z-index: 0;
-      opacity: 0.28;
-    }
-    #liquid-chrome-canvas canvas {
-      width: 100% !important;
-      height: 100% !important;
-      display: block;
+    :root {
+      --bg: #FFFFFF;
+      --surface: #F5F5F5;
+      --border: #E0E0E0;
+      --text-primary: #111111;
+      --text-secondary: #6B6B6B;
+      --text-muted: #A0A0A0;
+      --inverse-bg: #0D0D0D;
+      --inverse-text: #F5F5F5;
     }
 
-    /* ================= REACT BITS: LINE SIDEBAR ================= */
-    .line-sidebar {
-      --accent-color: #C8F93B;
-      --text-color: #94A3B8;
-      --marker-color: #334155;
-      --marker-length: 46px;
-      --marker-gap: 8px;
-      --tick-scale: 0.5;
-      --max-shift: 22px;
-      --item-gap: 18px;
-      --font-size: 0.90rem;
-      --smoothing: 100ms;
-
-      position: relative;
-      display: flex;
-      justify-content: flex-start;
-      user-select: none;
-      width: 100%;
+    * {
+      box-sizing: border-box;
     }
 
-    .line-sidebar--markers {
-      padding-left: calc(var(--marker-length) + var(--marker-gap));
-    }
-
-    .line-sidebar__list {
-      list-style: none;
+    body {
+      background-color: var(--bg);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.6;
       margin: 0;
-      padding: 0.5rem 0;
-      display: flex;
-      flex-direction: column;
-      gap: var(--item-gap);
-      width: 100%;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
     }
 
-    .line-sidebar__item {
-      position: relative;
+    h1, h2, h3, h4, h5, h6 {
+      color: var(--text-primary);
+      letter-spacing: -0.02em;
+      font-weight: 700;
+    }
+
+    .card {
+      background-color: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+
+    .card-surface {
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+
+    .btn-primary {
+      background-color: var(--text-primary);
+      color: var(--bg);
+      border: 1px solid var(--text-primary);
+      border-radius: 4px;
+      font-weight: 600;
+      padding: 8px 16px;
       cursor: pointer;
-    }
-
-    .line-sidebar__item::before {
-      content: '';
-      position: absolute;
-      inset: -6px -32px;
-    }
-
-    .line-sidebar__label {
-      position: relative;
       display: inline-flex;
       align-items: center;
-      font-size: var(--font-size);
+      justify-content: center;
+      gap: 6px;
+      font-size: 13px;
+      transition: opacity 0.2s ease;
+    }
+    .btn-primary:hover {
+      opacity: 0.88;
+    }
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background-color: var(--bg);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-weight: 600;
+      padding: 8px 16px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 13px;
+      transition: border-color 0.2s ease, background-color 0.2s ease;
+    }
+    .btn-secondary:hover {
+      border-color: var(--text-primary);
+      background-color: var(--surface);
+    }
+
+    .input-box {
+      background-color: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-size: 13px;
+      padding: 8px 12px;
+      outline: none;
+      transition: border-color 0.2s ease;
+    }
+    .input-box:focus {
+      border-color: var(--text-primary);
+    }
+
+    .nav-tab {
+      color: var(--text-secondary);
+      font-weight: 500;
+      font-size: 13px;
+      padding: 10px 14px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      border-top: 0;
+      border-left: 0;
+      border-right: 0;
+      transition: color 0.2s ease, border-color 0.2s ease;
+    }
+    .nav-tab:hover {
+      color: var(--text-primary);
+    }
+    .nav-tab.active {
+      color: var(--text-primary);
       font-weight: 700;
-      line-height: 1.2;
-      color: color-mix(in srgb, var(--accent-color) calc(var(--effect, 0) * 100%), var(--text-color));
-      transform: translateX(calc(var(--effect, 0) * var(--max-shift)));
-      transition: color 0.15s ease;
+      border-bottom-color: var(--text-primary);
     }
 
-    .line-sidebar__index {
-      font-family: 'JetBrains Mono', monospace;
-      margin-right: 0.6rem;
-      font-size: 0.82em;
+    .filter-btn {
+      background-color: var(--bg);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .filter-btn:hover {
+      color: var(--text-primary);
+      border-color: var(--text-primary);
+    }
+    .filter-btn.active {
+      background-color: var(--text-primary);
+      color: var(--bg);
+      border-color: var(--text-primary);
       font-weight: 700;
-      opacity: calc(0.55 + var(--effect, 0) * 0.45);
-      color: color-mix(in srgb, var(--accent-color) calc(var(--effect, 0) * 100%), #64748b);
     }
 
-    .line-sidebar__marker {
-      position: absolute;
-      top: 50%;
-      left: calc(-1 * var(--marker-length) - var(--marker-gap));
-      height: 2px;
-      width: var(--marker-length);
-      background-color: color-mix(in srgb, var(--accent-color) calc(var(--effect, 0) * 100%), var(--marker-color));
-      transform-origin: left center;
-      transform: translateY(-50%) scaleX(calc(0.7 + var(--effect, 0) * 0.5));
-      border-radius: 1px;
+    .badge-mono {
+      background-color: var(--surface);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      display: inline-block;
     }
 
-    .line-sidebar--markers .line-sidebar__item:not(:last-child)::after {
-      content: '';
-      position: absolute;
-      top: calc(100% + var(--item-gap) / 2);
-      left: calc(-1 * var(--marker-length) - var(--marker-gap));
-      height: 1.5px;
-      width: calc(var(--marker-length) * var(--tick-scale));
-      background-color: var(--marker-color);
-      opacity: 0.45;
-      transform: translateY(-50%);
-      border-radius: 1px;
+    .badge-alert {
+      background-color: var(--bg);
+      color: var(--text-primary);
+      border: 1px solid var(--text-primary);
+      border-radius: 3px;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-weight: 700;
+      display: inline-block;
     }
 
-    .line-sidebar--scale-tick .line-sidebar__item:not(:last-child)::after {
-      transform-origin: left center;
-      transform: translateY(-50%) scaleX(calc(0.7 + var(--effect, 0) * 0.6));
+    .chat-bubble-user {
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-primary);
     }
+
+    .chat-bubble-ai {
+      background-color: var(--bg);
+      border: 1px solid var(--text-primary);
+      border-radius: 4px;
+      color: var(--text-primary);
+    }
+
+    .chat-thread-item {
+      background-color: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: border-color 0.2s ease, background-color 0.2s ease;
+    }
+    .chat-thread-item:hover {
+      border-color: var(--text-primary);
+    }
+    .chat-thread-item.active {
+      background-color: var(--surface);
+      border-color: var(--text-primary);
+      border-width: 1px;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar { width: 5px; height: 5px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: var(--surface); }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
   </style>
 </head>
-<body class="min-h-screen flex flex-col antialiased selection:bg-lime-accent selection:text-black relative">
-
-  <!-- ================= LIQUID CHROME WEBGL BACKGROUND ================= -->
-  <div id="liquid-chrome-canvas"></div>
+<body class="min-h-screen flex flex-col">
 
   <!-- ================= AUTHENTICATION MODAL ================= -->
-  <div id="login-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-xl p-4">
-    <div class="glass-card w-full max-w-md p-8 rounded-3xl shadow-2xl border border-lime-accent/20 text-center relative overflow-hidden">
-      <div class="absolute -top-24 -right-24 w-48 h-48 bg-lime-accent/15 rounded-full blur-3xl pointer-events-none"></div>
-      <div class="absolute -bottom-24 -left-24 w-48 h-48 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none"></div>
-      
-      <div class="w-16 h-16 bg-[#1B1E24] border border-lime-accent/40 rounded-2xl mx-auto flex items-center justify-center text-lime-accent text-3xl shadow-xl shadow-lime-accent/10 mb-6">
-        🧠
+  <div id="login-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+    <div class="card w-full max-w-sm p-8 shadow-sm text-left">
+      <div class="border-b border-[#E0E0E0] pb-4 mb-6">
+        <h2 class="text-xl font-bold tracking-tight text-[#111111]">NEURA AI</h2>
+        <p class="text-xs text-[#6B6B6B] mt-0.5">Clinical Administration &amp; Telemetry Hub</p>
       </div>
-      <h2 class="text-2xl font-extrabold text-white tracking-tight">NEURA AI Admin</h2>
-      <p class="text-slate-400 text-sm mt-1 mb-8">Executive Control & Diagnostics Suite</p>
       
-      <div class="space-y-4 text-left">
+      <div class="space-y-4">
         <div>
-          <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">Master Security Password</label>
+          <label class="block text-xs font-semibold text-[#111111] uppercase tracking-wider mb-2">Master Security Password</label>
           <div class="relative">
-            <input type="password" id="admin-pass" placeholder="••••••••••••" 
-                   class="w-full px-4 py-3.5 bg-[#0B0C0E] border border-obsidian-border rounded-xl text-white text-sm focus:outline-none focus:border-lime-accent focus:ring-2 focus:ring-lime-accent/20 transition-all">
-            <button onclick="togglePass()" type="button" class="absolute right-3.5 top-3.5 text-slate-400 hover:text-white transition-colors">
-              <i id="pass-icon" class="fa-regular fa-eye"></i>
+            <input type="password" id="admin-pass" placeholder="Enter administrative password" 
+                   class="input-box w-full pr-10">
+            <button onclick="togglePass()" type="button" class="absolute right-3 top-2.5 text-[#6B6B6B] hover:text-[#111111]">
+              <i id="pass-icon" class="fa-regular fa-eye text-xs"></i>
             </button>
           </div>
         </div>
-        <p id="login-err" class="text-rose-400 text-xs font-semibold hidden flex items-center gap-1.5 pt-1">
-          <i class="fa-solid fa-circle-exclamation"></i> <span>Incorrect password. Please verify credentials.</span>
+        <p id="login-err" class="text-xs font-medium text-[#111111] bg-[#F5F5F5] border border-[#E0E0E0] p-2 rounded hidden">
+          Authentication failed. Please verify credentials.
         </p>
-        <button onclick="performLogin()" id="login-btn"
-                class="w-full py-3.5 px-5 bg-lime-accent hover:bg-lime-hover text-black font-extrabold rounded-xl shadow-lg shadow-lime-accent/25 transition-all flex items-center justify-center gap-2">
-          <span>Authenticate & Access Suite</span>
-          <i class="fa-solid fa-arrow-right text-xs"></i>
+        <button onclick="performLogin()" id="login-btn" class="btn-primary w-full py-2.5">
+          <span>Authenticate &amp; Access</span>
         </button>
       </div>
     </div>
   </div>
 
   <!-- ================= MAIN APPLICATION ================= -->
-  <div id="dashboard-content" class="hidden flex-1 flex flex-col lg:flex-row relative z-10 min-h-screen">
+  <div id="dashboard-content" class="hidden flex-1 flex flex-col min-h-screen bg-[#FFFFFF]">
     
-    <!-- DESKTOP LEFT SIDEBAR WITH REACT BITS LINE SIDEBAR -->
-    <aside class="hidden lg:flex flex-col w-80 border-r border-obsidian-border bg-[#0B0C0E]/85 backdrop-blur-2xl p-6 justify-between sticky top-0 h-screen z-30 shrink-0">
-      <div class="space-y-8">
-        <!-- BRAND -->
-        <div class="flex items-center gap-3.5">
-          <div class="w-11 h-11 bg-[#1B1E24] border border-lime-accent/40 rounded-2xl flex items-center justify-center text-lime-accent text-2xl shadow-xl shadow-lime-accent/15">
-            🧠
-          </div>
+    <!-- TOP HEADER & NAVIGATION -->
+    <header class="border-b border-[#E0E0E0] bg-[#FFFFFF] sticky top-0 z-40 px-4 sm:px-8">
+      <div class="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 pb-0">
+        <!-- BRAND & META -->
+        <div class="flex items-center justify-between">
           <div>
             <div class="flex items-center gap-2">
-              <h1 class="text-xl font-black text-white tracking-tight">NEURA AI</h1>
-              <span class="px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider bg-lime-accent/10 text-lime-accent border border-lime-accent/30 rounded-md">SUITE</span>
+              <span class="text-base font-black tracking-tight text-[#111111]">NEURA AI</span>
+              <span class="badge-mono text-[10px]">ADMIN</span>
             </div>
-            <p class="text-xs text-slate-400 font-medium flex items-center gap-1.5 mt-0.5">
-              <span class="w-2 h-2 rounded-full bg-lime-accent animate-pulse shadow-[0_0_8px_#C8F93B]"></span>
-              <span>Executive Control Hub</span>
-            </p>
+            <p class="text-[11px] text-[#6B6B6B]">Clinical Intelligence Hub</p>
           </div>
+
+          <!-- MOBILE LOGOUT -->
+          <button onclick="performLogout()" class="sm:hidden btn-secondary text-xs px-2.5 py-1">
+            Exit
+          </button>
         </div>
 
-        <!-- LINE SIDEBAR NAVIGATION -->
-        <div class="space-y-3 pt-4 border-t border-obsidian-border">
-          <div class="text-[10px] font-extrabold uppercase tracking-widest text-slate-500 px-2">Navigation Matrix</div>
-          <div id="admin-line-sidebar-container" class="pl-2"></div>
-        </div>
-      </div>
+        <!-- NAVIGATION TABS -->
+        <nav class="flex items-center gap-1 overflow-x-auto custom-scrollbar border-t sm:border-t-0 border-[#E0E0E0] pt-1 sm:pt-0">
+          <button onclick="switchTab('students')" id="tab-btn-students" class="nav-tab active">
+            Students
+          </button>
+          <button onclick="switchTab('chats')" id="tab-btn-chats" class="nav-tab">
+            Chat Transcripts
+          </button>
+          <button onclick="switchTab('broadcast')" id="tab-btn-broadcast" class="nav-tab">
+            Broadcast
+          </button>
+          <button onclick="switchTab('analytics')" id="tab-btn-analytics" class="nav-tab">
+            Analytics
+          </button>
+        </nav>
 
-      <!-- SIDEBAR FOOTER ACTIONS -->
-      <div class="pt-6 border-t border-obsidian-border space-y-3">
-        <div class="flex items-center justify-between text-xs text-slate-400 px-1">
-          <span class="flex items-center gap-1.5"><i class="fa-solid fa-server text-lime-accent text-[10px]"></i> Live Sync</span>
-          <span id="sidebar-student-count" class="font-mono text-white font-bold bg-[#1B1E24] px-2 py-0.5 rounded border border-obsidian-border">-- Students</span>
-        </div>
-        <div class="grid grid-cols-2 gap-2">
-          <button onclick="loadAllData()" title="Sync Live Data" class="py-2.5 px-3 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 text-xs font-bold rounded-xl border border-obsidian-border flex items-center justify-center gap-2 transition-all">
-            <i id="sync-icon-sidebar" class="fa-solid fa-arrows-rotate text-lime-accent"></i>
+        <!-- RIGHT ACTIONS -->
+        <div class="hidden sm:flex items-center gap-2">
+          <span id="nav-chat-issues" class="badge-alert hidden">
+            Alerts Present
+          </span>
+          <button onclick="loadAllData()" title="Sync Live Data" class="btn-secondary text-xs py-1.5 px-3">
+            <i id="sync-icon" class="fa-solid fa-arrows-rotate text-[11px]"></i>
             <span>Sync</span>
           </button>
-          <button onclick="performLogout()" title="Logout" class="py-2.5 px-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold rounded-xl border border-rose-500/20 flex items-center justify-center gap-2 transition-all">
-            <i class="fa-solid fa-arrow-right-from-bracket"></i>
-            <span>Exit</span>
+          <button onclick="performLogout()" class="btn-secondary text-xs py-1.5 px-3">
+            Sign Out
           </button>
         </div>
       </div>
-    </aside>
+    </header>
 
-    <!-- RIGHT MAIN CONTENT AREA -->
-    <div class="flex-1 flex flex-col min-w-0">
-      <!-- TOP MOBILE HEADER & BREADCRUMB -->
-      <header class="border-b border-obsidian-border bg-[#0B0C0E]/90 backdrop-blur-xl sticky top-0 z-40 px-4 sm:px-6 py-3.5 flex flex-col gap-3">
-        <div class="flex items-center justify-between">
-          <!-- MOBILE BRAND (Visible on small screens) -->
-          <div class="flex lg:hidden items-center gap-3">
-            <div class="w-9 h-9 bg-[#1B1E24] border border-lime-accent/40 rounded-xl flex items-center justify-center text-lime-accent text-lg shadow-sm">
-              🧠
+    <!-- CONTENT WRAPPER -->
+    <main class="w-full max-w-6xl mx-auto p-4 sm:p-8 space-y-8 flex-1">
+
+      <!-- ================= MONOCHROME HERO 1 (TWO-COLUMN MINIMALIST HERO) ================= -->
+      <section class="card-surface p-6 sm:p-8">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          <!-- LEFT COLUMN -->
+          <div class="lg:col-span-7 space-y-4">
+            <div class="text-[11px] font-bold uppercase tracking-widest text-[#6B6B6B]">
+              Clinical Intelligence Suite
             </div>
-            <div>
-              <h1 class="text-base font-black text-white">NEURA AI</h1>
-              <p class="text-[10px] text-slate-400">Executive Control Hub</p>
-            </div>
-          </div>
-
-          <!-- DESKTOP TOP BREADCRUMB -->
-          <div class="hidden lg:flex items-center gap-3">
-            <span class="text-xs font-bold text-slate-400 uppercase tracking-wider" id="current-view-title"><i class="fa-solid fa-users text-lime-accent mr-1.5"></i> Registered Students Directory</span>
-          </div>
-
-          <!-- RIGHT ACTIONS -->
-          <div class="flex items-center gap-2.5">
-            <span id="nav-chat-issues" class="px-2.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-bold hidden flex items-center gap-1.5">
-              <i class="fa-solid fa-triangle-exclamation"></i> <span>Diagnostic Issues</span>
-            </span>
-            <button onclick="loadAllData()" title="Sync Live Data" class="px-3.5 py-2 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 text-xs font-bold rounded-xl border border-obsidian-border flex items-center gap-2 transition-all">
-              <i id="sync-icon" class="fa-solid fa-arrows-rotate text-lime-accent"></i>
-              <span class="hidden sm:inline">Sync Live</span>
-            </button>
-            <button onclick="performLogout()" class="lg:hidden px-3 py-2 bg-rose-500/10 text-rose-400 text-xs font-bold rounded-xl border border-rose-500/20">
-              <i class="fa-solid fa-arrow-right-from-bracket"></i>
-            </button>
-          </div>
-        </div>
-
-        <!-- MOBILE / TABLET NAV TABS (Fallback for touch screens) -->
-        <div class="flex lg:hidden items-center justify-between gap-1 pt-2 border-t border-obsidian-border overflow-x-auto custom-scrollbar text-xs font-semibold">
-          <button onclick="switchTab('students')" id="m-tab-btn-students" class="px-3 py-1.5 rounded-lg text-slate-300 tab-active flex items-center gap-1.5 whitespace-nowrap">
-            <i class="fa-solid fa-users"></i> Students
-          </button>
-          <button onclick="switchTab('chats')" id="m-tab-btn-chats" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
-            <i class="fa-solid fa-comments"></i> Chats
-          </button>
-          <button onclick="switchTab('broadcast')" id="m-tab-btn-broadcast" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
-            <i class="fa-solid fa-bullhorn"></i> Broadcast
-          </button>
-          <button onclick="switchTab('analytics')" id="m-tab-btn-analytics" class="px-3 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
-            <i class="fa-solid fa-chart-pie"></i> Stats
-          </button>
-        </div>
-      </header>
-
-      <!-- CONTENT WRAPPER -->
-      <main class="w-full p-4 sm:p-6 lg:p-8 space-y-8 flex-1">
-      
-      <!-- ================= REACT BITS PRO: HERO 1 (TWO-COLUMN WITH CTA & SOCIAL PROOF) ================= -->
-      <section class="glass-card rounded-3xl p-6 sm:p-8 lg:p-10 relative overflow-hidden border border-lime-accent/20 shadow-2xl transition-all duration-300">
-        <!-- Ambient background glows -->
-        <div class="absolute -top-24 -right-24 w-80 h-80 bg-lime-accent/10 rounded-full blur-3xl pointer-events-none"></div>
-        <div class="absolute -bottom-24 -left-24 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
-
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center relative z-10">
-          
-          <!-- LEFT COLUMN: HEADLINE, COPY, CTA & SOCIAL PROOF -->
-          <div class="lg:col-span-7 space-y-6">
-            <!-- STATUS BADGE PILL -->
-            <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#1B1E24] border border-lime-accent/30 text-lime-accent text-xs font-bold shadow-sm">
-              <span class="w-2 h-2 rounded-full bg-lime-accent animate-ping"></span>
-              <span class="tracking-wide">NEURA AI 2.0 • CLINICAL INTELLIGENCE SUITE</span>
-            </div>
-
-            <!-- HERO HEADLINE -->
-            <h1 class="text-3xl sm:text-4xl lg:text-5xl font-black text-white tracking-tight leading-[1.15]">
-              Empowering <span class="text-transparent bg-clip-text bg-gradient-to-r from-lime-accent via-emerald-300 to-lime-accent">Clinical Excellence</span> for Next-Gen Medical Doctors.
+            <h1 class="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#111111] leading-tight">
+              High-yield clinical grounding and real-time medical telemetry.
             </h1>
-
-            <!-- HERO COPY -->
-            <p class="text-slate-300 text-sm sm:text-base leading-relaxed max-w-2xl font-normal">
-              The high-yield medical AI hub for Nigerian MBBS candidates. Real-time RAG textbook retrieval across Robbins, Kumar &amp; Clark, Jawetz, and Ganong, paired with live diagnostic chat transcripts, automated study streaks, and high-precision WhatsApp dispatches.
+            <p class="text-sm text-[#6B6B6B] leading-relaxed max-w-xl">
+              Unified administrative oversight for Nigerian MBBS candidates. Grounded textbook retrieval across Robbins, Kumar &amp; Clark, Jawetz, and Ganong with live chat diagnostics and study metrics.
             </p>
-
-            <!-- CALL TO ACTION (CTA) GROUP -->
-            <div class="flex flex-wrap items-center gap-3 pt-2">
-              <button onclick="switchTab('broadcast')" class="px-5 py-3 rounded-xl bg-lime-accent hover:bg-lime-hover text-black font-extrabold text-xs sm:text-sm shadow-lg shadow-lime-accent/25 hover:shadow-lime-accent/40 transition-all flex items-center gap-2 transform active:scale-95">
-                <i class="fa-solid fa-bullhorn text-xs"></i>
-                <span>Launch WhatsApp Broadcast</span>
+            
+            <div class="flex flex-wrap items-center gap-2.5 pt-2">
+              <button onclick="switchTab('broadcast')" class="btn-primary">
+                <span>Dispatch Announcement</span>
               </button>
-              <button onclick="switchTab('chats')" class="px-5 py-3 rounded-xl bg-[#1B1E24] hover:bg-[#252A33] text-white font-bold text-xs sm:text-sm border border-obsidian-border hover:border-slate-600 transition-all flex items-center gap-2 transform active:scale-95">
-                <i class="fa-solid fa-comments text-lime-accent text-xs"></i>
+              <button onclick="switchTab('chats')" class="btn-secondary">
                 <span>Inspect Transcripts</span>
               </button>
-              <button onclick="loadAllData()" title="Sync Real-Time Data" class="p-3 rounded-xl bg-[#1B1E24] hover:bg-[#252A33] text-slate-300 hover:text-white border border-obsidian-border transition-all flex items-center justify-center">
-                <i class="fa-solid fa-arrows-rotate text-lime-accent text-sm"></i>
+              <button onclick="loadAllData()" class="btn-secondary" title="Refresh Live Data">
+                <i class="fa-solid fa-arrows-rotate text-xs"></i>
               </button>
             </div>
 
-            <!-- SOCIAL PROOF & TRUST BADGES -->
-            <div class="pt-6 border-t border-obsidian-border flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6">
-              <!-- AVATAR GROUP -->
-              <div class="flex items-center">
-                <div class="flex -space-x-2.5 overflow-hidden">
-                  <div class="inline-block h-8 w-8 rounded-full ring-2 ring-[#14161A] bg-emerald-500/20 text-emerald-300 font-bold flex items-center justify-center text-[10px] border border-emerald-500/40">SO</div>
-                  <div class="inline-block h-8 w-8 rounded-full ring-2 ring-[#14161A] bg-lime-500/20 text-lime-accent font-bold flex items-center justify-center text-[10px] border border-lime-500/40">FA</div>
-                  <div class="inline-block h-8 w-8 rounded-full ring-2 ring-[#14161A] bg-blue-500/20 text-blue-300 font-bold flex items-center justify-center text-[10px] border border-blue-500/40">DA</div>
-                  <div class="inline-block h-8 w-8 rounded-full ring-2 ring-[#14161A] bg-purple-500/20 text-purple-300 font-bold flex items-center justify-center text-[10px] border border-purple-500/40">AO</div>
-                  <div class="inline-block h-8 w-8 rounded-full ring-2 ring-[#14161A] bg-[#1B1E24] text-slate-200 font-bold flex items-center justify-center text-[9px] border border-slate-700">+500</div>
-                </div>
-              </div>
-
-              <!-- RATING & TEXT -->
-              <div class="space-y-0.5">
-                <div class="flex items-center gap-1 text-amber-400 text-xs">
-                  <i class="fa-solid fa-star"></i>
-                  <i class="fa-solid fa-star"></i>
-                  <i class="fa-solid fa-star"></i>
-                  <i class="fa-solid fa-star"></i>
-                  <i class="fa-solid fa-star"></i>
-                  <span class="font-extrabold text-white text-xs ml-1">4.98 / 5.0</span>
-                </div>
-                <p class="text-[11px] text-slate-400 font-medium">Trusted by MBBS candidates across Nigeria</p>
-              </div>
-
-              <!-- STAT STRIP -->
-              <div class="hidden sm:flex items-center gap-3 pl-4 border-l border-obsidian-border text-[11px] text-slate-400 font-mono">
-                <span class="flex items-center gap-1"><i class="fa-solid fa-bolt text-lime-accent text-[9px]"></i> 0.8s RAG</span>
-                <span>•</span>
-                <span class="flex items-center gap-1"><i class="fa-solid fa-book-medical text-emerald-400 text-[9px]"></i> 100% Grounded</span>
-              </div>
+            <div class="pt-4 border-t border-[#E0E0E0] text-xs text-[#6B6B6B]">
+              Over 500 active candidates &bull; 4.9/5 satisfaction score &bull; 100% textbook-grounded
             </div>
           </div>
 
-          <!-- RIGHT COLUMN: INTERACTIVE CLINICAL PREVIEW WINDOW MOCKUP -->
-          <div class="lg:col-span-5 relative">
-            <div class="bg-[#0D0F12] border border-obsidian-border rounded-2xl p-4 sm:p-5 shadow-2xl space-y-3 relative">
-              <!-- MOCKUP WINDOW HEADER -->
-              <div class="flex items-center justify-between pb-3 border-b border-obsidian-border text-xs">
-                <div class="flex items-center gap-1.5">
-                  <span class="w-2.5 h-2.5 rounded-full bg-[#ff5f56]"></span>
-                  <span class="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]"></span>
-                  <span class="w-2.5 h-2.5 rounded-full bg-[#27c93f]"></span>
-                  <span class="ml-2 font-mono text-[10px] text-slate-400">node:neura-clinical-engine</span>
+          <!-- RIGHT COLUMN: MINIMALIST DIAGNOSTIC PREVIEW -->
+          <div class="lg:col-span-5">
+            <div class="card p-4 space-y-3 bg-[#FFFFFF]">
+              <div class="flex items-center justify-between border-b border-[#E0E0E0] pb-2 text-xs">
+                <span class="font-mono text-[11px] text-[#6B6B6B]">node:neura-clinical-engine</span>
+                <span class="badge-mono text-[10px]">ACTIVE</span>
+              </div>
+              
+              <div class="space-y-2 text-xs">
+                <div class="chat-bubble-user p-2.5 text-xs">
+                  <div class="font-semibold text-[11px] text-[#6B6B6B] mb-0.5">Student (500L)</div>
+                  <p>Explain the pathophysiology of Nephrotic Syndrome in simple terms.</p>
                 </div>
-                <div class="flex items-center gap-1.5 px-2 py-0.5 rounded bg-lime-accent/10 border border-lime-accent/20 text-lime-accent text-[10px] font-bold">
-                  <span class="w-1.5 h-1.5 rounded-full bg-lime-accent animate-pulse"></span>
-                  <span>ONLINE</span>
+                
+                <div class="chat-bubble-ai p-2.5 text-xs space-y-1">
+                  <div class="font-bold text-[11px] text-[#111111] border-b border-[#E0E0E0] pb-1">
+                    NEURA AI &bull; Clinical Tutor
+                  </div>
+                  <p class="font-semibold text-[#111111]">Nephrotic Syndrome Overview</p>
+                  <p class="text-[#111111] text-[12px]">
+                    Podocyte injury causes massive proteinuria (>3.5g/24h), hypoalbuminemia, and generalized edema.
+                  </p>
+                  <p class="text-[11px] text-[#6B6B6B] italic pt-1 border-t border-[#E0E0E0]">
+                    Key Takeaway: Loss of negative charge on glomerular basement membrane leads to albumin filtration.
+                  </p>
                 </div>
               </div>
 
-              <!-- SIMULATED REAL-TIME WHATSAPP CLINICAL INTERACTION -->
-              <div class="space-y-2.5 pt-1 font-sans">
-                <!-- USER QUESTION BUBBLE -->
-                <div class="flex justify-end">
-                  <div class="wa-bubble-user p-2.5 max-w-[90%] text-[11px] space-y-0.5">
-                    <p class="font-bold text-lime-accent text-[10px]">Student (500L)</p>
-                    <p class="text-slate-200">Explain the pathophysiology of Nephrotic Syndrome in simple terms.</p>
-                  </div>
-                </div>
-
-                <!-- AI RESPONSE BUBBLE -->
-                <div class="flex justify-start">
-                  <div class="wa-bubble-ai p-3 max-w-[95%] text-[11px] space-y-1.5 border border-emerald-500/30 shadow-md">
-                    <div class="font-black text-emerald-300 text-[10px] flex items-center justify-between">
-                      <span>🧠 NEURA AI • Clinical Tutor</span>
-                      <span class="font-mono text-[9px] text-slate-300">Robbins Path L3</span>
-                    </div>
-                    <p class="text-white font-bold"># *NEPHROTIC SYNDROME*</p>
-                    <p class="text-slate-200 leading-snug">
-                      Podocyte injury causes massive *proteinuria* (&gt;3.5g/24h), *hypoalbuminemia*, and severe *generalized edema*.
-                    </p>
-                    <div class="bg-black/30 p-1.5 rounded border border-white/10 text-[10px] text-slate-300">
-                      &gt; *Key Takeaway:* Loss of negative charge on glomerular basement membrane leads to albumin filtration.
-                    </div>
-                    <p class="text-[9px] text-amber-300 italic font-mono pt-0.5">_🔥 5-Day Study Streak_</p>
-                  </div>
-                </div>
-              </div>
-
-              <!-- FLOATING LIVE TELEMETRY PILLS -->
-              <div class="grid grid-cols-2 gap-2 pt-2 text-[10px] font-mono">
-                <div class="bg-[#14161A] p-2 rounded-xl border border-obsidian-border flex items-center justify-between">
-                  <span class="text-slate-400">Total Students</span>
-                  <span id="hero-stat-students" class="text-lime-accent font-bold">--</span>
-                </div>
-                <div class="bg-[#14161A] p-2 rounded-xl border border-obsidian-border flex items-center justify-between">
-                  <span class="text-slate-400">Active (24h)</span>
-                  <span id="hero-stat-active" class="text-emerald-400 font-bold">--</span>
-                </div>
+              <div class="grid grid-cols-2 gap-2 pt-2 border-t border-[#E0E0E0] text-[11px] text-[#6B6B6B]">
+                <div>Registered: <span id="hero-stat-students" class="font-bold text-[#111111]">--</span></div>
+                <div>Active (24h): <span id="hero-stat-active" class="font-bold text-[#111111]">--</span></div>
               </div>
             </div>
           </div>
-
         </div>
       </section>
 
       <!-- TOP EXECUTIVE KPI SUMMARY CARDS -->
-      <section class="grid grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-5">
+      <section class="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <!-- TOTAL STUDENTS -->
-        <div class="glass-card p-5 rounded-2xl glass-card-hover relative overflow-hidden">
-          <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total Registered</span>
-            <div class="w-8 h-8 rounded-lg bg-lime-accent/10 text-lime-accent flex items-center justify-center text-sm font-bold border border-lime-accent/20">
-              <i class="fa-solid fa-user-graduate"></i>
-            </div>
-          </div>
-          <h3 id="stat-total-students" class="text-2xl sm:text-3xl font-black text-white mt-2">--</h3>
-          <p class="text-[11px] text-lime-accent mt-1 flex items-center gap-1 font-semibold">
-            <i class="fa-solid fa-arrow-trend-up"></i> Live MongoDB Feed
-          </p>
+        <div class="card p-4 space-y-1">
+          <div class="text-[11px] font-bold text-[#6B6B6B] uppercase tracking-wider">Total Registered</div>
+          <div id="stat-total-students" class="text-2xl font-bold text-[#111111]">--</div>
+          <div class="text-[11px] text-[#6B6B6B]">Live database count</div>
         </div>
 
         <!-- ACTIVE 24H -->
-        <div class="glass-card p-5 rounded-2xl glass-card-hover relative overflow-hidden">
-          <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Active Today (24h)</span>
-            <div class="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center text-sm font-bold border border-emerald-500/20">
-              <i class="fa-solid fa-bolt"></i>
-            </div>
-          </div>
-          <h3 id="stat-active-24h" class="text-2xl sm:text-3xl font-black text-emerald-400 mt-2">--</h3>
-          <p class="text-[11px] text-slate-400 mt-1 flex items-center gap-1 font-medium">
-            <span class="text-emerald-400 font-semibold"><i class="fa-solid fa-comment-dots"></i> Direct WA Ready</span>
-          </p>
+        <div class="card p-4 space-y-1">
+          <div class="text-[11px] font-bold text-[#6B6B6B] uppercase tracking-wider">Active Today (24h)</div>
+          <div id="stat-active-24h" class="text-2xl font-bold text-[#111111]">--</div>
+          <div class="text-[11px] text-[#6B6B6B]">Recent chat activity</div>
         </div>
 
         <!-- TOTAL QUESTIONS MASTERED -->
-        <div class="glass-card p-5 rounded-2xl glass-card-hover relative overflow-hidden">
-          <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Clinical Queries Mastered</span>
-            <div class="w-8 h-8 rounded-lg bg-lime-accent/15 text-lime-accent flex items-center justify-center text-sm font-bold border border-lime-accent/30">
-              <i class="fa-solid fa-brain"></i>
-            </div>
-          </div>
-          <h3 id="stat-queries" class="text-2xl sm:text-3xl font-black text-lime-accent mt-2">--</h3>
-          <p class="text-[11px] text-slate-400 mt-1 flex items-center gap-1 font-medium">
-            <span>Textbook Grounded Queries</span>
-          </p>
+        <div class="card p-4 space-y-1">
+          <div class="text-[11px] font-bold text-[#6B6B6B] uppercase tracking-wider">Clinical Queries</div>
+          <div id="stat-queries" class="text-2xl font-bold text-[#111111]">--</div>
+          <div class="text-[11px] text-[#6B6B6B]">Grounded interactions</div>
         </div>
 
         <!-- TOP CLASS -->
-        <div class="glass-card p-5 rounded-2xl glass-card-hover relative overflow-hidden">
-          <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Top Class Level</span>
-            <div class="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center text-sm font-bold border border-indigo-500/20">
-              <i class="fa-solid fa-graduation-cap"></i>
-            </div>
-          </div>
-          <h3 id="stat-top-level" class="text-2xl sm:text-3xl font-black text-white mt-2">--</h3>
-          <p class="text-[11px] text-slate-400 mt-1 flex items-center gap-1 font-medium">
-            <span>Most Active MBBS Cohort</span>
-          </p>
+        <div class="card p-4 space-y-1">
+          <div class="text-[11px] font-bold text-[#6B6B6B] uppercase tracking-wider">Top Cohort Level</div>
+          <div id="stat-top-level" class="text-2xl font-bold text-[#111111]">--</div>
+          <div class="text-[11px] text-[#6B6B6B]">Most active class</div>
         </div>
       </section>
 
       <!-- ================= TAB 1: STUDENT DIRECTORY ================= -->
       <section id="view-students" class="space-y-4">
-        <!-- CONTROLS & FILTER BAR -->
-        <div class="glass-card p-4 sm:p-5 rounded-2xl space-y-3.5">
-          <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div class="card p-4 sm:p-5 space-y-4">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                <i class="fa-solid fa-users text-lime-accent"></i> Registered Student Directory
-              </h2>
-              <p class="text-xs text-slate-400 mt-0.5">Live database of all registered MBBS students, study streaks & textbook preferences</p>
+              <h2 class="text-base font-bold text-[#111111]">Registered Student Directory</h2>
+              <p class="text-xs text-[#6B6B6B]">Directory of registered candidates, level distribution, and study records</p>
             </div>
 
             <!-- SEARCH BAR -->
-            <div class="relative w-full md:w-80">
-              <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-slate-400 text-xs"></i>
+            <div class="relative w-full sm:w-72">
               <input type="text" id="student-search" oninput="filterStudentsTable()" placeholder="Search by name, phone or class..."
-                     class="w-full pl-9 pr-4 py-2 bg-[#0B0C0E] border border-obsidian-border rounded-xl text-white text-xs placeholder:text-slate-500 focus:outline-none focus:border-lime-accent transition-all">
+                     class="input-box w-full text-xs">
             </div>
           </div>
 
-          <!-- FILTER PILLS -->
-          <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-obsidian-border">
-            <!-- LEVEL FILTER -->
-            <div class="flex flex-wrap items-center gap-1 text-xs">
-              <span class="text-slate-400 font-semibold mr-1 text-[11px] uppercase tracking-wider">Level:</span>
-              <button onclick="setLevelFilter('ALL')" id="lvl-filter-ALL" class="lvl-btn px-2.5 py-1 rounded-lg font-extrabold bg-lime-accent text-black transition-all">All</button>
-              <button onclick="setLevelFilter('200L')" id="lvl-filter-200L" class="lvl-btn px-2.5 py-1 rounded-lg font-semibold bg-[#1B1E24] text-slate-300 hover:bg-[#252A33] transition-all">200L</button>
-              <button onclick="setLevelFilter('300L')" id="lvl-filter-300L" class="lvl-btn px-2.5 py-1 rounded-lg font-semibold bg-[#1B1E24] text-slate-300 hover:bg-[#252A33] transition-all">300L</button>
-              <button onclick="setLevelFilter('400L')" id="lvl-filter-400L" class="lvl-btn px-2.5 py-1 rounded-lg font-semibold bg-[#1B1E24] text-slate-300 hover:bg-[#252A33] transition-all">400L</button>
-              <button onclick="setLevelFilter('500L')" id="lvl-filter-500L" class="lvl-btn px-2.5 py-1 rounded-lg font-semibold bg-[#1B1E24] text-slate-300 hover:bg-[#252A33] transition-all">500L</button>
-              <button onclick="setLevelFilter('600L')" id="lvl-filter-600L" class="lvl-btn px-2.5 py-1 rounded-lg font-semibold bg-[#1B1E24] text-slate-300 hover:bg-[#252A33] transition-all">600L</button>
+          <!-- FILTER BAR -->
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-[#E0E0E0]">
+            <div class="flex flex-wrap items-center gap-1">
+              <span class="text-xs font-semibold text-[#6B6B6B] mr-1 uppercase">Level:</span>
+              <button onclick="setLevelFilter('ALL')" id="lvl-filter-ALL" class="filter-btn active">All</button>
+              <button onclick="setLevelFilter('200L')" id="lvl-filter-200L" class="filter-btn">200L</button>
+              <button onclick="setLevelFilter('300L')" id="lvl-filter-300L" class="filter-btn">300L</button>
+              <button onclick="setLevelFilter('400L')" id="lvl-filter-400L" class="filter-btn">400L</button>
+              <button onclick="setLevelFilter('500L')" id="lvl-filter-500L" class="filter-btn">500L</button>
+              <button onclick="setLevelFilter('600L')" id="lvl-filter-600L" class="filter-btn">600L</button>
             </div>
 
-            <div class="flex items-center gap-2 text-xs">
-              <span id="filtered-count" class="text-slate-400 font-medium">Showing -- students</span>
-            </div>
+            <div id="filtered-count" class="text-xs text-[#6B6B6B]">Showing -- students</div>
           </div>
         </div>
 
         <!-- STUDENTS DATA TABLE -->
-        <div class="glass-card rounded-2xl overflow-hidden shadow-xl border border-obsidian-border">
+        <div class="card overflow-hidden">
           <div class="overflow-x-auto custom-scrollbar">
-            <table class="w-full text-left text-xs">
-              <thead class="bg-[#0B0C0E] text-slate-400 uppercase font-bold text-[10px] tracking-wider border-b border-obsidian-border">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead class="bg-[#F5F5F5] text-[#6B6B6B] uppercase font-bold text-[10px] tracking-wider border-b border-[#E0E0E0]">
                 <tr>
-                  <th class="py-3.5 px-4">Student Profile</th>
-                  <th class="py-3.5 px-4">WhatsApp Phone Number</th>
-                  <th class="py-3.5 px-4">MBBS Level</th>
-                  <th class="py-3.5 px-4">Streak</th>
-                  <th class="py-3.5 px-4">Questions Mastered</th>
-                  <th class="py-3.5 px-4">Preferred Textbooks</th>
-                  <th class="py-3.5 px-4">Last Active</th>
-                  <th class="py-3.5 px-4 text-center">Actions</th>
+                  <th class="py-3 px-4 font-semibold">Student Name</th>
+                  <th class="py-3 px-4 font-semibold">WhatsApp Number</th>
+                  <th class="py-3 px-4 font-semibold">Level</th>
+                  <th class="py-3 px-4 font-semibold">Streak</th>
+                  <th class="py-3 px-4 font-semibold">Queries</th>
+                  <th class="py-3 px-4 font-semibold">Preferred Books</th>
+                  <th class="py-3 px-4 font-semibold">Last Active</th>
+                  <th class="py-3 px-4 font-semibold text-center">Actions</th>
                 </tr>
               </thead>
-              <tbody id="students-tbody" class="divide-y divide-obsidian-border text-slate-300">
+              <tbody id="students-tbody" class="divide-y divide-[#E0E0E0] text-[#111111]">
                 <tr>
-                  <td colspan="8" class="py-12 text-center text-slate-500">
-                    <div class="inline-block animate-spin text-lime-accent text-2xl mb-2"><i class="fa-solid fa-circle-notch"></i></div>
-                    <p class="text-xs font-semibold">Loading student directory from MongoDB...</p>
+                  <td colspan="8" class="py-10 text-center text-[#6B6B6B]">
+                    Loading student directory...
                   </td>
                 </tr>
               </tbody>
@@ -4238,265 +4119,226 @@ async def admin_dashboard_page():
 
       <!-- ================= TAB 2: USER CHATS & DIAGNOSTICS ================= -->
       <section id="view-chats" class="hidden space-y-4">
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 h-[calc(100vh-210px)] min-h-[640px]">
-          <!-- LEFT SIDEBAR: STUDENT CHAT THREADS LIST (4 Cols) -->
-          <div class="lg:col-span-4 glass-card rounded-2xl p-4 flex flex-col space-y-3 h-full overflow-hidden border border-obsidian-border">
-            <div class="flex items-center justify-between border-b border-obsidian-border pb-2.5">
-              <div>
-                <h3 class="text-sm font-bold text-white flex items-center gap-2">
-                  <i class="fa-solid fa-comments text-lime-accent"></i> Conversations
-                </h3>
-                <p class="text-[11px] text-slate-400">Select student to inspect chat history</p>
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[720px]">
+          
+          <!-- LEFT: CONVERSATION THREADS LIST -->
+          <div class="lg:col-span-4 card flex flex-col h-full overflow-hidden">
+            <div class="p-3.5 border-b border-[#E0E0E0] space-y-2.5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold uppercase tracking-wider text-[#111111]">Chat Threads</span>
+                <span class="text-[11px] text-[#6B6B6B]" id="thread-count-label">--</span>
               </div>
-              <button onclick="loadRecentChats()" title="Refresh chat list" class="text-slate-400 hover:text-white text-xs p-1.5 bg-[#1B1E24] rounded-lg border border-obsidian-border">
-                <i class="fa-solid fa-arrows-rotate"></i>
-              </button>
-            </div>
-
-            <!-- SEARCH IN THREADS -->
-            <div class="relative">
-              <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
-              <input type="text" id="search-chat-students" oninput="filterChatThreadsList()" placeholder="Filter students or messages..."
-                     class="w-full pl-8 pr-3 py-1.5 bg-[#0B0C0E] border border-obsidian-border rounded-xl text-white text-xs placeholder:text-slate-500 focus:outline-none focus:border-lime-accent transition-all">
-            </div>
-
-            <!-- QUICK FILTER PILLS -->
-            <div class="flex flex-wrap items-center gap-1 text-[11px] pt-1">
-              <button onclick="setChatThreadFilter('ALL')" id="ct-filter-ALL" class="ct-filter-btn px-2 py-0.5 rounded-md font-bold bg-lime-accent text-black">All</button>
-              <button onclick="setChatThreadFilter('ISSUES')" id="ct-filter-ISSUES" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-[#1B1E24] text-amber-300 hover:bg-[#252A33] flex items-center gap-1"><i class="fa-solid fa-triangle-exclamation text-[10px]"></i> Issues</button>
-              <button onclick="setChatThreadFilter('200L')" id="ct-filter-200L" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-[#1B1E24] text-slate-300 hover:bg-[#252A33]">200L</button>
-              <button onclick="setChatThreadFilter('300L')" id="ct-filter-300L" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-[#1B1E24] text-slate-300 hover:bg-[#252A33]">300L</button>
-              <button onclick="setChatThreadFilter('400L')" id="ct-filter-400L" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-[#1B1E24] text-slate-300 hover:bg-[#252A33]">400L</button>
-              <button onclick="setChatThreadFilter('500L')" id="ct-filter-500L" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-[#1B1E24] text-slate-300 hover:bg-[#252A33]">500L</button>
-              <button onclick="setChatThreadFilter('600L')" id="ct-filter-600L" class="ct-filter-btn px-2 py-0.5 rounded-md font-semibold bg-[#1B1E24] text-slate-300 hover:bg-[#252A33]">600L</button>
-            </div>
-
-            <!-- THREADS SCROLL LIST -->
-            <div id="chat-threads-container" class="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-              <div class="py-12 text-center text-slate-500 text-xs">
-                <div class="inline-block animate-spin text-lime-accent text-xl mb-2"><i class="fa-solid fa-circle-notch"></i></div>
-                <p>Loading student chat threads...</p>
+              <input type="text" id="search-chat-students" oninput="filterChatThreadsList()" placeholder="Filter candidate threads..."
+                     class="input-box w-full text-xs">
+              <div class="flex items-center gap-1 pt-1">
+                <button onclick="setChatThreadFilter('ALL')" id="ct-filter-ALL" class="filter-btn active text-[11px] py-0.5 px-2">All</button>
+                <button onclick="setChatThreadFilter('ISSUES')" id="ct-filter-ISSUES" class="filter-btn text-[11px] py-0.5 px-2">Alerts Only</button>
               </div>
+            </div>
+
+            <div id="chat-threads-container" class="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
+              <div class="text-center py-10 text-xs text-[#6B6B6B]">Loading conversation threads...</div>
             </div>
           </div>
 
-          <!-- RIGHT MAIN PANEL: CONVERSATION TRANSCRIPT STREAM (8 Cols) -->
-          <div class="lg:col-span-8 glass-card rounded-2xl flex flex-col h-full overflow-hidden border border-obsidian-border relative">
-            <!-- CONVERSATION HEADER -->
-            <div id="active-chat-header" class="p-4 border-b border-obsidian-border bg-[#0B0C0E] flex items-center justify-between">
+          <!-- RIGHT: LIVE TRANSCRIPT VIEWER -->
+          <div class="lg:col-span-8 card flex flex-col h-full overflow-hidden">
+            <!-- TRANSCRIPT HEADER -->
+            <div class="p-3.5 border-b border-[#E0E0E0] flex items-center justify-between bg-[#F5F5F5]">
               <div class="flex items-center gap-3">
-                <div id="chat-header-avatar" class="w-10 h-10 rounded-xl bg-[#1B1E24] border border-lime-accent/40 text-lime-accent font-bold flex items-center justify-center text-sm shadow-md">
-                  🧠
+                <div id="chat-header-avatar" class="w-8 h-8 rounded bg-[#111111] text-[#FFFFFF] font-bold text-xs flex items-center justify-center">
+                  --
                 </div>
                 <div>
                   <div class="flex items-center gap-2">
-                    <h3 id="chat-header-name" class="font-extrabold text-white text-sm">Select a Student</h3>
-                    <span id="chat-header-level" class="px-2 py-0.5 rounded text-[10px] font-bold bg-[#1B1E24] text-slate-400 border border-obsidian-border">--</span>
+                    <span id="chat-header-name" class="font-bold text-sm text-[#111111]">Select a Candidate</span>
+                    <span id="chat-header-level" class="badge-mono text-[10px]">--</span>
                   </div>
-                  <div class="flex items-center gap-2 text-[11px] text-slate-400 font-mono mt-0.5">
-                    <span id="chat-header-phone">--</span>
-                    <button onclick="copyActiveChatPhone()" title="Copy Phone" class="hover:text-white transition-colors"><i class="fa-regular fa-copy text-xs"></i></button>
-                    <span class="text-slate-600">•</span>
-                    <span id="chat-header-streak" class="text-amber-400 font-sans font-bold">🔥 --</span>
+                  <div class="flex items-center gap-2 text-xs text-[#6B6B6B]">
+                    <span id="chat-header-phone" class="font-mono text-[11px]">--</span>
+                    <span>&bull;</span>
+                    <span id="chat-header-streak" class="text-[11px]">Streak: --</span>
                   </div>
                 </div>
               </div>
 
-              <!-- RIGHT ACTIONS & IN-CHAT SEARCH -->
               <div class="flex items-center gap-2">
-                <div class="relative hidden sm:block w-48">
-                  <i class="fa-solid fa-magnifying-glass absolute left-2.5 top-2 text-slate-400 text-xs"></i>
-                  <input type="text" id="in-chat-search" oninput="filterInChatMessages()" placeholder="Find in chat..."
-                         class="w-full pl-7 pr-3 py-1 bg-[#0B0C0E] border border-obsidian-border rounded-lg text-white text-xs placeholder:text-slate-500 focus:outline-none focus:border-lime-accent">
-                </div>
-                <a id="chat-header-wa-btn" href="#" target="_blank" class="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors">
-                  <i class="fa-brands fa-whatsapp"></i> <span class="hidden sm:inline">WA</span>
+                <input type="text" id="in-chat-search" oninput="filterInChatMessages()" placeholder="Find text in chat..."
+                       class="input-box text-xs py-1 px-2.5 w-36 sm:w-48 hidden sm:block">
+                <a id="chat-header-wa-btn" href="#" target="_blank" class="btn-secondary text-xs py-1 px-2.5">
+                  <span>WhatsApp</span>
                 </a>
               </div>
             </div>
 
             <!-- DIAGNOSTIC ALERT BANNER -->
-            <div id="chat-diagnostic-banner" class="hidden px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-between text-xs text-amber-300">
-              <div class="flex items-center gap-2">
-                <i class="fa-solid fa-triangle-exclamation text-amber-400"></i>
-                <span id="chat-diagnostic-text">Potential issue(s) detected in this conversation! Highlighted in cards below.</span>
-              </div>
-              <span class="text-[10px] px-2 py-0.5 bg-amber-500/20 rounded font-bold uppercase tracking-wider">DIAGNOSTIC ALERT</span>
+            <div id="chat-diagnostic-banner" class="hidden p-2.5 bg-[#F5F5F5] border-b border-[#111111] text-xs font-semibold text-[#111111] flex items-center justify-between">
+              <span id="chat-diagnostic-text">[Diagnostic Alert: Review required]</span>
+              <span class="badge-alert text-[10px]">ALERT</span>
             </div>
 
-            <!-- CHAT STREAM CONTAINER -->
-            <div id="chat-stream-container" class="flex-1 whatsapp-bg p-4 overflow-y-auto space-y-3.5 custom-scrollbar flex flex-col">
-              <!-- Empty State -->
-              <div id="chat-empty-state" class="m-auto text-center text-slate-400 p-8 space-y-3 max-w-sm">
-                <div class="w-16 h-16 rounded-2xl bg-[#1B1E24] text-lime-accent flex items-center justify-center text-3xl mx-auto border border-obsidian-border shadow-inner">
-                  <i class="fa-solid fa-comments"></i>
-                </div>
-                <h4 class="font-bold text-white text-sm">No Conversation Selected</h4>
-                <p class="text-xs text-slate-400 leading-relaxed">
-                  Choose a student from the sidebar on the left or click <b>"Chats"</b> from the Registered Students Directory table to inspect their complete interaction transcript and diagnose issues.
-                </p>
+            <!-- MESSAGES CONTAINER -->
+            <div id="chat-stream-container" class="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-[#FFFFFF]">
+              <div class="text-center py-20 text-xs text-[#6B6B6B]">
+                Select a candidate conversation thread from the left to view the complete transcript.
               </div>
             </div>
           </div>
+
         </div>
       </section>
 
       <!-- ================= TAB 3: BROADCAST STUDIO ================= -->
-      <section id="view-broadcast" class="hidden space-y-6">
+      <section id="view-broadcast" class="hidden space-y-4">
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <!-- COMPOSER CARD (7 Cols) -->
-          <div class="lg:col-span-7 glass-card p-6 rounded-2xl space-y-5 border border-obsidian-border">
-            <div class="flex items-center justify-between border-b border-obsidian-border pb-4">
-              <div>
-                <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                  <i class="fa-solid fa-bullhorn text-lime-accent"></i> New WhatsApp Announcement
-                </h2>
-                <p class="text-xs text-slate-400 mt-0.5">Deliver instant announcements to students' WhatsApp chats</p>
-              </div>
-              <span class="text-xs font-bold px-3 py-1 bg-lime-accent/10 text-lime-accent border border-lime-accent/30 rounded-full">
-                Meta Cloud API v19.0
-              </span>
-            </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">Target Audience</label>
-                <select id="broadcast-target" class="w-full px-3.5 py-2.5 bg-[#0B0C0E] border border-obsidian-border rounded-xl text-white text-xs font-semibold focus:outline-none focus:border-lime-accent">
-                  <option value="ALL">🌟 All Registered Students (100%)</option>
-                  <option value="200L">🩺 200 Level Students Only</option>
-                  <option value="300L">🩺 300 Level Students Only</option>
-                  <option value="400L">🩺 400 Level Students Only</option>
-                  <option value="500L">🩺 500 Level Students Only</option>
-                  <option value="600L">🩺 600 Level (Finals) Only</option>
-                </select>
-              </div>
-
-              <div>
-                <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">Delivery Strategy</label>
-                <select id="broadcast-mode" class="w-full px-3.5 py-2.5 bg-[#0B0C0E] border border-obsidian-border rounded-xl text-white text-xs font-semibold focus:outline-none focus:border-lime-accent">
-                  <option value="smart">⚡ Smart Hybrid (Direct + Template Fallback)</option>
-                  <option value="direct_only">💬 Direct Message Only (Active 24h Window)</option>
-                  <option value="template_only">📋 Template Only (neura_announcement)</option>
-                </select>
-              </div>
-            </div>
-
+          
+          <!-- LEFT: COMPOSER -->
+          <div class="lg:col-span-7 card p-5 space-y-4">
             <div>
-              <div class="flex items-center justify-between mb-2">
-                <label class="text-xs font-bold text-slate-300 uppercase tracking-wider">Announcement Text</label>
-                <div class="flex items-center gap-1.5">
-                  <button type="button" onclick="insertFormatting('*', '*')" title="Bold text" class="px-2.5 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 rounded-lg text-xs font-bold border border-obsidian-border"><b>B</b></button>
-                  <button type="button" onclick="insertFormatting('_', '_')" title="Italic text" class="px-2.5 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 rounded-lg text-xs italic border border-obsidian-border"><i>I</i></button>
-                  <button type="button" onclick="insertEmoji('🧠')" class="px-2 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 rounded-lg text-xs border border-obsidian-border">🧠</button>
-                  <button type="button" onclick="insertEmoji('⚡')" class="px-2 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 rounded-lg text-xs border border-obsidian-border">⚡</button>
-                  <button type="button" onclick="insertEmoji('📚')" class="px-2 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 rounded-lg text-xs border border-obsidian-border">📚</button>
-                </div>
+              <h2 class="text-base font-bold text-[#111111]">WhatsApp Broadcast Composer</h2>
+              <p class="text-xs text-[#6B6B6B]">Dispatch announcements to specific MBBS level cohorts</p>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-semibold text-[#111111] uppercase tracking-wider mb-1">Target Audience</label>
+                <select id="broadcast-target" class="input-box w-full text-xs">
+                  <option value="ALL">All Registered Students</option>
+                  <option value="200L">200 Level Only</option>
+                  <option value="300L">300 Level Only</option>
+                  <option value="400L">400 Level Only</option>
+                  <option value="500L">500 Level Only</option>
+                  <option value="600L">600 Level Only</option>
+                </select>
               </div>
-              <textarea id="broadcast-msg" rows="7" oninput="updateLivePreview()" placeholder="Type your broadcast announcement here... Use *bold* for emphasis and _italic_ for notes."
-                        class="w-full p-4 bg-[#0B0C0E] border border-obsidian-border rounded-2xl text-white text-xs leading-relaxed focus:outline-none focus:border-lime-accent focus:ring-2 focus:ring-lime-accent/20 transition-all font-sans"></textarea>
-              <div class="flex items-center justify-between text-[11px] text-slate-500 mt-1.5 px-1">
-                <span>Supports WhatsApp formatting: <code class="text-lime-accent">*bold*</code>, <code class="text-lime-accent">_italic_</code></span>
-                <span id="char-count" class="font-mono">0 chars</span>
+
+              <div>
+                <label class="block text-xs font-semibold text-[#111111] uppercase tracking-wider mb-1">Dispatch Mode</label>
+                <select id="broadcast-mode" class="input-box w-full text-xs">
+                  <option value="standard">Standard Message</option>
+                  <option value="template">Utility Template</option>
+                </select>
               </div>
+            </div>
+
+            <!-- FORMATTING HELPERS -->
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between text-xs">
+                <span class="font-semibold text-[#111111]">Message Body</span>
+                <span id="char-count" class="text-[#6B6B6B] font-mono text-[11px]">0 chars</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-1 border border-[#E0E0E0] p-1 rounded bg-[#F5F5F5]">
+                <button type="button" onclick="insertFormatting('*', '*')" class="btn-secondary text-[11px] py-0.5 px-2">Bold</button>
+                <button type="button" onclick="insertFormatting('_', '_')" class="btn-secondary text-[11px] py-0.5 px-2">Italic</button>
+                <button type="button" onclick="insertFormatting('# *', '*')" class="btn-secondary text-[11px] py-0.5 px-2">Header</button>
+                <button type="button" onclick="insertFormatting('• ', '')" class="btn-secondary text-[11px] py-0.5 px-2">Bullet</button>
+              </div>
+              <textarea id="broadcast-msg" oninput="updateLivePreview()" rows="8" placeholder="Type your WhatsApp announcement here..."
+                        class="input-box w-full font-mono text-xs leading-relaxed"></textarea>
             </div>
 
             <div class="pt-2">
-              <button onclick="confirmBroadcast()" id="send-broadcast-btn"
-                      class="w-full py-4 px-6 bg-lime-accent hover:bg-lime-hover text-black font-extrabold rounded-2xl shadow-xl shadow-lime-accent/20 transition-all flex items-center justify-center gap-2 text-sm">
-                <i class="fa-solid fa-paper-plane"></i>
-                <span>Dispatch Announcement to Selected Students</span>
+              <button type="button" onclick="confirmBroadcast()" class="btn-primary w-full py-2.5">
+                <span>Review &amp; Dispatch Broadcast</span>
               </button>
             </div>
           </div>
 
-          <!-- WHATSAPP PHONE PREVIEW (5 Cols) -->
-          <div class="lg:col-span-5 glass-card p-6 rounded-2xl flex flex-col border border-obsidian-border">
-            <div class="border-b border-obsidian-border pb-3 mb-4 flex items-center justify-between">
-              <h3 class="text-xs font-bold text-slate-300 flex items-center gap-2 uppercase tracking-wider">
-                <i class="fa-brands fa-whatsapp text-emerald-400 text-base"></i> Live WhatsApp Recipient Screen
-              </h3>
-              <span class="text-[10px] font-mono text-slate-500">Preview Mode</span>
+          <!-- RIGHT: PREVIEW -->
+          <div class="lg:col-span-5 card p-5 space-y-3 bg-[#F5F5F5]">
+            <div class="flex items-center justify-between border-b border-[#E0E0E0] pb-2 text-xs">
+              <span class="font-bold text-[#111111]">Live WhatsApp Rendering</span>
+              <span id="preview-time" class="font-mono text-[#6B6B6B] text-[11px]">--:--</span>
             </div>
 
-            <div class="flex-1 whatsapp-bg rounded-2xl p-4 border border-obsidian-border flex flex-col justify-end min-h-[380px] shadow-inner relative overflow-hidden">
-              <div class="wa-bubble-ai p-4 max-w-[92%] self-start text-xs space-y-2">
-                <div class="text-[11px] font-extrabold text-emerald-300 flex items-center gap-1.5 border-b border-white/10 pb-1.5">
-                  <span>🧠 NEURA AI Official Broadcast</span>
-                </div>
-                <div id="preview-text" class="text-slate-100 text-xs whitespace-pre-wrap leading-relaxed">
-                  Hello Samuel! 👋
-                  
-Type your announcement on the left to see how it renders live on students' WhatsApp screens in real-time.
-                </div>
-                <div class="text-[10px] text-slate-300/80 text-right mt-1.5 flex items-center justify-end gap-1 font-mono">
-                  <span id="preview-time">12:00</span>
-                  <i class="fa-solid fa-check-double text-sky-300 text-[9px]"></i>
-                </div>
+            <div class="card p-4 bg-[#FFFFFF] min-h-[220px] text-xs space-y-2">
+              <div class="font-bold text-[11px] text-[#111111]">NEURA AI Announcement</div>
+              <div id="preview-text" class="text-xs text-[#111111] whitespace-pre-wrap leading-relaxed">
+                Type your announcement on the left to see how it renders live on students' WhatsApp screens in real-time.
               </div>
             </div>
+            
+            <div class="text-[11px] text-[#6B6B6B]">
+              Note: Broadcast messages are sent in compliance with WhatsApp Cloud API rate limits.
+            </div>
           </div>
+
         </div>
       </section>
 
-      <!-- ================= TAB 4: ANALYTICS & METRICS ================= -->
-      <section id="view-analytics" class="hidden space-y-6">
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- ================= TAB 4: ANALYTICS & STATS ================= -->
+      <section id="view-analytics" class="hidden space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          
           <!-- LEVEL BREAKDOWN -->
-          <div class="glass-card p-6 rounded-2xl space-y-4 border border-obsidian-border">
-            <h3 class="text-sm font-bold text-white flex items-center gap-2">
-              <i class="fa-solid fa-chart-column text-lime-accent"></i> Student Enrollment by MBBS Class
-            </h3>
+          <div class="card p-5 space-y-4">
+            <h2 class="text-base font-bold text-[#111111]">MBBS Cohort Distribution</h2>
             <div id="level-chart-container" class="space-y-3 pt-2">
-              <!-- Dynamically populated -->
+              <div class="text-xs text-[#6B6B6B]">Loading distribution metrics...</div>
             </div>
           </div>
 
-          <!-- ENGAGEMENT SUMMARY -->
-          <div class="glass-card p-6 rounded-2xl space-y-4 border border-obsidian-border">
-            <h3 class="text-sm font-bold text-white flex items-center gap-2">
-              <i class="fa-solid fa-graduation-cap text-lime-accent"></i> Academic Activity & Engagement
-            </h3>
-            <div class="space-y-4 pt-2">
-              <div class="flex items-center justify-between p-3.5 bg-[#0B0C0E] rounded-xl border border-obsidian-border">
-                <span class="text-xs text-slate-400">Total Registered Students:</span>
-                <span id="analytics-total-students" class="text-sm font-black text-white">--</span>
+          <!-- PERFORMANCE SUMMARY -->
+          <div class="card p-5 space-y-4">
+            <h2 class="text-base font-bold text-[#111111]">System Performance Telemetry</h2>
+            <div class="space-y-3 text-xs">
+              <div class="flex items-center justify-between py-2 border-b border-[#E0E0E0]">
+                <span class="text-[#6B6B6B]">Registered Candidates</span>
+                <span id="analytics-total-students" class="font-bold text-[#111111]">--</span>
               </div>
-              <div class="flex items-center justify-between p-3.5 bg-[#0B0C0E] rounded-xl border border-obsidian-border">
-                <span class="text-xs text-slate-400">Total Clinical Questions Answered:</span>
-                <span id="analytics-total-queries" class="text-sm font-black text-lime-accent">--</span>
+              <div class="flex items-center justify-between py-2 border-b border-[#E0E0E0]">
+                <span class="text-[#6B6B6B]">Clinical Queries Answered</span>
+                <span id="analytics-total-queries" class="font-bold text-[#111111]">--</span>
+              </div>
+              <div class="flex items-center justify-between py-2 border-b border-[#E0E0E0]">
+                <span class="text-[#6B6B6B]">RAG Retrieval Pipeline</span>
+                <span class="badge-mono">Vector FastEmbed 384d</span>
+              </div>
+              <div class="flex items-center justify-between py-2 border-b border-[#E0E0E0]">
+                <span class="text-[#6B6B6B]">System Status</span>
+                <span class="badge-mono font-bold">OPERATIONAL</span>
               </div>
             </div>
           </div>
+
         </div>
       </section>
+
     </main>
+
+    <!-- MINIMALIST FOOTER -->
+    <footer class="border-t border-[#E0E0E0] bg-[#FFFFFF] py-6 px-4 text-center text-xs text-[#6B6B6B]">
+      <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+        <span>NEURA AI Clinical Administration Suite</span>
+        <span>Textbook RAG grounded in Robbins, Kumar &amp; Clark, Jawetz, Ganong</span>
+      </div>
+    </footer>
+
   </div>
 
-  <!-- ================= CONFIRMATION MODAL ================= -->
-  <div id="confirm-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 hidden">
-    <div class="glass-card w-full max-w-md p-6 rounded-3xl text-center space-y-4 border border-lime-accent/30 shadow-2xl">
-      <div class="w-14 h-14 bg-lime-accent/15 text-lime-accent rounded-2xl mx-auto flex items-center justify-center text-2xl border border-lime-accent/30">
-        📢
-      </div>
-      <h3 class="text-lg font-bold text-white">Confirm Announcement Dispatch</h3>
-      <p id="confirm-details" class="text-slate-300 text-xs leading-relaxed">
-        Are you sure you want to dispatch this announcement to the selected audience?
+  <!-- CONFIRM BROADCAST MODAL -->
+  <div id="confirm-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 hidden">
+    <div class="card w-full max-w-md p-6 space-y-4 bg-[#FFFFFF]">
+      <h3 class="text-base font-bold text-[#111111]">Confirm Broadcast Dispatch</h3>
+      <p id="confirm-details" class="text-xs text-[#6B6B6B] leading-relaxed">
+        Are you sure you want to dispatch this announcement?
       </p>
-      <div class="flex items-center gap-3 pt-2">
-        <button onclick="closeConfirmModal()" class="flex-1 py-3 px-4 bg-[#1B1E24] hover:bg-[#252A33] text-slate-300 font-bold rounded-xl text-xs border border-obsidian-border transition-colors">Cancel</button>
-        <button onclick="executeConfirmedBroadcast()" id="modal-confirm-btn" class="flex-1 py-3 px-4 bg-lime-accent hover:bg-lime-hover text-black font-extrabold rounded-xl text-xs shadow-lg shadow-lime-accent/25 transition-all">Yes, Dispatch Now 🚀</button>
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-[#E0E0E0]">
+        <button onclick="closeConfirmModal()" class="btn-secondary text-xs">Cancel</button>
+        <button onclick="executeConfirmedBroadcast()" id="modal-confirm-btn" class="btn-primary text-xs">
+          Confirm &amp; Dispatch
+        </button>
       </div>
     </div>
   </div>
 
-  <!-- ================= JAVASCRIPT APP LOGIC ================= -->
   <script>
     let authToken = localStorage.getItem("neura_admin_token") || "";
     let rawStudentsList = [];
     let rawChatThreads = [];
     let activeLevelFilter = "ALL";
     let activeChatThreadFilter = "ALL";
-    let currentSelectedUserId = "";
+    let currentSelectedUserId = null;
     let currentActiveMessages = [];
 
     function togglePass() {
@@ -4521,7 +4363,7 @@ Type your announcement on the left to see how it renders live on students' Whats
       const btn = document.getElementById("login-btn");
       
       err.classList.add("hidden");
-      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Authenticating...';
+      btn.innerHTML = 'Authenticating...';
       btn.disabled = true;
       
       try {
@@ -4538,13 +4380,13 @@ Type your announcement on the left to see how it renders live on students' Whats
           showDashboard();
         } else {
           err.classList.remove("hidden");
-          btn.innerHTML = '<span>Authenticate & Access Suite</span> <i class="fa-solid fa-arrow-right text-xs"></i>';
+          btn.innerHTML = '<span>Authenticate &amp; Access</span>';
           btn.disabled = false;
         }
       } catch (e) {
-        err.innerHTML = '<span>Network error. Please try again.</span>';
+        err.innerHTML = 'Network error. Please try again.';
         err.classList.remove("hidden");
-        btn.innerHTML = '<span>Authenticate & Access Suite</span>';
+        btn.innerHTML = '<span>Authenticate &amp; Access</span>';
         btn.disabled = false;
       }
     }
@@ -4563,38 +4405,19 @@ Type your announcement on the left to see how it renders live on students' Whats
       document.getElementById("admin-pass").value = "";
     }
 
-    const VIEW_TITLES = {
-      'students': '<i class="fa-solid fa-users text-lime-accent mr-1.5"></i> Registered Students Directory',
-      'chats': '<i class="fa-solid fa-comments text-lime-accent mr-1.5"></i> User Chats & Transcripts Studio',
-      'broadcast': '<i class="fa-solid fa-bullhorn text-lime-accent mr-1.5"></i> WhatsApp Broadcast Studio',
-      'analytics': '<i class="fa-solid fa-chart-pie text-lime-accent mr-1.5"></i> Cohort Analytics & Telemetry'
-    };
-
     function switchTab(tabKey) {
       const tabs = ['students', 'chats', 'broadcast', 'analytics'];
       tabs.forEach(t => {
         const view = document.getElementById('view-' + t);
         const btn = document.getElementById('tab-btn-' + t);
-        const mBtn = document.getElementById('m-tab-btn-' + t);
         if (t === tabKey) {
           view?.classList.remove('hidden');
-          btn?.classList.add('tab-active');
-          mBtn?.classList.add('tab-active');
+          btn?.classList.add('active');
         } else {
           view?.classList.add('hidden');
-          btn?.classList.remove('tab-active');
-          mBtn?.classList.remove('tab-active');
+          btn?.classList.remove('active');
         }
       });
-
-      const titleEl = document.getElementById('current-view-title');
-      if (titleEl && VIEW_TITLES[tabKey]) {
-        titleEl.innerHTML = VIEW_TITLES[tabKey];
-      }
-
-      if (window.lineSidebarController) {
-        window.lineSidebarController.setActiveKey(tabKey);
-      }
 
       if (tabKey === 'chats' && (!rawChatThreads || rawChatThreads.length === 0)) {
         loadRecentChats();
@@ -4611,7 +4434,7 @@ Type your announcement on the left to see how it renders live on students' Whats
       } catch (e) {
         console.error("Sync error:", e);
       } finally {
-        setTimeout(() => syncIcon?.classList.remove("fa-spin"), 600);
+        setTimeout(() => syncIcon?.classList.remove("fa-spin"), 500);
       }
     }
 
@@ -4643,18 +4466,18 @@ Type your announcement on the left to see how it renders live on students' Whats
       }
       document.getElementById("stat-top-level").innerText = topLvl;
 
-      // Render chart
+      // Render monochrome chart
       const chartContainer = document.getElementById("level-chart-container");
       chartContainer.innerHTML = Object.entries(dist).map(([lvl, count]) => {
         const pct = totalAssigned > 0 ? Math.round((count / (data.total_students || 1)) * 100) : 0;
         return `
           <div class="space-y-1">
-            <div class="flex items-center justify-between text-xs font-semibold">
-              <span class="text-slate-300">${lvl}</span>
-              <span class="text-slate-400">${count} students (${pct}%)</span>
+            <div class="flex items-center justify-between text-xs font-medium">
+              <span class="text-[#111111]">${lvl}</span>
+              <span class="text-[#6B6B6B]">${count} students (${pct}%)</span>
             </div>
-            <div class="w-full bg-[#0B0C0E] rounded-full h-2 overflow-hidden border border-obsidian-border">
-              <div class="bg-lime-accent h-full rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+            <div class="w-full bg-[#E0E0E0] rounded h-1.5 overflow-hidden">
+              <div class="bg-[#111111] h-full rounded transition-all duration-300" style="width: ${pct}%"></div>
             </div>
           </div>
         `;
@@ -4669,10 +4492,6 @@ Type your announcement on the left to see how it renders live on students' Whats
       const data = await res.json();
       rawStudentsList = data.students || [];
       
-      document.getElementById("nav-student-count").innerText = rawStudentsList.length;
-      const ssc = document.getElementById("sidebar-student-count");
-      if (ssc) ssc.innerText = `${rawStudentsList.length} Students`;
-      
       let totalQueries = 0;
       rawStudentsList.forEach(s => totalQueries += (s.total_queries_count || 0));
       document.getElementById("stat-queries").innerText = totalQueries > 0 ? totalQueries.toLocaleString() : "100+";
@@ -4683,14 +4502,14 @@ Type your announcement on the left to see how it renders live on students' Whats
 
     function setLevelFilter(lvl) {
       activeLevelFilter = lvl;
-      document.querySelectorAll(".lvl-btn").forEach(b => {
-        b.classList.remove("bg-lime-accent", "text-black", "font-extrabold");
-        b.classList.add("bg-[#1B1E24]", "text-slate-300");
+      document.querySelectorAll(".filter-btn").forEach(b => {
+        if (b.id && b.id.startsWith("lvl-filter-")) {
+          b.classList.remove("active");
+        }
       });
       const activeBtn = document.getElementById("lvl-filter-" + lvl);
       if (activeBtn) {
-        activeBtn.classList.remove("bg-[#1B1E24]", "text-slate-300");
-        activeBtn.classList.add("bg-lime-accent", "text-black", "font-extrabold");
+        activeBtn.classList.add("active");
       }
       filterStudentsTable();
     }
@@ -4719,9 +4538,8 @@ Type your announcement on the left to see how it renders live on students' Whats
       if (!students || students.length === 0) {
         tbody.innerHTML = `
           <tr>
-            <td colspan="8" class="py-10 text-center text-slate-500">
-              <i class="fa-regular fa-folder-open text-2xl mb-2"></i>
-              <p class="text-xs">No registered students found matching your filter criteria.</p>
+            <td colspan="8" class="py-8 text-center text-[#6B6B6B]">
+              No registered students found matching criteria.
             </td>
           </tr>
         `;
@@ -4729,82 +4547,39 @@ Type your announcement on the left to see how it renders live on students' Whats
       }
 
       tbody.innerHTML = students.map(s => {
-        const initials = (s.name || "S").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase();
-        
-        let lvlBadge = "bg-[#1B1E24] text-slate-300 border-obsidian-border";
-        if (s.level === "200L") lvlBadge = "bg-blue-500/10 text-blue-400 border-blue-500/20";
-        else if (s.level === "300L") lvlBadge = "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
-        else if (s.level === "400L") lvlBadge = "bg-indigo-500/10 text-indigo-400 border-indigo-500/20";
-        else if (s.level === "500L") lvlBadge = "bg-purple-500/10 text-purple-400 border-purple-500/20";
-        else if (s.level === "600L") lvlBadge = "bg-amber-500/10 text-amber-400 border-amber-500/20";
-
         const booksCount = (s.preferred_books_list || []).length;
-        const booksText = booksCount > 0 ? `${booksCount} Book(s)` : "General Library";
+        const booksText = booksCount > 0 ? `${booksCount} Book(s)` : "Standard";
 
         return `
-          <tr class="hover:bg-[#1B1E24]/50 transition-colors group">
-            <!-- PROFILE -->
+          <tr class="hover:bg-[#F5F5F5] transition-colors">
+            <td class="py-3 px-4 font-semibold text-[#111111]">
+              ${s.name || "Student"}
+            </td>
+            <td class="py-3 px-4 font-mono text-[#6B6B6B]">
+              ${s.user_id}
+            </td>
             <td class="py-3 px-4">
-              <div class="flex items-center gap-2.5">
-                <div class="w-8 h-8 rounded-xl bg-[#1B1E24] border border-lime-accent/30 text-lime-accent font-bold flex items-center justify-center text-xs shadow-sm">
-                  ${initials}
-                </div>
-                <div>
-                  <div class="font-bold text-white flex items-center gap-1.5">
-                    <span>${s.name || "Student"}</span>
-                    ${s.onboarding_step === "COMPLETED" ? '<i class="fa-solid fa-circle-check text-lime-accent text-[10px]" title="Setup Completed"></i>' : '<span class="text-[9px] px-1 py-0.2 bg-amber-500/10 text-amber-400 rounded">Setup</span>'}
-                  </div>
-                </div>
-              </div>
+              <span class="badge-mono">${s.level || "Unset"}</span>
             </td>
-
-            <!-- PHONE -->
-            <td class="py-3 px-4 font-mono text-slate-300">
-              <div class="flex items-center gap-2">
-                <span>${s.user_id}</span>
-                <button onclick="navigator.clipboard.writeText('${s.user_id}'); alert('Copied ${s.user_id}');" title="Copy Phone" class="text-slate-500 hover:text-white text-xs opacity-0 group-hover:opacity-100 transition-opacity">
-                  <i class="fa-regular fa-copy"></i>
-                </button>
-              </div>
+            <td class="py-3 px-4 font-medium text-[#111111]">
+              ${s.study_streak_days || 1}d
             </td>
-
-            <!-- LEVEL -->
-            <td class="py-3 px-4">
-              <span class="px-2.5 py-0.5 rounded-md font-bold text-[11px] border ${lvlBadge}">
-                ${s.level || "Unset"}
-              </span>
-            </td>
-
-            <!-- STREAK -->
-            <td class="py-3 px-4 font-bold text-amber-400">
-              🔥 ${s.study_streak_days || 1}d
-            </td>
-
-            <!-- QUERIES MASTERED -->
-            <td class="py-3 px-4 font-mono text-lime-accent font-semibold">
+            <td class="py-3 px-4 font-mono text-[#111111]">
               ${s.total_queries_count || 0}
             </td>
-
-            <!-- TEXTBOOKS -->
-            <td class="py-3 px-4">
-              <span class="text-slate-300 text-[11px] bg-[#0B0C0E] px-2 py-0.5 rounded border border-obsidian-border" title="${(s.preferred_books_list || []).join(', ')}">
-                ${booksText}
-              </span>
+            <td class="py-3 px-4 text-[#6B6B6B]">
+              ${booksText}
             </td>
-
-            <!-- LAST ACTIVE -->
-            <td class="py-3 px-4 font-mono text-slate-400 text-[11px]">
+            <td class="py-3 px-4 font-mono text-[#6B6B6B] text-[11px]">
               ${s.last_study_date || "Recent"}
             </td>
-
-            <!-- ACTIONS -->
             <td class="py-3 px-4 text-center">
               <div class="flex items-center justify-center gap-1.5">
-                <button onclick="openStudentChat('${s.user_id}')" class="px-2.5 py-1 bg-[#1B1E24] hover:bg-[#252A33] text-slate-200 border border-obsidian-border rounded-lg text-xs font-semibold inline-flex items-center gap-1 transition-colors">
-                  <i class="fa-solid fa-comments text-[10px]"></i> Chats
+                <button onclick="openStudentChat('${s.user_id}')" class="btn-secondary text-[11px] py-0.5 px-2">
+                  Chats
                 </button>
-                <a href="https://wa.me/${s.user_id}" target="_blank" class="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-lg text-xs font-semibold inline-flex items-center gap-1 transition-colors">
-                  <i class="fa-brands fa-whatsapp"></i> WA
+                <a href="https://wa.me/${s.user_id}" target="_blank" class="btn-secondary text-[11px] py-0.5 px-2">
+                  WhatsApp
                 </a>
               </div>
             </td>
@@ -4832,6 +4607,9 @@ Type your announcement on the left to see how it renders live on students' Whats
           issuesBadge?.classList.add("hidden");
         }
 
+        const countLabel = document.getElementById("thread-count-label");
+        if (countLabel) countLabel.innerText = `${rawChatThreads.length} active`;
+
         filterChatThreadsList();
       } catch (e) {
         console.error("Error loading chats:", e);
@@ -4840,14 +4618,14 @@ Type your announcement on the left to see how it renders live on students' Whats
 
     function setChatThreadFilter(filterKey) {
       activeChatThreadFilter = filterKey;
-      document.querySelectorAll(".ct-filter-btn").forEach(b => {
-        b.classList.remove("bg-lime-accent", "text-black", "font-bold");
-        b.classList.add("bg-[#1B1E24]", "text-slate-300");
+      document.querySelectorAll(".filter-btn").forEach(b => {
+        if (b.id && b.id.startsWith("ct-filter-")) {
+          b.classList.remove("active");
+        }
       });
       const btn = document.getElementById("ct-filter-" + filterKey);
       if (btn) {
-        btn.classList.remove("bg-[#1B1E24]", "text-slate-300");
-        btn.classList.add("bg-lime-accent", "text-black", "font-bold");
+        btn.classList.add("active");
       }
       filterChatThreadsList();
     }
@@ -4857,7 +4635,6 @@ Type your announcement on the left to see how it renders live on students' Whats
       
       const filtered = rawChatThreads.filter(t => {
         if (activeChatThreadFilter === "ISSUES" && !t.has_issue) return false;
-        if (activeChatThreadFilter !== "ALL" && activeChatThreadFilter !== "ISSUES" && t.level !== activeChatThreadFilter) return false;
         
         if (q) {
           const matchName = (t.name || "").toLowerCase().includes(q);
@@ -4875,48 +4652,30 @@ Type your announcement on the left to see how it renders live on students' Whats
       const container = document.getElementById("chat-threads-container");
       if (!threads || threads.length === 0) {
         container.innerHTML = `
-          <div class="py-10 text-center text-slate-500 text-xs">
-            <i class="fa-regular fa-comments text-2xl mb-2"></i>
-            <p>No conversation threads matching criteria.</p>
+          <div class="py-8 text-center text-[#6B6B6B] text-xs">
+            No conversation threads found.
           </div>
         `;
         return;
       }
 
       container.innerHTML = threads.map(t => {
-        const initials = (t.name || "S").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase();
-        const isActive = t.user_id === currentSelectedUserId ? "chat-thread-active" : "border-obsidian-border hover:border-slate-700 bg-[#0B0C0E]";
+        const isActive = t.user_id === currentSelectedUserId ? "active" : "";
         
         return `
-          <div onclick="loadConversationForUser('${t.user_id}')" class="p-3 rounded-xl border ${isActive} cursor-pointer transition-all space-y-1.5 group">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <div class="w-7 h-7 rounded-lg bg-[#1B1E24] border border-lime-accent/30 text-lime-accent font-bold flex items-center justify-center text-[10px]">
-                  ${initials}
-                </div>
-                <div>
-                  <div class="font-bold text-white text-xs flex items-center gap-1.5">
-                    <span>${t.name}</span>
-                    <span class="text-[9px] px-1.5 py-0.2 bg-[#1B1E24] text-slate-400 rounded font-mono">${t.level || "Unset"}</span>
-                  </div>
-                </div>
-              </div>
-              <div class="text-right">
-                ${t.has_issue ? '<span class="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[9px] font-bold"><i class="fa-solid fa-triangle-exclamation"></i> Issue</span>' : ''}
-              </div>
+          <div onclick="loadConversationForUser('${t.user_id}')" class="chat-thread-item ${isActive} p-3 space-y-1">
+            <div class="flex items-center justify-between text-xs">
+              <div class="font-bold text-[#111111]">${t.name}</div>
+              <span class="badge-mono text-[10px]">${t.level || "Unset"}</span>
             </div>
 
-            <p class="text-[11px] text-slate-400 truncate leading-snug group-hover:text-slate-300">
-              ${t.last_message || "No messages yet"}
+            <p class="text-xs text-[#6B6B6B] truncate leading-normal">
+              ${t.last_message || "No message content"}
             </p>
 
-            <div class="flex items-center justify-between text-[10px] text-slate-500 pt-0.5 font-mono">
+            <div class="flex items-center justify-between text-[11px] text-[#6B6B6B] pt-0.5 font-mono">
               <span>${t.user_id}</span>
-              <span class="flex items-center gap-1.5">
-                <span class="text-amber-400 font-sans font-bold">🔥 ${t.study_streak_days || 1}d</span>
-                <span>•</span>
-                <span>${t.message_count || 0} msgs</span>
-              </span>
+              <span>${t.study_streak_days || 1}d &bull; ${t.message_count || 0} msgs</span>
             </div>
           </div>
         `;
@@ -4934,9 +4693,8 @@ Type your announcement on the left to see how it renders live on students' Whats
       
       const streamContainer = document.getElementById("chat-stream-container");
       streamContainer.innerHTML = `
-        <div class="m-auto text-center text-slate-400 p-8 space-y-2">
-          <div class="inline-block animate-spin text-lime-accent text-2xl"><i class="fa-solid fa-circle-notch"></i></div>
-          <p class="text-xs font-semibold">Loading conversation transcript for ${userId}...</p>
+        <div class="m-auto text-center text-[#6B6B6B] p-8 text-xs">
+          Loading transcript for ${userId}...
         </div>
       `;
 
@@ -4955,13 +4713,13 @@ Type your announcement on the left to see how it renders live on students' Whats
         document.getElementById("chat-header-name").innerText = student.name || "Student";
         document.getElementById("chat-header-level").innerText = student.level || "Unset";
         document.getElementById("chat-header-phone").innerText = student.user_id || userId;
-        document.getElementById("chat-header-streak").innerText = `🔥 ${student.study_streak_days || 1}d streak`;
+        document.getElementById("chat-header-streak").innerText = `Streak: ${student.study_streak_days || 1}d`;
         document.getElementById("chat-header-wa-btn").href = `https://wa.me/${student.user_id || userId}`;
 
         const diagBanner = document.getElementById("chat-diagnostic-banner");
         const diagText = document.getElementById("chat-diagnostic-text");
         if (data.issue_count > 0) {
-          diagText.innerText = `⚠️ ${data.issue_count} potential issue(s) or connection alert(s) detected in this transcript! Highlighted below.`;
+          diagText.innerText = `Diagnostic alert: ${data.issue_count} potential connection issue(s) detected in transcript.`;
           diagBanner.classList.remove("hidden");
         } else {
           diagBanner.classList.add("hidden");
@@ -4969,15 +4727,7 @@ Type your announcement on the left to see how it renders live on students' Whats
 
         renderConversationMessages(currentActiveMessages);
       } catch (e) {
-        streamContainer.innerHTML = `<div class="m-auto text-rose-400 text-xs">Error loading conversation: ${e.message}</div>`;
-      }
-    }
-
-    function copyActiveChatPhone() {
-      const p = document.getElementById("chat-header-phone").innerText;
-      if (p && p !== "--") {
-        navigator.clipboard.writeText(p);
-        alert(`Copied ${p}`);
+        streamContainer.innerHTML = `<div class="m-auto text-[#111111] text-xs">Error loading conversation: ${e.message}</div>`;
       }
     }
 
@@ -5000,13 +4750,13 @@ Type your announcement on the left to see how it renders live on students' Whats
 
       if (highlightQuery) {
         const regex = new RegExp(`(${highlightQuery})`, "gi");
-        html = html.replace(regex, '<mark class="bg-lime-accent/30 text-lime-accent px-0.5 rounded">$1</mark>');
+        html = html.replace(regex, '<mark class="bg-[#E0E0E0] text-[#111111] px-0.5">$1</mark>');
       }
 
       html = html
-        .replace(/\*(.*?)\*/g, '<b class="font-bold text-white">$1</b>')
-        .replace(/_(.*?)_/g, '<i class="italic text-slate-200">$1</i>')
-        .replace(/`([^`]+)`/g, '<code class="bg-[#0B0C0E] px-1 py-0.5 rounded font-mono text-[11px] text-lime-accent border border-obsidian-border">$1</code>');
+        .replace(/\*(.*?)\*/g, '<b class="font-bold text-[#111111]">$1</b>')
+        .replace(/_(.*?)_/g, '<i class="italic text-[#6B6B6B]">$1</i>')
+        .replace(/`([^`]+)`/g, '<code class="bg-[#F5F5F5] px-1 py-0.5 rounded font-mono text-[11px] border border-[#E0E0E0]">$1</code>');
 
       return html;
     }
@@ -5015,9 +4765,8 @@ Type your announcement on the left to see how it renders live on students' Whats
       const container = document.getElementById("chat-stream-container");
       if (!messages || messages.length === 0) {
         container.innerHTML = `
-          <div class="m-auto text-center text-slate-500 p-8 space-y-2">
-            <i class="fa-regular fa-comment-dots text-3xl mb-1"></i>
-            <p class="text-xs">No chat messages found for this user.</p>
+          <div class="m-auto text-center text-[#6B6B6B] p-8 text-xs">
+            No messages recorded in this conversation thread.
           </div>
         `;
         return;
@@ -5031,41 +4780,25 @@ Type your announcement on the left to see how it renders live on students' Whats
 
         if (isUser) {
           return `
-            <div class="flex justify-end items-end gap-2 group">
-              <div class="wa-bubble-user p-3 max-w-[85%] sm:max-w-[75%] space-y-1">
-                <div class="text-[10px] font-bold text-lime-accent flex items-center gap-1 mb-0.5">
-                  <i class="fa-solid fa-user text-[9px]"></i> <span>Student</span>
-                </div>
-                <div class="text-slate-100 text-xs whitespace-pre-wrap leading-relaxed">${formatted}</div>
-                <div class="text-[9px] text-slate-400 text-right mt-1 font-mono">${timeStr}</div>
+            <div class="flex justify-end items-end gap-2">
+              <div class="chat-bubble-user p-3 max-w-[85%] sm:max-w-[75%] space-y-1">
+                <div class="text-[10px] font-bold text-[#6B6B6B] mb-0.5">Student</div>
+                <div class="text-xs text-[#111111] whitespace-pre-wrap leading-relaxed">${formatted}</div>
+                <div class="text-[10px] text-[#6B6B6B] text-right font-mono mt-1">${timeStr}</div>
               </div>
             </div>
           `;
         } else {
-          let issueBadge = "";
-          let borderClass = "";
-          if (hasIssue) {
-            borderClass = "border-2 border-amber-500/60 shadow-lg shadow-amber-500/10";
-            issueBadge = `
-              <div class="mb-1.5 px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[10px] font-bold flex items-center gap-1 w-max">
-                <i class="fa-solid fa-triangle-exclamation text-[9px]"></i> <span>Diagnostic Alert Triggered</span>
-              </div>
-            `;
-          }
-
           return `
-            <div class="flex justify-start items-end gap-2 group">
-              <div class="wa-bubble-ai ${borderClass} p-3.5 max-w-[90%] sm:max-w-[80%] space-y-1">
-                <div class="text-[10px] font-extrabold text-emerald-300 flex items-center gap-1.5 border-b border-white/10 pb-1 mb-1">
-                  <span>🧠 NEURA AI</span>
-                  ${m.metadata?.msg_type ? `<span class="text-[8px] uppercase tracking-wider font-mono opacity-70">(${m.metadata.msg_type})</span>` : ''}
+            <div class="flex justify-start items-end gap-2">
+              <div class="chat-bubble-ai p-3.5 max-w-[90%] sm:max-w-[80%] space-y-1">
+                <div class="text-[10px] font-bold text-[#111111] border-b border-[#E0E0E0] pb-1 mb-1 flex items-center justify-between">
+                  <span>NEURA AI</span>
+                  ${m.metadata?.msg_type ? `<span class="text-[9px] font-mono text-[#6B6B6B]">(${m.metadata.msg_type})</span>` : ''}
                 </div>
-                ${issueBadge}
-                <div class="text-slate-100 text-xs whitespace-pre-wrap leading-relaxed">${formatted}</div>
-                <div class="text-[9px] text-slate-300/80 text-right mt-1.5 flex items-center justify-end gap-1 font-mono">
-                  <span>${timeStr}</span>
-                  <i class="fa-solid fa-check-double text-sky-300 text-[8px]"></i>
-                </div>
+                ${hasIssue ? '<div class="mb-1 text-[10px] font-bold text-[#111111] bg-[#F5F5F5] border border-[#111111] px-1.5 py-0.5 rounded w-max">Diagnostic Alert</div>' : ''}
+                <div class="text-xs text-[#111111] whitespace-pre-wrap leading-relaxed">${formatted}</div>
+                <div class="text-[10px] text-[#6B6B6B] text-right font-mono mt-1">${timeStr}</div>
               </div>
             </div>
           `;
@@ -5081,11 +4814,11 @@ Type your announcement on the left to see how it renders live on students' Whats
       document.getElementById("char-count").innerText = raw.length + " chars";
       
       let formatted = raw
-        .replace(/\*(.*?)\*/g, '<b class="font-bold text-white">$1</b>')
-        .replace(/_(.*?)_/g, '<i class="italic text-slate-200">$1</i>');
+        .replace(/\*(.*?)\*/g, '<b class="font-bold text-[#111111]">$1</b>')
+        .replace(/_(.*?)_/g, '<i class="italic text-[#6B6B6B]">$1</i>');
         
       if (!formatted.trim()) {
-        formatted = "Hello Samuel! 👋\n\nType your announcement on the left to see how it renders live on students' WhatsApp screens in real-time.";
+        formatted = "Type your announcement on the left to see how it renders live on students' WhatsApp screens in real-time.";
       }
       document.getElementById("preview-text").innerHTML = formatted;
       
@@ -5098,15 +4831,8 @@ Type your announcement on the left to see how it renders live on students' Whats
       const start = textarea.selectionStart;
       const end = textarea.selectionEnd;
       const text = textarea.value;
-      const selected = text.substring(start, end) || "highlighted text";
+      const selected = text.substring(start, end) || "text";
       textarea.value = text.substring(0, start) + prefix + selected + suffix + text.substring(end);
-      textarea.focus();
-      updateLivePreview();
-    }
-
-    function insertEmoji(emoji) {
-      const textarea = document.getElementById("broadcast-msg");
-      textarea.value += " " + emoji + " ";
       textarea.focus();
       updateLivePreview();
     }
@@ -5115,10 +4841,10 @@ Type your announcement on the left to see how it renders live on students' Whats
       const msg = document.getElementById("broadcast-msg").value.trim();
       const target = document.getElementById("broadcast-target").value;
       if (!msg) {
-        alert("Please enter an announcement text to broadcast!");
+        alert("Please enter an announcement text to broadcast.");
         return;
       }
-      document.getElementById("confirm-details").innerText = `You are about to dispatch this WhatsApp announcement to target audience: ${target}. Are you ready?`;
+      document.getElementById("confirm-details").innerText = `You are about to dispatch this WhatsApp announcement to target audience: ${target}.`;
       document.getElementById("confirm-modal").classList.remove("hidden");
     }
 
@@ -5132,7 +4858,7 @@ Type your announcement on the left to see how it renders live on students' Whats
       const mode = document.getElementById("broadcast-mode").value;
       const btn = document.getElementById("modal-confirm-btn");
       
-      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Dispatching...';
+      btn.innerHTML = 'Dispatching...';
       btn.disabled = true;
       
       try {
@@ -5151,267 +4877,20 @@ Type your announcement on the left to see how it renders live on students' Whats
         
         if (res.ok) {
           closeConfirmModal();
-          alert("🎉 Broadcast initiated successfully! Dispatches are processing in the background.");
+          alert("Broadcast initiated successfully.");
           document.getElementById("broadcast-msg").value = "";
           updateLivePreview();
-          setTimeout(loadAllData, 1500);
+          setTimeout(loadAllData, 1200);
         } else {
           alert("Broadcast failed to initialize. Please check connection.");
         }
       } catch (e) {
         alert("Error sending broadcast: " + e.message);
       } finally {
-        btn.innerHTML = 'Yes, Dispatch Now 🚀';
+        btn.innerHTML = 'Confirm &amp; Dispatch';
         btn.disabled = false;
       }
     }
-
-    // ================= REACT BITS: LIQUID CHROME SHADER =================
-    function initLiquidChrome() {
-      const container = document.getElementById("liquid-chrome-canvas");
-      if (!container || typeof ogl === "undefined") return;
-
-      try {
-        const { Renderer, Program, Mesh, Triangle } = ogl;
-        const renderer = new Renderer({ antialias: true, alpha: true });
-        const gl = renderer.gl;
-        gl.clearColor(0, 0, 0, 0);
-
-        const vertexShader = `
-          attribute vec2 position;
-          attribute vec2 uv;
-          varying vec2 vUv;
-          void main() {
-            vUv = uv;
-            gl_Position = vec4(position, 0.0, 1.0);
-          }
-        `;
-
-        const fragmentShader = `
-          precision highp float;
-          uniform float uTime;
-          uniform vec3 uResolution;
-          uniform vec3 uBaseColor;
-          uniform float uAmplitude;
-          uniform float uFrequencyX;
-          uniform float uFrequencyY;
-          uniform vec2 uMouse;
-          varying vec2 vUv;
-
-          vec4 renderImage(vec2 uvCoord) {
-              vec2 fragCoord = uvCoord * uResolution.xy;
-              vec2 uv = (2.0 * fragCoord - uResolution.xy) / min(uResolution.x, uResolution.y);
-
-              for (float i = 1.0; i < 7.0; i++){
-                  uv.x += uAmplitude / i * cos(i * uFrequencyX * uv.y + uTime + uMouse.x * 3.14159);
-                  uv.y += uAmplitude / i * cos(i * uFrequencyY * uv.x + uTime + uMouse.y * 3.14159);
-              }
-
-              vec2 diff = (uvCoord - uMouse);
-              float dist = length(diff);
-              float falloff = exp(-dist * 18.0);
-              float ripple = sin(8.0 * dist - uTime * 2.0) * 0.03;
-              uv += (diff / (dist + 0.0001)) * ripple * falloff;
-
-              vec3 color = uBaseColor / abs(sin(uTime - uv.y - uv.x));
-              return vec4(color, 1.0);
-          }
-
-          void main() {
-              vec4 col = vec4(0.0);
-              int samples = 0;
-              for (int i = -1; i <= 1; i++){
-                  for (int j = -1; j <= 1; j++){
-                      vec2 offset = vec2(float(i), float(j)) * (1.0 / min(uResolution.x, uResolution.y));
-                      col += renderImage(vUv + offset);
-                      samples++;
-                  }
-              }
-              gl_FragColor = col / float(samples);
-          }
-        `;
-
-        const geometry = new Triangle(gl);
-        const program = new Program(gl, {
-          vertex: vertexShader,
-          fragment: fragmentShader,
-          uniforms: {
-            uTime: { value: 0 },
-            uResolution: {
-              value: new Float32Array([window.innerWidth, window.innerHeight, window.innerWidth / window.innerHeight])
-            },
-            uBaseColor: { value: new Float32Array([0.08, 0.11, 0.07]) },
-            uAmplitude: { value: 0.3 },
-            uFrequencyX: { value: 2.5 },
-            uFrequencyY: { value: 2.0 },
-            uMouse: { value: new Float32Array([0.5, 0.5]) }
-          }
-        });
-        const mesh = new Mesh(gl, { geometry, program });
-
-        function resize() {
-          renderer.setSize(window.innerWidth, window.innerHeight);
-          const resUniform = program.uniforms.uResolution.value;
-          resUniform[0] = gl.canvas.width;
-          resUniform[1] = gl.canvas.height;
-          resUniform[2] = gl.canvas.width / gl.canvas.height;
-        }
-        window.addEventListener('resize', resize);
-        resize();
-
-        function handlePointer(clientX, clientY) {
-          const x = clientX / window.innerWidth;
-          const y = 1 - (clientY / window.innerHeight);
-          const mouseUniform = program.uniforms.uMouse.value;
-          mouseUniform[0] = x;
-          mouseUniform[1] = y;
-        }
-
-        window.addEventListener('mousemove', (e) => handlePointer(e.clientX, e.clientY));
-        window.addEventListener('touchmove', (e) => {
-          if (e.touches.length > 0) handlePointer(e.touches[0].clientX, e.touches[0].clientY);
-        });
-
-        let animationId;
-        function update(t) {
-          animationId = requestAnimationFrame(update);
-          program.uniforms.uTime.value = t * 0.001 * 0.35;
-          renderer.render({ scene: mesh });
-        }
-        animationId = requestAnimationFrame(update);
-
-        container.appendChild(gl.canvas);
-      } catch (err) {
-        console.warn("LiquidChrome WebGL initialization fallback:", err);
-      }
-    }
-
-    // ================= REACT BITS: LINE SIDEBAR COMPONENT =================
-    const FALLOFF_CURVES = {
-      linear: p => p,
-      smooth: p => p * p * (3 - 2 * p),
-      sharp: p => p * p * p
-    };
-
-    function initLineSidebar({
-      items = [
-        { label: 'Registered Students', key: 'students' },
-        { label: 'Chats & Transcripts', key: 'chats' },
-        { label: 'Broadcasts', key: 'broadcast' },
-        { label: 'Cohort Analytics', key: 'analytics' }
-      ],
-      proximityRadius = 100,
-      maxShift = 22,
-      falloff = 'smooth',
-      smoothing = 100,
-      defaultActive = 0,
-      onItemClick
-    } = {}) {
-      const container = document.getElementById("admin-line-sidebar-container");
-      if (!container) return;
-
-      container.innerHTML = `
-        <nav class="line-sidebar line-sidebar--markers line-sidebar--scale-tick" id="admin-line-sidebar">
-          <ul class="line-sidebar__list" id="line-sidebar-list">
-            ${items.map((item, idx) => `
-              <li class="line-sidebar__item" data-index="${idx}" data-key="${item.key}" aria-current="${defaultActive === idx ? 'true' : 'false'}">
-                <span class="line-sidebar__marker" aria-hidden="true"></span>
-                <span class="line-sidebar__label">
-                  <span class="line-sidebar__index">${String(idx + 1).padStart(2, '0')}</span>
-                  <span class="line-sidebar__text">${item.label}</span>
-                </span>
-              </li>
-            `).join('')}
-          </ul>
-        </nav>
-      `;
-
-      const list = document.getElementById("line-sidebar-list");
-      const itemEls = Array.from(list.querySelectorAll(".line-sidebar__item"));
-      let targets = new Array(items.length).fill(0);
-      let currents = new Array(items.length).fill(0);
-      let activeIdx = defaultActive;
-      let rafId = null;
-      let lastTime = 0;
-
-      function runFrame(now) {
-        const dt = Math.min((now - lastTime) / 1000, 0.05);
-        lastTime = now;
-        const tau = Math.max(smoothing, 1) / 1000;
-        const k = 1 - Math.exp(-dt / tau);
-
-        let moving = false;
-        for (let i = 0; i < itemEls.length; i++) {
-          const el = itemEls[i];
-          if (!el) continue;
-          const target = Math.max(targets[i] || 0, activeIdx === i ? 1 : 0);
-          const cur = currents[i] || 0;
-          const next = cur + (target - cur) * k;
-          const settled = Math.abs(target - next) < 0.0015;
-          const value = settled ? target : next;
-          currents[i] = value;
-          el.style.setProperty('--effect', value.toFixed(4));
-          if (!settled) moving = true;
-        }
-
-        rafId = moving ? requestAnimationFrame(runFrame) : null;
-      }
-
-      function startLoop() {
-        if (rafId != null) cancelAnimationFrame(rafId);
-        lastTime = performance.now();
-        rafId = requestAnimationFrame(runFrame);
-      }
-
-      list.addEventListener("pointermove", (e) => {
-        const rect = list.getBoundingClientRect();
-        const pointerY = e.clientY - rect.top;
-        const ease = FALLOFF_CURVES[falloff] || FALLOFF_CURVES.smooth;
-        for (let i = 0; i < itemEls.length; i++) {
-          const el = itemEls[i];
-          const center = el.offsetTop + el.offsetHeight / 2;
-          const distance = Math.abs(pointerY - center);
-          targets[i] = ease(Math.max(0, 1 - distance / proximityRadius));
-        }
-        startLoop();
-      });
-
-      list.addEventListener("pointerleave", () => {
-        targets.fill(0);
-        startLoop();
-      });
-
-      itemEls.forEach((el, idx) => {
-        el.addEventListener("click", () => {
-          activeIdx = idx;
-          itemEls.forEach((it, i) => it.setAttribute("aria-current", i === idx ? "true" : "false"));
-          startLoop();
-          const key = el.getAttribute("data-key");
-          if (onItemClick) onItemClick(idx, key);
-        });
-      });
-
-      startLoop();
-
-      window.lineSidebarController = {
-        setActiveKey: (key) => {
-          const foundIdx = items.findIndex(it => it.key === key);
-          if (foundIdx !== -1) {
-            activeIdx = foundIdx;
-            itemEls.forEach((it, i) => it.setAttribute("aria-current", i === foundIdx ? "true" : "false"));
-            startLoop();
-          }
-        }
-      };
-    }
-
-    // Initialize React Bits components
-    initLiquidChrome();
-    initLineSidebar({
-      onItemClick: (index, key) => {
-        switchTab(key);
-      }
-    });
 
     // Auto-login on load if token exists
     if (authToken) {
