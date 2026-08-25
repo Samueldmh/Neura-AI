@@ -1756,23 +1756,25 @@ async def normalize_medical_query(user_msg: str) -> dict:
 
     return fallback_result
 
-async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> dict:
+async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list, student_name: str = "Doctor") -> dict:
     """Evaluates whether retrieved textbook chunks sufficiently cover the student's question before declaring a topic missing.
     If inadequate due to synonym mismatch, narrow search, or hierarchical difference, returns re-anchored queries for second-pass scan.
+    If genuinely not in the textbooks, generates an intelligent, encouraging, concise contextual response so the student never feels the bot is broken.
     """
     t_start = time.perf_counter()
-    if not OPENROUTER_API_KEY or not retrieved_points:
-        return {"is_adequate": bool(retrieved_points), "is_genuinely_absent": not bool(retrieved_points), "re_anchored_queries": []}
+    if not OPENROUTER_API_KEY:
+        return {"is_adequate": bool(retrieved_points), "is_genuinely_absent": not bool(retrieved_points), "re_anchored_queries": [], "smart_encouraging_response": ""}
 
     # Prepare compact context summary (first 180 chars of each chunk)
     context_summaries = []
-    for idx, p in enumerate(retrieved_points[:8], 1):
-        payload = p.payload
-        b_title = payload.get("book_title", "Textbook")
-        snippet = payload.get("text", "")[:200].replace("\n", " ")
-        context_summaries.append(f"[{idx}. {b_title}]: {snippet}...")
+    if retrieved_points:
+        for idx, p in enumerate(retrieved_points[:8], 1):
+            payload = p.payload
+            b_title = payload.get("book_title", "Textbook")
+            snippet = payload.get("text", "")[:200].replace("\n", " ")
+            context_summaries.append(f"[{idx}. {b_title}]: {snippet}...")
     
-    combined_context_summary = "\n".join(context_summaries)
+    combined_context_summary = "\n".join(context_summaries) if context_summaries else "No matching chunks found in initial search."
 
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -1782,15 +1784,18 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
         "X-Title": "NEURA AI Medical Assistant"
     }
     system_prompt = (
-        "You are an expert MBBS medical retrieval evaluator. A student asked a clinical question, and the vector database returned initial textbook snippets.\n"
-        "Determine if the retrieved text sufficiently covers the core question or if the retrieval missed the specific topic due to terminology mismatch, subclass distinctions (e.g. Class IA/IB/IC antiarrhythmics), anatomical hierarchy, or phrasing differences.\n\n"
-        "Output ONLY a valid JSON object in this schema:\n"
+        "You are an expert MBBS medical retrieval evaluator and intelligent clinical study co-pilot.\n"
+        "A student asked a question, and the vector database returned initial textbook snippets.\n"
+        "Your task is twofold:\n"
+        "1. Check if the retrieved text adequately covers the question. If inadequate, provide 2 to 3 broader or alternative authoritative textbook search queries (e.g. parent chapter titles, drug class mechanisms, anatomical systems, pathology categories) to scan other parts of the textbook library.\n"
+        "2. If the concept is genuinely outside the indexed medical textbooks (or non-curricular), generate an intelligent, concise, warm, and highly encouraging 2-3 sentence response directly addressing what they asked with clarity and guiding them to related clinical topics or asking them to explore core subjects.\n\n"
+        "Output ONLY a valid JSON object in this exact schema:\n"
         "{\n"
         '  "is_adequate": true,\n'
         '  "is_genuinely_absent": false,\n'
-        '  "re_anchored_queries": ["query 1", "query 2", "query 3"]\n'
+        '  "re_anchored_queries": ["query 1", "query 2", "query 3"],\n'
+        '  "smart_encouraging_response": "That is an insightful question, ' + student_name + '! While your current active textbooks focus on core pathology, pharmacology, and anatomy rather than this specific topic, I can dive into any related clinical mechanisms or case studies whenever you are ready. What topic are we tackling next?"\n'
         "}\n"
-        "If 'is_adequate' is false and it is a valid medical concept, provide 2 to 3 broader or alternative authoritative textbook search queries (e.g. parent chapter titles, drug class mechanisms, anatomical systems). Only set 'is_genuinely_absent' to true if the question is genuinely non-medical or completely nonexistent in medical curricula.\n"
         "Output ONLY valid JSON."
     )
     user_payload_text = (
@@ -1803,7 +1808,7 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_payload_text}
         ],
-        "temperature": 0.0,
+        "temperature": 0.2,
         "max_tokens": 500,
         "reasoning": get_reasoning_config(user_msg, is_micro=True),
         "provider": {
@@ -1824,7 +1829,7 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
     except Exception as e:
         print(f"⚠️ Micro-LLM retrieval evaluator error ({time.perf_counter() - t_start:.3f}s): {e}")
 
-    return {"is_adequate": True, "is_genuinely_absent": False, "re_anchored_queries": []}
+    return {"is_adequate": True, "is_genuinely_absent": False, "re_anchored_queries": [], "smart_encouraging_response": ""}
 
 def extract_book_keywords(preferred_books: list) -> list:
     """Extract core textbook keywords for matching (e.g., 'lippincott', 'robbins', 'moore', 'hoffbrand')"""
@@ -2919,7 +2924,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 print(f"[SEARCH FALLBACK] 0 chunks with local terms. Re-querying with normalized terms: {medical_terms}")
                 search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
 
-            eval_result = await evaluate_retrieval_adequacy(search_term, search_res)
+            eval_result = await evaluate_retrieval_adequacy(search_term, search_res, student_name=name)
             
             if not eval_result.get("is_adequate", True) and not eval_result.get("is_genuinely_absent", False):
                 re_anchored = eval_result.get("re_anchored_queries", [])
@@ -2943,12 +2948,14 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             search_res = await multi_search_qdrant(medical_terms, preferred_books=None)
 
         if not search_res or (eval_result.get("is_genuinely_absent", False) and not search_res):
-            await send_whatsapp_cloud_msg(
-                sender_phone, 
-                f"That's an interesting question, *{name}*! 💡\n\n"
-                f"I couldn't find a direct chapter on *{clean_topic}* in your current active textbooks, but I'm ready for any core pathology, pharmacology, microbiology, anatomy, or clinical cases you want to break down.\n\n"
-                f"Feel free to ask another clinical question or explore new subjects with */update books*!"
-            )
+            smart_resp = eval_result.get("smart_encouraging_response", "")
+            if not smart_resp:
+                smart_resp = (
+                    f"That's an interesting question, *{name}*! 💡\n\n"
+                    f"While your current textbooks focus on core clinical subjects rather than this specific topic, I'm ready to dive into any disease pathophysiology, pharmacology mechanism, or anatomy concept whenever you are!\n\n"
+                    f"What medical topic or case study shall we explore next?"
+                )
+            await send_whatsapp_cloud_msg(sender_phone, smart_resp)
             return
 
         # If user explicitly asked for a quiz on a topic via text, launch the interactive quiz directly!
