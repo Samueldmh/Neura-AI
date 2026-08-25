@@ -498,11 +498,12 @@ async def classify_intent(message: str) -> str:
                 "You are an intent classifier for NEURA AI, a medical study co-pilot.\n"
                 "Analyze the user's message (which could be English, Nigerian Pidgin/slang, German, French, Arabic, Yoruba, Igbo, Hausa, or any language) and classify it into EXACTLY ONE label:\n"
                 "- GREETING: Greetings, hello, how are you, Nigerian slang (e.g. 'how far', 'boss man', 'wetin dey'), foreign greetings (e.g. German 'wie gehts', French 'bonjour', 'kedu'), introductions ('who are you', 'what can you do').\n"
+                "- CONVERSATIONAL: Banter, rhetorical questions, meta-questions about the bot/study approach (e.g. 'who told you to drill me via usmle', 'why did you say that', 'who made you', 'are you sure', 'can you speak French', 'what books do you have').\n"
                 "- GRATITUDE: Thank you, thanks, nice one, well done, praise, appreciation in any language.\n"
                 "- ACKNOWLEDGMENT: Short confirmations (ok, cool, noted, got it, understood, alright).\n"
                 "- GIBBERISH: Random keyboard mash, nonsense characters (e.g. 'asdfgh', '12345', '????'), meaningless noise.\n"
                 "- QUIZ: Explicit requests for MCQs, practice questions, quizzes, tests.\n"
-                "- MEDICAL: Any question, concept, disease, pharmacology, physiology, anatomy, or medical topic query in any language.\n\n"
+                "- MEDICAL: Genuine clinical or medical study questions (disease pathophysiology, pharmacology, anatomy, biochemistry, clinical management, symptoms, mechanisms).\n\n"
                 "Output ONLY the category name in uppercase with no punctuation."
             )
             url = "https://openrouter.ai/api/v1/chat/completions"
@@ -530,7 +531,7 @@ async def classify_intent(message: str) -> str:
             if resp.status_code == 200:
                 choice_msg = resp.json().get("choices", [{}])[0].get("message", {})
                 cat = (choice_msg.get("content") or "").strip().upper()
-                for valid in ["GREETING", "GRATITUDE", "ACKNOWLEDGMENT", "GIBBERISH", "QUIZ", "MEDICAL"]:
+                for valid in ["GREETING", "CONVERSATIONAL", "GRATITUDE", "ACKNOWLEDGMENT", "GIBBERISH", "QUIZ", "MEDICAL"]:
                     if valid in cat:
                         return valid
         except Exception as e:
@@ -2840,6 +2841,24 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
                 return
 
+        if intent == "CONVERSATIONAL":
+            conv_prompt = (
+                f"You are NEURA AI, an encouraging, sharp, and friendly medical study co-pilot for {name}, a {level} MBBS medical student.\n"
+                f"The student sent a conversational/meta question or playful remark: \"{user_msg}\"\n"
+                f"Respond warmly, naturally, and concisely in 2-3 sentences. Be witty, supportive, and encourage them to throw any clinical topic, drug mechanism, or case study at you whenever they're ready.\n"
+                f"Do NOT output a textbook lecture, headers, or bulleted chapters. Output pure conversational WhatsApp text."
+            )
+            chat_history = []
+            if chat_history_col is not None:
+                user_doc_hist = await chat_history_col.find_one({"user_id": sender_phone})
+                if user_doc_hist and "messages" in user_doc_hist:
+                    chat_history = user_doc_hist["messages"][-4:]
+            conv_reply = await call_openrouter_llm("You are NEURA AI, a friendly and encouraging medical study partner.", conv_prompt, chat_history=chat_history, max_tokens=300)
+            if not conv_reply:
+                conv_reply = f"Haha, fair point *{name}*! 😄 I'm here to help you conquer your medical exams and master tough clinical concepts at your own pace.\n\nWhenever you're ready, what topic or case study are we breaking down today?"
+            await send_whatsapp_cloud_msg(sender_phone, conv_reply)
+            return
+
         if intent == "GRATITUDE":
             gratitude_msg = (
                 f"You're very welcome, *{name}*! 🩺 Happy to help you master this concept.\n\n"
@@ -2983,8 +3002,9 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         if not search_res or (eval_result.get("is_genuinely_absent", False) and not search_res):
             await send_whatsapp_cloud_msg(
                 sender_phone, 
-                f"I've thoroughly checked your medical textbooks for *{clean_topic}*, but couldn't find a dedicated chapter or section on this specific concept in the indexed library.\n\n"
-                f"Try rephrasing with related clinical terms, or explore other subjects using */update books*!"
+                f"That's an interesting question, *{name}*! 💡\n\n"
+                f"I couldn't find a direct chapter on *{clean_topic}* in your current active textbooks, but I'm ready for any core pathology, pharmacology, microbiology, anatomy, or clinical cases you want to break down.\n\n"
+                f"Feel free to ask another clinical question or explore new subjects with */update books*!"
             )
             return
 
@@ -3006,13 +3026,14 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         critical_inst = (
             f"CRITICAL PEDAGOGICAL INSTRUCTION:\n"
-            f"1. Start with H1 header: # *📖 {clean_topic.upper()}* followed immediately by a concise 1-2 sentence high-level overview/definition.\n"
-            f"2. Explain everything in simple, clear, easy-to-understand language while keeping all original clinical depth and scientific accuracy. Stretch explanations where it helps understanding (make mechanisms detailed and clear step-by-step).\n"
-            f"3. Use structured headings for logical hierarchy: ## *[Section Name]* (e.g. ## *Pathophysiology & Core Mechanisms*, ## *Clinical Manifestations*, ## *Diagnostic Workup*, ## *Management & Pharmacology*) and ### *[Sub-topic Name]*.\n"
-            f"4. Use bullet points (- ) and numbered lists (1. ) with double-line spacing for readability.\n"
-            f"5. Highlight important points using bold text (*Key Term*) and > blockquotes (> *Key Clinical Takeaway:* ...) for vital takeaways and pearls.\n"
-            f"6. Whenever a technical term, disease name, syndrome, eponym, or special concept appears (e.g., 'anti-phospholipid syndrome', 'Horner syndrome'), immediately add a short, simple explanation of what it is after it is first mentioned.\n"
-            f"7. Zero textbook meta-talk and zero fabricated figure citations."
+            f"1. STRICT TEXTBOOK GROUNDING: Answer using the factual medical mechanisms, clinical classifications, and details provided in the RETRIEVED MEDICAL KNOWLEDGE CONTEXT. Do not invent non-curricular topics.\n"
+            f"2. Start with H1 header: # *📖 {clean_topic.upper()}* followed immediately by a concise 1-2 sentence high-level overview/definition.\n"
+            f"3. Explain everything in simple, clear, easy-to-understand language while keeping all original clinical depth and scientific accuracy. Stretch explanations where it helps understanding (make mechanisms detailed and clear step-by-step).\n"
+            f"4. Use structured headings for logical hierarchy: ## *[Section Name]* (e.g. ## *Pathophysiology & Core Mechanisms*, ## *Clinical Manifestations*, ## *Diagnostic Workup*, ## *Management & Pharmacology*) and ### *[Sub-topic Name]*.\n"
+            f"5. Use bullet points (- ) and numbered lists (1. ) with double-line spacing for readability.\n"
+            f"6. Highlight important points using bold text (*Key Term*) and > blockquotes (> *Key Clinical Takeaway:* ...) for vital takeaways and pearls.\n"
+            f"7. Whenever a technical term, disease name, syndrome, eponym, or special concept appears (e.g., 'anti-phospholipid syndrome', 'Horner syndrome'), immediately add a short, simple explanation of what it is after it is first mentioned.\n"
+            f"8. Zero textbook meta-talk and zero fabricated figure citations."
         )
 
         if is_tagged_reply and last_assistant_msg:
