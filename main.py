@@ -3807,19 +3807,25 @@ async def admin_dashboard_page():
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NEURA AI — Clinical Administration &amp; Billing Hub</title>
+  <title>NEURA AI — Enterprise Administration &amp; Billing Hub</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <style>
     :root {
-      --bg: #FFFFFF;
-      --surface: #F5F5F5;
-      --border: #E0E0E0;
-      --text-primary: #111111;
-      --text-secondary: #6B6B6B;
-      --text-muted: #A0A0A0;
-      --inverse-bg: #0D0D0D;
-      --inverse-text: #F5F5F5;
+      --bg: #F7F8FA;
+      --surface: #FFFFFF;
+      --surface-alt: #F1F2F4;
+      --border: #E4E6EA;
+      --text-primary: #17181A;
+      --text-secondary: #5A5E67;
+      --text-muted: #9298A3;
+      --sidebar-bg: #14161A;
+      --sidebar-text: #C7C9CE;
+      --sidebar-text-active: #FFFFFF;
+      --status-success: #1F8A56;
+      --status-warning: #B7791F;
+      --status-error: #C0392B;
+      --focus-ring: #2C2F36;
     }
 
     * {
@@ -3830,7 +3836,8 @@ async def admin_dashboard_page():
       background-color: var(--bg);
       color: var(--text-primary);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      line-height: 1.6;
+      font-size: 13px;
+      line-height: 1.5;
       margin: 0;
       padding: 0;
       -webkit-font-smoothing: antialiased;
@@ -3838,39 +3845,33 @@ async def admin_dashboard_page():
 
     h1, h2, h3, h4, h5, h6 {
       color: var(--text-primary);
-      letter-spacing: -0.02em;
-      font-weight: 700;
+      letter-spacing: -0.01em;
+      font-weight: 600;
     }
 
     .card {
-      background-color: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-    }
-
-    .card-surface {
       background-color: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 4px;
+      border-radius: 6px;
     }
 
     .btn-primary {
       background-color: var(--text-primary);
-      color: var(--bg);
+      color: #FFFFFF;
       border: 1px solid var(--text-primary);
       border-radius: 4px;
-      font-weight: 600;
-      padding: 8px 16px;
+      font-weight: 500;
+      font-size: 12px;
+      padding: 6px 12px;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
-      font-size: 13px;
-      transition: opacity 0.2s ease;
+      transition: background-color 0.15s ease, opacity 0.15s ease;
     }
     .btn-primary:hover {
-      opacity: 0.88;
+      background-color: #2C2F36;
     }
     .btn-primary:disabled {
       opacity: 0.5;
@@ -3878,607 +3879,554 @@ async def admin_dashboard_page():
     }
 
     .btn-secondary {
-      background-color: var(--bg);
+      background-color: var(--surface);
       color: var(--text-primary);
       border: 1px solid var(--border);
       border-radius: 4px;
-      font-weight: 600;
-      padding: 8px 16px;
+      font-weight: 500;
+      font-size: 12px;
+      padding: 6px 12px;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
-      font-size: 13px;
-      transition: border-color 0.2s ease, background-color 0.2s ease;
+      transition: background-color 0.15s ease, border-color 0.15s ease;
     }
     .btn-secondary:hover {
-      border-color: var(--text-primary);
+      background-color: var(--surface-alt);
+      border-color: #D0D4DA;
+    }
+
+    .input-compact {
       background-color: var(--surface);
-    }
-
-    .input-box {
-      background-color: var(--bg);
       border: 1px solid var(--border);
       border-radius: 4px;
       color: var(--text-primary);
-      font-size: 13px;
-      padding: 8px 12px;
-      outline: none;
-      transition: border-color 0.2s ease;
-    }
-    .input-box:focus {
-      border-color: var(--text-primary);
-    }
-
-    .nav-tab {
-      color: var(--text-secondary);
-      font-weight: 500;
-      font-size: 13px;
-      padding: 10px 14px;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      background: transparent;
-      border-top: 0;
-      border-left: 0;
-      border-right: 0;
-      transition: color 0.2s ease, border-color 0.2s ease;
-    }
-    .nav-tab:hover {
-      color: var(--text-primary);
-    }
-    .nav-tab.active {
-      color: var(--text-primary);
-      font-weight: 700;
-      border-bottom-color: var(--text-primary);
-    }
-
-    .filter-btn {
-      background-color: var(--bg);
-      color: var(--text-secondary);
-      border: 1px solid var(--border);
-      border-radius: 4px;
       font-size: 12px;
-      font-weight: 500;
-      padding: 4px 10px;
-      cursor: pointer;
-      transition: all 0.2s ease;
+      padding: 6px 10px;
+      height: 32px;
+      outline: none;
+      transition: border-color 0.15s ease;
     }
-    .filter-btn:hover {
-      color: var(--text-primary);
-      border-color: var(--text-primary);
-    }
-    .filter-btn.active {
-      background-color: var(--text-primary);
-      color: var(--bg);
-      border-color: var(--text-primary);
-      font-weight: 700;
+    .input-compact:focus {
+      border-color: var(--focus-ring);
     }
 
-    .badge-mono {
+    .sidebar-link {
+      color: var(--sidebar-text);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      text-decoration: none;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      border-left: 3px solid transparent;
+    }
+    .sidebar-link:hover {
+      color: #FFFFFF;
+      background-color: rgba(255, 255, 255, 0.05);
+    }
+    .sidebar-link.active {
+      color: var(--sidebar-text-active);
+      background-color: rgba(255, 255, 255, 0.08);
+      border-left-color: #FFFFFF;
+      font-weight: 600;
+    }
+
+    .filter-pill {
       background-color: var(--surface);
-      color: var(--text-primary);
+      color: var(--text-secondary);
       border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 4px 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .filter-pill:hover {
+      color: var(--text-primary);
+      border-color: var(--text-secondary);
+    }
+    .filter-pill.active {
+      background-color: var(--text-primary);
+      color: #FFFFFF;
+      border-color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .badge-status-success {
+      background-color: rgba(31, 138, 86, 0.08);
+      color: var(--status-success);
+      border: 1px solid rgba(31, 138, 86, 0.2);
       border-radius: 3px;
-      padding: 2px 6px;
       font-size: 11px;
       font-weight: 600;
-      display: inline-block;
-    }
-
-    .badge-alert {
-      background-color: var(--bg);
-      color: var(--text-primary);
-      border: 1px solid var(--text-primary);
-      border-radius: 3px;
       padding: 2px 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .badge-status-warning {
+      background-color: rgba(183, 121, 31, 0.08);
+      color: var(--status-warning);
+      border: 1px solid rgba(183, 121, 31, 0.2);
+      border-radius: 3px;
       font-size: 11px;
-      font-weight: 700;
+      font-weight: 600;
+      padding: 2px 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .badge-status-neutral {
+      background-color: var(--surface-alt);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 2px 6px;
       display: inline-block;
     }
 
-    .chat-bubble-user {
+    .chat-thread-row {
       background-color: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      color: var(--text-primary);
-    }
-
-    .chat-bubble-ai {
-      background-color: var(--bg);
-      border: 1px solid var(--text-primary);
-      border-radius: 4px;
-      color: var(--text-primary);
-    }
-
-    .chat-thread-item {
-      background-color: var(--bg);
       border: 1px solid var(--border);
       border-radius: 4px;
       cursor: pointer;
-      transition: border-color 0.2s ease, background-color 0.2s ease;
+      transition: all 0.15s ease;
     }
-    .chat-thread-item:hover {
-      border-color: var(--text-primary);
+    .chat-thread-row:hover {
+      background-color: var(--surface-alt);
+      border-color: #D0D4DA;
     }
-    .chat-thread-item.active {
-      background-color: var(--surface);
-      border-color: var(--text-primary);
-      border-width: 1px;
+    .chat-thread-row.active {
+      background-color: var(--surface-alt);
+      border-left: 3px solid var(--text-primary);
     }
 
     .custom-scrollbar::-webkit-scrollbar { width: 5px; height: 5px; }
-    .custom-scrollbar::-webkit-scrollbar-track { background: var(--surface); }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #D0D4DA; border-radius: 2px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #A0A5AF; }
   </style>
 </head>
-<body class="min-h-screen flex flex-col">
+<body class="min-h-screen flex flex-col antialiased">
 
   <!-- ================= AUTHENTICATION MODAL ================= -->
   <div id="login-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-    <div class="card w-full max-w-sm p-8 shadow-sm text-left">
-      <div class="border-b border-[#E0E0E0] pb-4 mb-6">
-        <h2 class="text-xl font-bold tracking-tight text-[#111111]">NEURA AI</h2>
-        <p class="text-xs text-[#6B6B6B] mt-0.5">Clinical Administration &amp; Billing Hub</p>
+    <div class="card w-full max-w-sm p-6 shadow-sm">
+      <div class="border-b border-[#E4E6EA] pb-3 mb-5">
+        <div class="text-xs font-bold uppercase tracking-wider text-[#5A5E67]">Internal Access</div>
+        <h2 class="text-lg font-bold text-[#17181A] mt-0.5">NEURA AI Enterprise Portal</h2>
       </div>
       
       <div class="space-y-4">
         <div>
-          <label class="block text-xs font-semibold text-[#111111] uppercase tracking-wider mb-2">Master Security Password</label>
+          <label class="block text-xs font-semibold text-[#5A5E67] uppercase tracking-wider mb-1.5">Administrative Password</label>
           <div class="relative">
-            <input type="password" id="admin-pass" placeholder="Enter administrative password" 
-                   class="input-box w-full pr-10">
-            <button onclick="togglePass()" type="button" class="absolute right-3 top-2.5 text-[#6B6B6B] hover:text-[#111111]">
+            <input type="password" id="admin-pass" placeholder="Enter password" 
+                   class="input-compact w-full pr-8">
+            <button onclick="togglePass()" type="button" class="absolute right-2.5 top-2 text-[#9298A3] hover:text-[#17181A]">
               <i id="pass-icon" class="fa-regular fa-eye text-xs"></i>
             </button>
           </div>
         </div>
-        <p id="login-err" class="text-xs font-medium text-[#111111] bg-[#F5F5F5] border border-[#E0E0E0] p-2 rounded hidden">
-          Authentication failed. Please verify credentials.
+        <p id="login-err" class="text-xs text-[#C0392B] bg-[#FDEDEC] border border-[#F5B7B1] p-2 rounded hidden">
+          Authentication failed. Incorrect password.
         </p>
-        <button onclick="performLogin()" id="login-btn" class="btn-primary w-full py-2.5">
-          <span>Authenticate &amp; Access</span>
+        <button onclick="performLogin()" id="login-btn" class="btn-primary w-full py-2">
+          <span>Authenticate Session</span>
         </button>
       </div>
     </div>
   </div>
 
   <!-- ================= MAIN APPLICATION ================= -->
-  <div id="dashboard-content" class="hidden flex-1 flex flex-col min-h-screen bg-[#FFFFFF]">
+  <div id="dashboard-content" class="hidden flex-1 flex flex-col lg:flex-row min-h-screen bg-[#F7F8FA]">
     
-    <!-- TOP HEADER & NAVIGATION -->
-    <header class="border-b border-[#E0E0E0] bg-[#FFFFFF] sticky top-0 z-40 px-4 sm:px-8">
-      <div class="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 pb-0">
-        <!-- BRAND & META -->
-        <div class="flex items-center justify-between">
+    <!-- FIXED LEFT SIDEBAR (~250px) -->
+    <aside class="w-full lg:w-60 bg-[#14161A] text-[#C7C9CE] flex flex-col justify-between shrink-0 lg:sticky lg:top-0 lg:h-screen z-30 border-r border-[#22262E]">
+      <div>
+        <!-- BRAND -->
+        <div class="p-5 border-b border-[#22262E] flex items-center justify-between">
           <div>
-            <div class="flex items-center gap-2">
-              <span class="text-base font-black tracking-tight text-[#111111]">NEURA AI</span>
-              <span class="badge-mono text-[10px]">PAYG SUITE</span>
+            <div class="text-sm font-bold text-white tracking-tight flex items-center gap-1.5">
+              <span>NEURA AI</span>
+              <span class="text-[9px] bg-white/10 text-white px-1.5 py-0.5 rounded font-mono">PAYG</span>
             </div>
-            <p class="text-[11px] text-[#6B6B6B]">Clinical Administration &amp; Billing Hub</p>
+            <div class="text-[10px] text-[#9298A3] uppercase tracking-wider mt-0.5">Billing &amp; Clinical Hub</div>
+          </div>
+        </div>
+
+        <!-- NAV GROUPS -->
+        <div class="p-3 space-y-6">
+          <div>
+            <div class="text-[10px] font-bold uppercase tracking-widest text-[#9298A3] px-3 mb-2">Management</div>
+            <nav class="space-y-1">
+              <button onclick="switchTab('students')" id="tab-btn-students" class="sidebar-link active w-full text-left">
+                <i class="fa-solid fa-wallet text-xs w-4"></i>
+                <span>Students &amp; Wallets</span>
+              </button>
+              <button onclick="switchTab('chats')" id="tab-btn-chats" class="sidebar-link w-full text-left">
+                <i class="fa-solid fa-comments text-xs w-4"></i>
+                <span>Chat Transcripts</span>
+              </button>
+            </nav>
           </div>
 
-          <!-- MOBILE LOGOUT -->
-          <button onclick="performLogout()" class="sm:hidden btn-secondary text-xs px-2.5 py-1">
+          <div>
+            <div class="text-[10px] font-bold uppercase tracking-widest text-[#9298A3] px-3 mb-2">Operations</div>
+            <nav class="space-y-1">
+              <button onclick="switchTab('broadcast')" id="tab-btn-broadcast" class="sidebar-link w-full text-left">
+                <i class="fa-solid fa-bullhorn text-xs w-4"></i>
+                <span>Broadcast Studio</span>
+              </button>
+              <button onclick="switchTab('analytics')" id="tab-btn-analytics" class="sidebar-link w-full text-left">
+                <i class="fa-solid fa-chart-pie text-xs w-4"></i>
+                <span>Cohort Analytics</span>
+              </button>
+            </nav>
+          </div>
+        </div>
+      </div>
+
+      <!-- SIDEBAR FOOTER -->
+      <div class="p-4 border-t border-[#22262E] space-y-3">
+        <div class="flex items-center justify-between text-xs text-[#9298A3] px-1">
+          <span class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-[#1F8A56]"></span>
+            <span>Billing Active</span>
+          </span>
+          <span id="sidebar-student-count" class="font-mono text-white text-[11px]">--</span>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <button onclick="loadAllData()" class="btn-secondary text-[11px] py-1 px-2 justify-center bg-[#22262E] text-white border-[#2E333D] hover:bg-[#2C313A]">
+            <i id="sync-icon-sidebar" class="fa-solid fa-arrows-rotate text-[10px]"></i> Sync
+          </button>
+          <button onclick="performLogout()" class="btn-secondary text-[11px] py-1 px-2 justify-center bg-[#22262E] text-[#C7C9CE] border-[#2E333D] hover:bg-[#2C313A]">
             Exit
           </button>
         </div>
-
-        <!-- NAVIGATION TABS -->
-        <nav class="flex items-center gap-1 overflow-x-auto custom-scrollbar border-t sm:border-t-0 border-[#E0E0E0] pt-1 sm:pt-0">
-          <button onclick="switchTab('students')" id="tab-btn-students" class="nav-tab active">
-            Students &amp; Wallets
-          </button>
-          <button onclick="switchTab('chats')" id="tab-btn-chats" class="nav-tab">
-            Chat Transcripts
-          </button>
-          <button onclick="switchTab('broadcast')" id="tab-btn-broadcast" class="nav-tab">
-            Broadcast
-          </button>
-          <button onclick="switchTab('analytics')" id="tab-btn-analytics" class="nav-tab">
-            Analytics
-          </button>
-        </nav>
-
-        <!-- RIGHT ACTIONS -->
-        <div class="hidden sm:flex items-center gap-2">
-          <span id="nav-chat-issues" class="badge-alert hidden">
-            Alerts Present
-          </span>
-          <button onclick="loadAllData()" title="Sync Live Data" class="btn-secondary text-xs py-1.5 px-3">
-            <i id="sync-icon" class="fa-solid fa-arrows-rotate text-[11px]"></i>
-            <span>Sync</span>
-          </button>
-          <button onclick="performLogout()" class="btn-secondary text-xs py-1.5 px-3">
-            Sign Out
-          </button>
-        </div>
       </div>
-    </header>
+    </aside>
 
-    <!-- CONTENT WRAPPER -->
-    <main class="w-full max-w-6xl mx-auto p-4 sm:p-8 space-y-8 flex-1">
+    <!-- RIGHT MAIN COLUMN -->
+    <div class="flex-1 flex flex-col min-w-0">
+      
+      <!-- TOP BAR -->
+      <header class="h-14 bg-white border-b border-[#E4E6EA] sticky top-0 z-20 px-6 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span id="current-view-title" class="text-sm font-semibold text-[#17181A]">Registered Students &amp; Wallets</span>
+        </div>
 
-      <!-- ================= MONOCHROME HERO 1 (TWO-COLUMN MINIMALIST HERO) ================= -->
-      <section class="card-surface p-6 sm:p-8">
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-          <!-- LEFT COLUMN -->
-          <div class="lg:col-span-7 space-y-4">
-            <div class="text-[11px] font-bold uppercase tracking-widest text-[#6B6B6B]">
-              Clinical Intelligence &amp; Billing Engine
-            </div>
-            <h1 class="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#111111] leading-tight">
-              High-yield clinical grounding, wallet billing, and real-time telemetry.
-            </h1>
-            <p class="text-sm text-[#6B6B6B] leading-relaxed max-w-xl">
-              Unified administrative oversight for Nigerian MBBS candidates. Grounded textbook retrieval across Robbins, Kumar &amp; Clark, Jawetz, and Ganong with dynamic token deductions, prepaid wallet deposits, and live diagnostics.
-            </p>
-            
-            <div class="flex flex-wrap items-center gap-2.5 pt-2">
-              <button onclick="switchTab('broadcast')" class="btn-primary">
-                <span>Dispatch Announcement</span>
-              </button>
-              <button onclick="switchTab('chats')" class="btn-secondary">
-                <span>Inspect Transcripts</span>
-              </button>
-              <button onclick="loadAllData()" class="btn-secondary" title="Refresh Live Data">
-                <i class="fa-solid fa-arrows-rotate text-xs"></i>
-              </button>
-            </div>
+        <div class="flex items-center gap-3">
+          <span id="nav-chat-issues" class="badge-status-warning hidden">
+            <i class="fa-solid fa-triangle-exclamation text-[10px]"></i>
+            <span>Diagnostic Alerts</span>
+          </span>
+          <button onclick="loadAllData()" class="btn-secondary py-1 px-2.5 text-xs">
+            <i id="sync-icon" class="fa-solid fa-arrows-rotate text-[10px]"></i>
+            <span class="hidden sm:inline">Refresh Data</span>
+          </button>
+        </div>
+      </header>
 
-            <div class="pt-4 border-t border-[#E0E0E0] text-xs text-[#6B6B6B]">
-              Over 500 active candidates &bull; 4.9/5 satisfaction score &bull; 100% textbook-grounded
-            </div>
+      <!-- CONTENT BODY (Dense 24px padding, 16px grid gutters) -->
+      <main class="p-6 space-y-5 flex-1 max-w-7xl">
+
+        <!-- 4-CARD SUMMARY METRICS GRID -->
+        <section class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <!-- CARD 1 -->
+          <div class="card p-4 space-y-1">
+            <div class="text-[11px] font-bold text-[#5A5E67] uppercase tracking-wider">Total Registered</div>
+            <div id="stat-total-students" class="text-2xl font-bold font-mono text-[#17181A]">--</div>
+            <div class="text-[11px] text-[#9298A3]">Active candidates in registry</div>
           </div>
 
-          <!-- RIGHT COLUMN: MINIMALIST DIAGNOSTIC PREVIEW -->
-          <div class="lg:col-span-5">
-            <div class="card p-4 space-y-3 bg-[#FFFFFF]">
-              <div class="flex items-center justify-between border-b border-[#E0E0E0] pb-2 text-xs">
-                <span class="font-mono text-[11px] text-[#6B6B6B]">node:neura-billing-engine</span>
-                <span class="badge-mono text-[10px]">ACTIVE</span>
-              </div>
-              
-              <div class="space-y-2 text-xs">
-                <div class="chat-bubble-user p-2.5 text-xs">
-                  <div class="font-semibold text-[11px] text-[#6B6B6B] mb-0.5">Student (500L)</div>
-                  <p>Explain the pathophysiology of Nephrotic Syndrome in simple terms.</p>
-                </div>
-                
-                <div class="chat-bubble-ai p-2.5 text-xs space-y-1">
-                  <div class="font-bold text-[11px] text-[#111111] border-b border-[#E0E0E0] pb-1">
-                    NEURA AI &bull; Clinical Tutor
-                  </div>
-                  <p class="font-semibold text-[#111111]">Nephrotic Syndrome Overview</p>
-                  <p class="text-[#111111] text-[12px]">
-                    Podocyte injury causes massive proteinuria (>3.5g/24h), hypoalbuminemia, and generalized edema.
-                  </p>
-                  <p class="text-[11px] text-[#6B6B6B] italic pt-1 border-t border-[#E0E0E0]">
-                    Key Takeaway: Loss of negative charge on glomerular basement membrane leads to albumin filtration.
-                  </p>
-                </div>
-              </div>
-
-              <div class="grid grid-cols-2 gap-2 pt-2 border-t border-[#E0E0E0] text-[11px] text-[#6B6B6B]">
-                <div>Registered: <span id="hero-stat-students" class="font-bold text-[#111111]">--</span></div>
-                <div>Active (24h): <span id="hero-stat-active" class="font-bold text-[#111111]">--</span></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- TOP EXECUTIVE KPI SUMMARY CARDS -->
-      <section class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <!-- TOTAL STUDENTS -->
-        <div class="card p-4 space-y-1">
-          <div class="text-[11px] font-bold text-[#6B6B6B] uppercase tracking-wider">Total Registered</div>
-          <div id="stat-total-students" class="text-2xl font-bold text-[#111111]">--</div>
-          <div class="text-[11px] text-[#6B6B6B]">Live database count</div>
-        </div>
-
-        <!-- ACTIVE 24H -->
-        <div class="card p-4 space-y-1">
-          <div class="text-[11px] font-bold text-[#6B6B6B] uppercase tracking-wider">Active Today (24h)</div>
-          <div id="stat-active-24h" class="text-2xl font-bold text-[#111111]">--</div>
-          <div class="text-[11px] text-[#6B6B6B]">Recent chat activity</div>
-        </div>
-
-        <!-- ESCROWED WALLETS -->
-        <div class="card p-4 space-y-1">
-          <div class="text-[11px] font-bold text-[#6B6B6B] uppercase tracking-wider">Total Escrowed Balances</div>
-          <div id="stat-wallets" class="text-2xl font-bold text-[#111111]">₦--</div>
-          <div class="text-[11px] text-[#6B6B6B]">Prepaid candidate funds</div>
-        </div>
-
-        <!-- TOP CLASS -->
-        <div class="card p-4 space-y-1">
-          <div class="text-[11px] font-bold text-[#6B6B6B] uppercase tracking-wider">Top Cohort Level</div>
-          <div id="stat-top-level" class="text-2xl font-bold text-[#111111]">--</div>
-          <div class="text-[11px] text-[#6B6B6B]">Most active class</div>
-        </div>
-      </section>
-
-      <!-- ================= TAB 1: STUDENT DIRECTORY & WALLETS ================= -->
-      <section id="view-students" class="space-y-4">
-        <div class="card p-4 sm:p-5 space-y-4">
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h2 class="text-base font-bold text-[#111111]">Registered Student Directory &amp; Wallets</h2>
-              <p class="text-xs text-[#6B6B6B]">Directory of registered candidates, prepaid deposits, and manual credit adjustments</p>
-            </div>
-
-            <!-- SEARCH BAR -->
-            <div class="relative w-full sm:w-72">
-              <input type="text" id="student-search" oninput="filterStudentsTable()" placeholder="Search by name, phone or class..."
-                     class="input-box w-full text-xs">
-            </div>
+          <!-- CARD 2 -->
+          <div class="card p-4 space-y-1">
+            <div class="text-[11px] font-bold text-[#5A5E67] uppercase tracking-wider">Active Today (24h)</div>
+            <div id="stat-active-24h" class="text-2xl font-bold font-mono text-[#1F8A56]">--</div>
+            <div class="text-[11px] text-[#9298A3]">WhatsApp telemetry sessions</div>
           </div>
 
-          <!-- FILTER BAR -->
-          <div class="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-[#E0E0E0]">
-            <div class="flex flex-wrap items-center gap-1">
-              <span class="text-xs font-semibold text-[#6B6B6B] mr-1 uppercase">Level:</span>
-              <button onclick="setLevelFilter('ALL')" id="lvl-filter-ALL" class="filter-btn active">All</button>
-              <button onclick="setLevelFilter('200L')" id="lvl-filter-200L" class="filter-btn">200L</button>
-              <button onclick="setLevelFilter('300L')" id="lvl-filter-300L" class="filter-btn">300L</button>
-              <button onclick="setLevelFilter('400L')" id="lvl-filter-400L" class="filter-btn">400L</button>
-              <button onclick="setLevelFilter('500L')" id="lvl-filter-500L" class="filter-btn">500L</button>
-              <button onclick="setLevelFilter('600L')" id="lvl-filter-600L" class="filter-btn">600L</button>
+          <!-- CARD 3 -->
+          <div class="card p-4 space-y-1">
+            <div class="text-[11px] font-bold text-[#5A5E67] uppercase tracking-wider">Total Escrowed Deposits</div>
+            <div id="stat-wallets" class="text-2xl font-bold font-mono text-[#17181A]">₦--</div>
+            <div class="text-[11px] text-[#9298A3]">Prepaid candidate funds</div>
+          </div>
+
+          <!-- CARD 4 -->
+          <div class="card p-4 space-y-1">
+            <div class="text-[11px] font-bold text-[#5A5E67] uppercase tracking-wider">Top Cohort Level</div>
+            <div id="stat-top-level" class="text-2xl font-bold font-mono text-[#17181A]">--</div>
+            <div class="text-[11px] text-[#9298A3]">Primary MBBS active class</div>
+          </div>
+        </section>
+
+        <!-- ================= VIEW 1: STUDENTS DIRECTORY & WALLETS ================= -->
+        <section id="view-students" class="space-y-3">
+          <!-- CONTROLS -->
+          <div class="card p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="text-xs font-semibold text-[#5A5E67] mr-1">Level:</span>
+              <button onclick="setLevelFilter('ALL')" id="lvl-filter-ALL" class="filter-pill active">All</button>
+              <button onclick="setLevelFilter('200L')" id="lvl-filter-200L" class="filter-pill">200L</button>
+              <button onclick="setLevelFilter('300L')" id="lvl-filter-300L" class="filter-pill">300L</button>
+              <button onclick="setLevelFilter('400L')" id="lvl-filter-400L" class="filter-pill">400L</button>
+              <button onclick="setLevelFilter('500L')" id="lvl-filter-500L" class="filter-pill">500L</button>
+              <button onclick="setLevelFilter('600L')" id="lvl-filter-600L" class="filter-pill">600L</button>
             </div>
 
-            <div class="flex items-center gap-2 text-xs text-[#6B6B6B]">
-              <span id="filtered-count">Showing -- students</span>
-              <select id="wallet-filter" onchange="filterStudentsTable()" class="input-box text-xs py-1 px-2">
+            <div class="flex items-center gap-2">
+              <span id="filtered-count" class="text-xs text-[#5A5E67] whitespace-nowrap">-- candidates</span>
+              <select id="wallet-filter" onchange="filterStudentsTable()" class="input-compact text-xs">
                 <option value="ALL">All Wallets</option>
                 <option value="FUNDED">Funded (&gt; ₦0)</option>
                 <option value="ZERO">Zero Balance (₦0)</option>
               </select>
-            </div>
-          </div>
-        </div>
-
-        <!-- STUDENTS DATA TABLE -->
-        <div class="card overflow-hidden">
-          <div class="overflow-x-auto custom-scrollbar">
-            <table class="w-full text-left text-xs border-collapse">
-              <thead class="bg-[#F5F5F5] text-[#6B6B6B] uppercase font-bold text-[10px] tracking-wider border-b border-[#E0E0E0]">
-                <tr>
-                  <th class="py-3 px-4 font-semibold">Student Name</th>
-                  <th class="py-3 px-4 font-semibold">WhatsApp Number</th>
-                  <th class="py-3 px-4 font-semibold">Level</th>
-                  <th class="py-3 px-4 font-semibold">Wallet Balance</th>
-                  <th class="py-3 px-4 font-semibold">Total Spent</th>
-                  <th class="py-3 px-4 font-semibold">Streak</th>
-                  <th class="py-3 px-4 font-semibold">Preferred Books</th>
-                  <th class="py-3 px-4 font-semibold">Last Active</th>
-                  <th class="py-3 px-4 font-semibold text-center">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="students-tbody" class="divide-y divide-[#E0E0E0] text-[#111111]">
-                <tr>
-                  <td colspan="9" class="py-10 text-center text-[#6B6B6B]">
-                    Loading student directory...
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- ================= TAB 2: USER CHATS & DIAGNOSTICS ================= -->
-      <section id="view-chats" class="hidden space-y-4">
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[720px]">
-          
-          <!-- LEFT: CONVERSATION THREADS LIST -->
-          <div class="lg:col-span-4 card flex flex-col h-full overflow-hidden">
-            <div class="p-3.5 border-b border-[#E0E0E0] space-y-2.5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-bold uppercase tracking-wider text-[#111111]">Chat Threads</span>
-                <span class="text-[11px] text-[#6B6B6B]" id="thread-count-label">--</span>
-              </div>
-              <input type="text" id="search-chat-students" oninput="filterChatThreadsList()" placeholder="Filter candidate threads..."
-                     class="input-box w-full text-xs">
-              <div class="flex items-center gap-1 pt-1">
-                <button onclick="setChatThreadFilter('ALL')" id="ct-filter-ALL" class="filter-btn active text-[11px] py-0.5 px-2">All</button>
-                <button onclick="setChatThreadFilter('ISSUES')" id="ct-filter-ISSUES" class="filter-btn text-[11px] py-0.5 px-2">Alerts Only</button>
-              </div>
-            </div>
-
-            <div id="chat-threads-container" class="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
-              <div class="text-center py-10 text-xs text-[#6B6B6B]">Loading conversation threads...</div>
+              <input type="text" id="student-search" oninput="filterStudentsTable()" placeholder="Search candidate..."
+                     class="input-compact w-full sm:w-52">
             </div>
           </div>
 
-          <!-- RIGHT: LIVE TRANSCRIPT VIEWER -->
-          <div class="lg:col-span-8 card flex flex-col h-full overflow-hidden">
-            <!-- TRANSCRIPT HEADER -->
-            <div class="p-3.5 border-b border-[#E0E0E0] flex items-center justify-between bg-[#F5F5F5]">
-              <div class="flex items-center gap-3">
-                <div id="chat-header-avatar" class="w-8 h-8 rounded bg-[#111111] text-[#FFFFFF] font-bold text-xs flex items-center justify-center">
-                  --
+          <!-- TABLE -->
+          <div class="card overflow-hidden">
+            <div class="overflow-x-auto custom-scrollbar">
+              <table class="w-full text-left text-xs border-collapse">
+                <thead class="bg-[#F1F2F4] text-[#5A5E67] uppercase font-bold text-[11px] tracking-wider border-b border-[#E4E6EA]">
+                  <tr>
+                    <th class="py-2.5 px-4 font-semibold">Candidate</th>
+                    <th class="py-2.5 px-4 font-semibold">WhatsApp Number</th>
+                    <th class="py-2.5 px-4 font-semibold">Level</th>
+                    <th class="py-2.5 px-4 font-semibold text-right">Balance</th>
+                    <th class="py-2.5 px-4 font-semibold text-right">Total Spent</th>
+                    <th class="py-2.5 px-4 font-semibold text-right">Streak</th>
+                    <th class="py-2.5 px-4 font-semibold">Preferred Textbooks</th>
+                    <th class="py-2.5 px-4 font-semibold">Last Active</th>
+                    <th class="py-2.5 px-4 font-semibold text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="students-tbody" class="divide-y divide-[#E4E6EA] text-[#17181A] bg-white">
+                  <tr>
+                    <td colspan="9" class="py-8 text-center text-[#5A5E67]">
+                      Loading candidates directory...
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= VIEW 2: CHAT TRANSCRIPTS ================= -->
+        <section id="view-chats" class="hidden space-y-3">
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[680px]">
+            
+            <!-- LEFT THREAD LIST (~320px) -->
+            <div class="lg:col-span-4 card flex flex-col h-full overflow-hidden">
+              <div class="p-3 border-b border-[#E4E6EA] space-y-2 bg-[#F1F2F4]">
+                <div class="flex items-center justify-between text-xs">
+                  <span class="font-bold text-[#17181A]">Candidate Threads</span>
+                  <span id="thread-count-label" class="text-[11px] text-[#5A5E67]">--</span>
                 </div>
+                <input type="text" id="search-chat-students" oninput="filterChatThreadsList()" placeholder="Filter candidate..."
+                       class="input-compact w-full text-xs">
+                <div class="flex items-center gap-1">
+                  <button onclick="setChatThreadFilter('ALL')" id="ct-filter-ALL" class="filter-pill active text-[10px] py-0.5 px-2">All</button>
+                  <button onclick="setChatThreadFilter('ISSUES')" id="ct-filter-ISSUES" class="filter-pill text-[10px] py-0.5 px-2">Alerts Only</button>
+                </div>
+              </div>
+
+              <div id="chat-threads-container" class="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar bg-white">
+                <div class="text-center py-10 text-xs text-[#5A5E67]">Loading threads...</div>
+              </div>
+            </div>
+
+            <!-- RIGHT TRANSCRIPT STREAM -->
+            <div class="lg:col-span-8 card flex flex-col h-full overflow-hidden">
+              <!-- HEADER -->
+              <div class="p-3 border-b border-[#E4E6EA] flex items-center justify-between bg-[#F1F2F4]">
+                <div class="flex items-center gap-2.5">
+                  <div id="chat-header-avatar" class="w-7 h-7 rounded bg-[#17181A] text-white font-bold text-xs flex items-center justify-center">
+                    --
+                  </div>
+                  <div>
+                    <div class="flex items-center gap-1.5">
+                      <span id="chat-header-name" class="font-bold text-xs text-[#17181A]">Select a candidate</span>
+                      <span id="chat-header-level" class="badge-status-neutral text-[10px]">--</span>
+                    </div>
+                    <div class="text-[11px] text-[#5A5E67]">
+                      <span id="chat-header-phone" class="font-mono">--</span> &bull; <span id="chat-header-streak">--</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <input type="text" id="in-chat-search" oninput="filterInChatMessages()" placeholder="Search in transcript..."
+                         class="input-compact text-xs py-0.5 px-2 w-36 sm:w-44 hidden sm:block">
+                  <a id="chat-header-wa-btn" href="#" target="_blank" class="btn-secondary text-[11px] py-1 px-2">
+                    <span>Open WhatsApp</span>
+                  </a>
+                </div>
+              </div>
+
+              <!-- DIAGNOSTIC BANNER -->
+              <div id="chat-diagnostic-banner" class="hidden p-2 bg-[#FDEDEC] border-b border-[#F5B7B1] text-xs font-semibold text-[#C0392B] flex items-center justify-between">
+                <span id="chat-diagnostic-text">Diagnostic alert detected in this session</span>
+                <span class="badge-status-warning text-[10px]">ALERT</span>
+              </div>
+
+              <!-- MESSAGES STREAM -->
+              <div id="chat-stream-container" class="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-white">
+                <div class="text-center py-20 text-xs text-[#9298A3]">
+                  Select a candidate from the left panel to inspect the full chronological transcript.
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- ================= VIEW 3: BROADCAST STUDIO ================= -->
+        <section id="view-broadcast" class="hidden space-y-4">
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            
+            <!-- LEFT COMPOSER -->
+            <div class="lg:col-span-7 card p-4 space-y-3">
+              <div class="border-b border-[#E4E6EA] pb-2">
+                <h2 class="text-sm font-bold text-[#17181A]">WhatsApp Broadcast Composer</h2>
+                <p class="text-xs text-[#5A5E67]">Compose and dispatch batch announcements to target cohorts</p>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <div class="flex items-center gap-2">
-                    <span id="chat-header-name" class="font-bold text-sm text-[#111111]">Select a Candidate</span>
-                    <span id="chat-header-level" class="badge-mono text-[10px]">--</span>
-                  </div>
-                  <div class="flex items-center gap-2 text-xs text-[#6B6B6B]">
-                    <span id="chat-header-phone" class="font-mono text-[11px]">--</span>
-                    <span>&bull;</span>
-                    <span id="chat-header-streak" class="text-[11px]">Streak: --</span>
-                  </div>
+                  <label class="block text-[11px] font-semibold text-[#5A5E67] uppercase tracking-wider mb-1">Target Cohort</label>
+                  <select id="broadcast-target" class="input-compact w-full text-xs">
+                    <option value="ALL">All Registered Students</option>
+                    <option value="200L">200 Level Only</option>
+                    <option value="300L">300 Level Only</option>
+                    <option value="400L">400 Level Only</option>
+                    <option value="500L">500 Level Only</option>
+                    <option value="600L">600 Level Only</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label class="block text-[11px] font-semibold text-[#5A5E67] uppercase tracking-wider mb-1">Dispatch Mode</label>
+                  <select id="broadcast-mode" class="input-compact w-full text-xs">
+                    <option value="standard">Standard Session (24h Active)</option>
+                    <option value="template">Utility Template Message</option>
+                  </select>
                 </div>
               </div>
 
-              <div class="flex items-center gap-2">
-                <input type="text" id="in-chat-search" oninput="filterInChatMessages()" placeholder="Find text in chat..."
-                       class="input-box text-xs py-1 px-2.5 w-36 sm:w-48 hidden sm:block">
-                <a id="chat-header-wa-btn" href="#" target="_blank" class="btn-secondary text-xs py-1 px-2.5">
-                  <span>WhatsApp</span>
-                </a>
-              </div>
-            </div>
-
-            <!-- DIAGNOSTIC ALERT BANNER -->
-            <div id="chat-diagnostic-banner" class="hidden p-2.5 bg-[#F5F5F5] border-b border-[#111111] text-xs font-semibold text-[#111111] flex items-center justify-between">
-              <span id="chat-diagnostic-text">[Diagnostic Alert: Review required]</span>
-              <span class="badge-alert text-[10px]">ALERT</span>
-            </div>
-
-            <!-- MESSAGES CONTAINER -->
-            <div id="chat-stream-container" class="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-[#FFFFFF]">
-              <div class="text-center py-20 text-xs text-[#6B6B6B]">
-                Select a candidate conversation thread from the left to view the complete transcript.
-              </div>
-            </div>
-          </div>
-
-        </div>
-      </section>
-
-      <!-- ================= TAB 3: BROADCAST STUDIO ================= -->
-      <section id="view-broadcast" class="hidden space-y-4">
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          
-          <!-- LEFT: COMPOSER -->
-          <div class="lg:col-span-7 card p-5 space-y-4">
-            <div>
-              <h2 class="text-base font-bold text-[#111111]">WhatsApp Broadcast Composer</h2>
-              <p class="text-xs text-[#6B6B6B]">Dispatch announcements to specific MBBS level cohorts</p>
-            </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label class="block text-xs font-semibold text-[#111111] uppercase tracking-wider mb-1">Target Audience</label>
-                <select id="broadcast-target" class="input-box w-full text-xs">
-                  <option value="ALL">All Registered Students</option>
-                  <option value="200L">200 Level Only</option>
-                  <option value="300L">300 Level Only</option>
-                  <option value="400L">400 Level Only</option>
-                  <option value="500L">500 Level Only</option>
-                  <option value="600L">600 Level Only</option>
-                </select>
+              <div class="space-y-1.5">
+                <div class="flex items-center justify-between text-xs">
+                  <span class="font-semibold text-[#17181A]">Message Content</span>
+                  <span id="char-count" class="text-[#5A5E67] font-mono text-[11px]">0 chars</span>
+                </div>
+                <div class="flex items-center gap-1 border border-[#E4E6EA] p-1 rounded bg-[#F1F2F4]">
+                  <button type="button" onclick="insertFormatting('*', '*')" class="btn-secondary text-[10px] py-0.5 px-2">Bold</button>
+                  <button type="button" onclick="insertFormatting('_', '_')" class="btn-secondary text-[10px] py-0.5 px-2">Italic</button>
+                  <button type="button" onclick="insertFormatting('# *', '*')" class="btn-secondary text-[10px] py-0.5 px-2">Header</button>
+                  <button type="button" onclick="insertFormatting('• ', '')" class="btn-secondary text-[10px] py-0.5 px-2">Bullet</button>
+                </div>
+                <textarea id="broadcast-msg" oninput="updateLivePreview()" rows="8" placeholder="Type announcement content here..."
+                          class="w-full p-3 border border-[#E4E6EA] rounded text-xs font-mono text-[#17181A] outline-none focus:border-[#2C2F36]"></textarea>
               </div>
 
-              <div>
-                <label class="block text-xs font-semibold text-[#111111] uppercase tracking-wider mb-1">Dispatch Mode</label>
-                <select id="broadcast-mode" class="input-box w-full text-xs">
-                  <option value="standard">Standard Message</option>
-                  <option value="template">Utility Template</option>
-                </select>
-              </div>
-            </div>
-
-            <!-- FORMATTING HELPERS -->
-            <div class="space-y-1.5">
-              <div class="flex items-center justify-between text-xs">
-                <span class="font-semibold text-[#111111]">Message Body</span>
-                <span id="char-count" class="text-[#6B6B6B] font-mono text-[11px]">0 chars</span>
-              </div>
-              <div class="flex flex-wrap items-center gap-1 border border-[#E0E0E0] p-1 rounded bg-[#F5F5F5]">
-                <button type="button" onclick="insertFormatting('*', '*')" class="btn-secondary text-[11px] py-0.5 px-2">Bold</button>
-                <button type="button" onclick="insertFormatting('_', '_')" class="btn-secondary text-[11px] py-0.5 px-2">Italic</button>
-                <button type="button" onclick="insertFormatting('# *', '*')" class="btn-secondary text-[11px] py-0.5 px-2">Header</button>
-                <button type="button" onclick="insertFormatting('• ', '')" class="btn-secondary text-[11px] py-0.5 px-2">Bullet</button>
-              </div>
-              <textarea id="broadcast-msg" oninput="updateLivePreview()" rows="8" placeholder="Type your WhatsApp announcement here..."
-                        class="input-box w-full font-mono text-xs leading-relaxed"></textarea>
-            </div>
-
-            <div class="pt-2">
-              <button type="button" onclick="confirmBroadcast()" class="btn-primary w-full py-2.5">
-                <span>Review &amp; Dispatch Broadcast</span>
+              <button type="button" onclick="confirmBroadcast()" class="btn-primary w-full py-2">
+                <span>Verify &amp; Dispatch Broadcast</span>
               </button>
             </div>
-          </div>
 
-          <!-- RIGHT: PREVIEW -->
-          <div class="lg:col-span-5 card p-5 space-y-3 bg-[#F5F5F5]">
-            <div class="flex items-center justify-between border-b border-[#E0E0E0] pb-2 text-xs">
-              <span class="font-bold text-[#111111]">Live WhatsApp Rendering</span>
-              <span id="preview-time" class="font-mono text-[#6B6B6B] text-[11px]">--:--</span>
-            </div>
+            <!-- RIGHT PREVIEW -->
+            <div class="lg:col-span-5 card p-4 space-y-2.5 bg-[#F1F2F4]">
+              <div class="flex items-center justify-between border-b border-[#E4E6EA] pb-2 text-xs font-bold text-[#17181A]">
+                <span>WhatsApp Client Preview</span>
+                <span id="preview-time" class="font-mono text-[11px] text-[#5A5E67]">--:--</span>
+              </div>
 
-            <div class="card p-4 bg-[#FFFFFF] min-h-[220px] text-xs space-y-2">
-              <div class="font-bold text-[11px] text-[#111111]">NEURA AI Announcement</div>
-              <div id="preview-text" class="text-xs text-[#111111] whitespace-pre-wrap leading-relaxed">
-                Type your announcement on the left to see how it renders live on students' WhatsApp screens in real-time.
+              <div class="card p-3.5 bg-white min-h-[200px] text-xs space-y-1.5">
+                <div class="text-[10px] font-bold uppercase tracking-wider text-[#5A5E67]">NEURA AI Broadcast</div>
+                <div id="preview-text" class="text-xs text-[#17181A] whitespace-pre-wrap leading-relaxed">
+                  Type your announcement on the left to see live rendering.
+                </div>
+              </div>
+              
+              <div class="text-[11px] text-[#5A5E67]">
+                Dispatches execute asynchronously with automatic exponential backoff.
               </div>
             </div>
+
+          </div>
+        </section>
+
+        <!-- ================= VIEW 4: ANALYTICS & BILLING ================= -->
+        <section id="view-analytics" class="hidden space-y-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             
-            <div class="text-[11px] text-[#6B6B6B]">
-              Note: Broadcast messages are sent in compliance with WhatsApp Cloud API rate limits.
-            </div>
-          </div>
-
-        </div>
-      </section>
-
-      <!-- ================= TAB 4: ANALYTICS & STATS ================= -->
-      <section id="view-analytics" class="hidden space-y-4">
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-          
-          <!-- LEVEL BREAKDOWN -->
-          <div class="card p-5 space-y-4">
-            <h2 class="text-base font-bold text-[#111111]">MBBS Cohort Distribution</h2>
-            <div id="level-chart-container" class="space-y-3 pt-2">
-              <div class="text-xs text-[#6B6B6B]">Loading distribution metrics...</div>
-            </div>
-          </div>
-
-          <!-- PERFORMANCE SUMMARY -->
-          <div class="card p-5 space-y-4">
-            <h2 class="text-base font-bold text-[#111111]">System &amp; Billing Telemetry</h2>
-            <div class="space-y-3 text-xs">
-              <div class="flex items-center justify-between py-2 border-b border-[#E0E0E0]">
-                <span class="text-[#6B6B6B]">Registered Candidates</span>
-                <span id="analytics-total-students" class="font-bold text-[#111111]">--</span>
-              </div>
-              <div class="flex items-center justify-between py-2 border-b border-[#E0E0E0]">
-                <span class="text-[#6B6B6B]">Total Escrowed Deposits</span>
-                <span id="analytics-wallet-total" class="font-bold text-[#111111]">₦--</span>
-              </div>
-              <div class="flex items-center justify-between py-2 border-b border-[#E0E0E0]">
-                <span class="text-[#6B6B6B]">RAG Retrieval Pipeline</span>
-                <span class="badge-mono">Vector FastEmbed 384d</span>
-              </div>
-              <div class="flex items-center justify-between py-2 border-b border-[#E0E0E0]">
-                <span class="text-[#6B6B6B]">Billing Engine &amp; Markup</span>
-                <span class="badge-mono font-bold">8.0x Multiplier (Active)</span>
+            <div class="card p-4 space-y-3">
+              <h2 class="text-sm font-bold text-[#17181A]">MBBS Cohort Level Distribution</h2>
+              <div id="level-chart-container" class="space-y-2.5 pt-1">
+                <div class="text-xs text-[#5A5E67]">Loading cohort metrics...</div>
               </div>
             </div>
+
+            <div class="card p-4 space-y-3">
+              <h2 class="text-sm font-bold text-[#17181A]">Operational &amp; Billing Telemetry</h2>
+              <div class="space-y-2 text-xs divide-y divide-[#E4E6EA]">
+                <div class="flex items-center justify-between py-1.5">
+                  <span class="text-[#5A5E67]">Registered Students</span>
+                  <span id="analytics-total-students" class="font-mono font-bold text-[#17181A]">--</span>
+                </div>
+                <div class="flex items-center justify-between py-1.5">
+                  <span class="text-[#5A5E67]">Total Escrowed Deposits</span>
+                  <span id="analytics-wallet-total" class="font-mono font-bold text-[#17181A]">₦--</span>
+                </div>
+                <div class="flex items-center justify-between py-1.5">
+                  <span class="text-[#5A5E67]">Billing Multiplier Engine</span>
+                  <span class="badge-status-neutral font-mono">8.0x Active Markup</span>
+                </div>
+                <div class="flex items-center justify-between py-1.5">
+                  <span class="text-[#5A5E67]">Health Status</span>
+                  <span class="badge-status-success">
+                    <span class="w-1.5 h-1.5 rounded-full bg-[#1F8A56]"></span> Operational
+                  </span>
+                </div>
+              </div>
+            </div>
+
           </div>
+        </section>
 
-        </div>
-      </section>
-
-    </main>
-
-    <!-- MINIMALIST FOOTER -->
-    <footer class="border-t border-[#E0E0E0] bg-[#FFFFFF] py-6 px-4 text-center text-xs text-[#6B6B6B]">
-      <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-        <span>NEURA AI Clinical Administration &amp; Billing Suite</span>
-        <span>Textbook RAG grounded in Robbins, Kumar &amp; Clark, Jawetz, Ganong</span>
-      </div>
-    </footer>
+      </main>
+    </div>
 
   </div>
 
   <!-- CONFIRM BROADCAST MODAL -->
   <div id="confirm-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 hidden">
-    <div class="card w-full max-w-md p-6 space-y-4 bg-[#FFFFFF]">
-      <h3 class="text-base font-bold text-[#111111]">Confirm Broadcast Dispatch</h3>
-      <p id="confirm-details" class="text-xs text-[#6B6B6B] leading-relaxed">
-        Are you sure you want to dispatch this announcement?
+    <div class="card w-full max-w-sm p-5 space-y-3 bg-white">
+      <h3 class="text-sm font-bold text-[#17181A]">Confirm Broadcast Dispatch</h3>
+      <p id="confirm-details" class="text-xs text-[#5A5E67] leading-relaxed">
+        Are you ready to dispatch this announcement?
       </p>
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-[#E0E0E0]">
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-[#E4E6EA]">
         <button onclick="closeConfirmModal()" class="btn-secondary text-xs">Cancel</button>
         <button onclick="executeConfirmedBroadcast()" id="modal-confirm-btn" class="btn-primary text-xs">
-          Confirm &amp; Dispatch
+          Confirm Dispatch
         </button>
       </div>
     </div>
@@ -4492,6 +4440,13 @@ async def admin_dashboard_page():
     let activeChatThreadFilter = "ALL";
     let currentSelectedUserId = null;
     let currentActiveMessages = [];
+
+    const VIEW_TITLES = {
+      'students': 'Registered Students & Wallets',
+      'chats': 'Chat Transcripts Studio',
+      'broadcast': 'WhatsApp Broadcast Studio',
+      'analytics': 'Cohort Analytics & Billing Telemetry'
+    };
 
     function togglePass() {
       const p = document.getElementById("admin-pass");
@@ -4532,13 +4487,13 @@ async def admin_dashboard_page():
           showDashboard();
         } else {
           err.classList.remove("hidden");
-          btn.innerHTML = '<span>Authenticate &amp; Access</span>';
+          btn.innerHTML = '<span>Authenticate Session</span>';
           btn.disabled = false;
         }
       } catch (e) {
-        err.innerHTML = 'Network error. Please try again.';
+        err.innerHTML = 'Network error. Please retry.';
         err.classList.remove("hidden");
-        btn.innerHTML = '<span>Authenticate &amp; Access</span>';
+        btn.innerHTML = '<span>Authenticate Session</span>';
         btn.disabled = false;
       }
     }
@@ -4571,6 +4526,11 @@ async def admin_dashboard_page():
         }
       });
 
+      const titleEl = document.getElementById('current-view-title');
+      if (titleEl && VIEW_TITLES[tabKey]) {
+        titleEl.innerText = VIEW_TITLES[tabKey];
+      }
+
       if (tabKey === 'chats' && (!rawChatThreads || rawChatThreads.length === 0)) {
         loadRecentChats();
       }
@@ -4579,14 +4539,19 @@ async def admin_dashboard_page():
     async function loadAllData() {
       if (!authToken) return;
       const syncIcon = document.getElementById("sync-icon");
+      const syncSidebar = document.getElementById("sync-icon-sidebar");
       syncIcon?.classList.add("fa-spin");
+      syncSidebar?.classList.add("fa-spin");
       
       try {
         await Promise.all([loadStats(), loadStudents(), loadRecentChats()]);
       } catch (e) {
         console.error("Sync error:", e);
       } finally {
-        setTimeout(() => syncIcon?.classList.remove("fa-spin"), 500);
+        setTimeout(() => {
+          syncIcon?.classList.remove("fa-spin");
+          syncSidebar?.classList.remove("fa-spin");
+        }, 400);
       }
     }
 
@@ -4601,11 +4566,11 @@ async def admin_dashboard_page():
       document.getElementById("stat-active-24h").innerText = data.active_24h || "0";
       document.getElementById("stat-wallets").innerText = "₦" + (data.total_wallet_balance_ngn || 0).toLocaleString();
       document.getElementById("analytics-wallet-total").innerText = "₦" + (data.total_wallet_balance_ngn || 0).toLocaleString();
-      const hss = document.getElementById("hero-stat-students");
-      if (hss) hss.innerText = data.total_students || "0";
-      const hsa = document.getElementById("hero-stat-active");
-      if (hsa) hsa.innerText = data.active_24h || "0";
+      document.getElementById("analytics-total-students").innerText = data.total_students || "0";
       
+      const ssc = document.getElementById("sidebar-student-count");
+      if (ssc) ssc.innerText = `${data.total_students || 0} Registered`;
+
       const dist = data.level_distribution || {};
       let topLvl = "None";
       let maxCount = -1;
@@ -4619,18 +4584,18 @@ async def admin_dashboard_page():
       }
       document.getElementById("stat-top-level").innerText = topLvl;
 
-      // Render monochrome chart
+      // Render chart
       const chartContainer = document.getElementById("level-chart-container");
       chartContainer.innerHTML = Object.entries(dist).map(([lvl, count]) => {
         const pct = totalAssigned > 0 ? Math.round((count / (data.total_students || 1)) * 100) : 0;
         return `
           <div class="space-y-1">
-            <div class="flex items-center justify-between text-xs font-medium">
-              <span class="text-[#111111]">${lvl}</span>
-              <span class="text-[#6B6B6B]">${count} students (${pct}%)</span>
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-medium text-[#17181A]">${lvl}</span>
+              <span class="text-[#5A5E67] font-mono text-[11px]">${count} (${pct}%)</span>
             </div>
-            <div class="w-full bg-[#E0E0E0] rounded h-1.5 overflow-hidden">
-              <div class="bg-[#111111] h-full rounded transition-all duration-300" style="width: ${pct}%"></div>
+            <div class="w-full bg-[#E4E6EA] rounded h-1.5 overflow-hidden">
+              <div class="bg-[#17181A] h-full rounded transition-all duration-300" style="width: ${pct}%"></div>
             </div>
           </div>
         `;
@@ -4650,7 +4615,7 @@ async def admin_dashboard_page():
 
     function setLevelFilter(lvl) {
       activeLevelFilter = lvl;
-      document.querySelectorAll(".filter-btn").forEach(b => {
+      document.querySelectorAll(".filter-pill").forEach(b => {
         if (b.id && b.id.startsWith("lvl-filter-")) {
           b.classList.remove("active");
         }
@@ -4681,7 +4646,7 @@ async def admin_dashboard_page():
         return true;
       });
 
-      document.getElementById("filtered-count").innerText = `Showing ${filtered.length} of ${rawStudentsList.length} students`;
+      document.getElementById("filtered-count").innerText = `${filtered.length} candidates`;
       renderStudentsTable(filtered);
     }
 
@@ -4690,8 +4655,8 @@ async def admin_dashboard_page():
       if (!students || students.length === 0) {
         tbody.innerHTML = `
           <tr>
-            <td colspan="9" class="py-8 text-center text-[#6B6B6B]">
-              No registered students found matching criteria.
+            <td colspan="9" class="py-6 text-center text-[#5A5E67]">
+              No candidates found matching criteria.
             </td>
           </tr>
         `;
@@ -4700,43 +4665,43 @@ async def admin_dashboard_page():
 
       tbody.innerHTML = students.map(s => {
         const booksCount = (s.preferred_books_list || []).length;
-        const booksText = booksCount > 0 ? `${booksCount} Book(s)` : "Standard";
+        const booksText = booksCount > 0 ? `${booksCount} Textbook(s)` : "Standard Core";
         const balance = "₦" + (s.wallet_balance_ngn || 0).toLocaleString();
         const spent = "₦" + (s.total_spent_ngn || 0).toLocaleString();
 
         return `
-          <tr class="hover:bg-[#F5F5F5] transition-colors">
-            <td class="py-3 px-4 font-semibold text-[#111111]">
-              ${s.name || "Student"}
+          <tr class="hover:bg-[#F1F2F4] transition-colors">
+            <td class="py-2.5 px-4 font-semibold text-[#17181A]">
+              ${s.name || "Candidate"}
             </td>
-            <td class="py-3 px-4 font-mono text-[#6B6B6B]">
+            <td class="py-2.5 px-4 font-mono text-[#5A5E67]">
               ${s.user_id}
             </td>
-            <td class="py-3 px-4">
-              <span class="badge-mono">${s.level || "Unset"}</span>
+            <td class="py-2.5 px-4">
+              <span class="badge-status-neutral">${s.level || "Unset"}</span>
             </td>
-            <td class="py-3 px-4 font-mono font-bold text-[#111111]">
+            <td class="py-2.5 px-4 text-right font-mono font-bold text-[#17181A]">
               ${balance}
             </td>
-            <td class="py-3 px-4 font-mono text-[#6B6B6B]">
+            <td class="py-2.5 px-4 text-right font-mono text-[#5A5E67]">
               ${spent}
             </td>
-            <td class="py-3 px-4 font-medium text-[#111111]">
+            <td class="py-2.5 px-4 text-right font-mono font-medium text-[#17181A]">
               ${s.study_streak_days || 1}d
             </td>
-            <td class="py-3 px-4 text-[#6B6B6B]">
+            <td class="py-2.5 px-4 text-[#5A5E67]">
               ${booksText}
             </td>
-            <td class="py-3 px-4 font-mono text-[#6B6B6B] text-[11px]">
+            <td class="py-2.5 px-4 font-mono text-[#5A5E67] text-[11px]">
               ${s.last_study_date || "Recent"}
             </td>
-            <td class="py-3 px-4 text-center">
-              <div class="flex items-center justify-center gap-1.5">
+            <td class="py-2.5 px-4 text-right">
+              <div class="inline-flex items-center gap-1">
                 <button onclick="openStudentChat('${s.user_id}')" class="btn-secondary text-[11px] py-0.5 px-2">
                   Chats
                 </button>
                 <a href="https://wa.me/${s.user_id}" target="_blank" class="btn-secondary text-[11px] py-0.5 px-2">
-                  WhatsApp
+                  WA
                 </a>
               </div>
             </td>
@@ -4775,7 +4740,7 @@ async def admin_dashboard_page():
 
     function setChatThreadFilter(filterKey) {
       activeChatThreadFilter = filterKey;
-      document.querySelectorAll(".filter-btn").forEach(b => {
+      document.querySelectorAll(".filter-pill").forEach(b => {
         if (b.id && b.id.startsWith("ct-filter-")) {
           b.classList.remove("active");
         }
@@ -4809,7 +4774,7 @@ async def admin_dashboard_page():
       const container = document.getElementById("chat-threads-container");
       if (!threads || threads.length === 0) {
         container.innerHTML = `
-          <div class="py-8 text-center text-[#6B6B6B] text-xs">
+          <div class="py-6 text-center text-[#5A5E67] text-xs">
             No conversation threads found.
           </div>
         `;
@@ -4820,17 +4785,17 @@ async def admin_dashboard_page():
         const isActive = t.user_id === currentSelectedUserId ? "active" : "";
         
         return `
-          <div onclick="loadConversationForUser('${t.user_id}')" class="chat-thread-item ${isActive} p-3 space-y-1">
+          <div onclick="loadConversationForUser('${t.user_id}')" class="chat-thread-row ${isActive} p-2.5 space-y-1">
             <div class="flex items-center justify-between text-xs">
-              <div class="font-bold text-[#111111]">${t.name}</div>
-              <span class="badge-mono text-[10px]">${t.level || "Unset"}</span>
+              <div class="font-bold text-[#17181A] truncate">${t.name}</div>
+              <span class="badge-status-neutral text-[10px]">${t.level || "Unset"}</span>
             </div>
 
-            <p class="text-xs text-[#6B6B6B] truncate leading-normal">
+            <p class="text-xs text-[#5A5E67] truncate leading-tight">
               ${t.last_message || "No message content"}
             </p>
 
-            <div class="flex items-center justify-between text-[11px] text-[#6B6B6B] pt-0.5 font-mono">
+            <div class="flex items-center justify-between text-[11px] text-[#9298A3] pt-0.5 font-mono">
               <span>${t.user_id}</span>
               <span>${t.study_streak_days || 1}d &bull; ${t.message_count || 0} msgs</span>
             </div>
@@ -4850,7 +4815,7 @@ async def admin_dashboard_page():
       
       const streamContainer = document.getElementById("chat-stream-container");
       streamContainer.innerHTML = `
-        <div class="m-auto text-center text-[#6B6B6B] p-8 text-xs">
+        <div class="m-auto text-center text-[#5A5E67] p-8 text-xs">
           Loading transcript for ${userId}...
         </div>
       `;
@@ -4867,7 +4832,7 @@ async def admin_dashboard_page():
 
         const initials = (student.name || "S").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase();
         document.getElementById("chat-header-avatar").innerText = initials;
-        document.getElementById("chat-header-name").innerText = student.name || "Student";
+        document.getElementById("chat-header-name").innerText = student.name || "Candidate";
         document.getElementById("chat-header-level").innerText = student.level || "Unset";
         document.getElementById("chat-header-phone").innerText = student.user_id || userId;
         document.getElementById("chat-header-streak").innerText = `Streak: ${student.study_streak_days || 1}d`;
@@ -4876,7 +4841,7 @@ async def admin_dashboard_page():
         const diagBanner = document.getElementById("chat-diagnostic-banner");
         const diagText = document.getElementById("chat-diagnostic-text");
         if (data.issue_count > 0) {
-          diagText.innerText = `Diagnostic alert: ${data.issue_count} potential connection issue(s) detected in transcript.`;
+          diagText.innerText = `Diagnostic alert: ${data.issue_count} potential connection issue(s) detected.`;
           diagBanner.classList.remove("hidden");
         } else {
           diagBanner.classList.add("hidden");
@@ -4884,7 +4849,7 @@ async def admin_dashboard_page():
 
         renderConversationMessages(currentActiveMessages);
       } catch (e) {
-        streamContainer.innerHTML = `<div class="m-auto text-[#111111] text-xs">Error loading conversation: ${e.message}</div>`;
+        streamContainer.innerHTML = `<div class="m-auto text-[#C0392B] text-xs">Error loading transcript: ${e.message}</div>`;
       }
     }
 
@@ -4907,13 +4872,13 @@ async def admin_dashboard_page():
 
       if (highlightQuery) {
         const regex = new RegExp(`(${highlightQuery})`, "gi");
-        html = html.replace(regex, '<mark class="bg-[#E0E0E0] text-[#111111] px-0.5">$1</mark>');
+        html = html.replace(regex, '<mark class="bg-[#F1F2F4] text-[#17181A] font-bold px-0.5">$1</mark>');
       }
 
       html = html
-        .replace(/\*(.*?)\*/g, '<b class="font-bold text-[#111111]">$1</b>')
-        .replace(/_(.*?)_/g, '<i class="italic text-[#6B6B6B]">$1</i>')
-        .replace(/`([^`]+)`/g, '<code class="bg-[#F5F5F5] px-1 py-0.5 rounded font-mono text-[11px] border border-[#E0E0E0]">$1</code>');
+        .replace(/\*(.*?)\*/g, '<b class="font-bold text-[#17181A]">$1</b>')
+        .replace(/_(.*?)_/g, '<i class="italic text-[#5A5E67]">$1</i>')
+        .replace(/`([^`]+)`/g, '<code class="bg-[#F1F2F4] px-1 py-0.5 rounded font-mono text-[11px] border border-[#E4E6EA]">$1</code>');
 
       return html;
     }
@@ -4922,8 +4887,8 @@ async def admin_dashboard_page():
       const container = document.getElementById("chat-stream-container");
       if (!messages || messages.length === 0) {
         container.innerHTML = `
-          <div class="m-auto text-center text-[#6B6B6B] p-8 text-xs">
-            No messages recorded in this conversation thread.
+          <div class="m-auto text-center text-[#9298A3] p-8 text-xs">
+            No message interactions recorded.
           </div>
         `;
         return;
@@ -4938,24 +4903,24 @@ async def admin_dashboard_page():
         if (isUser) {
           return `
             <div class="flex justify-end items-end gap-2">
-              <div class="chat-bubble-user p-3 max-w-[85%] sm:max-w-[75%] space-y-1">
-                <div class="text-[10px] font-bold text-[#6B6B6B] mb-0.5">Student</div>
-                <div class="text-xs text-[#111111] whitespace-pre-wrap leading-relaxed">${formatted}</div>
-                <div class="text-[10px] text-[#6B6B6B] text-right font-mono mt-1">${timeStr}</div>
+              <div class="bg-[#F1F2F4] border border-[#E4E6EA] rounded p-2.5 max-w-[85%] sm:max-w-[75%] space-y-0.5">
+                <div class="text-[10px] font-bold text-[#5A5E67]">Candidate</div>
+                <div class="text-xs text-[#17181A] whitespace-pre-wrap leading-relaxed">${formatted}</div>
+                <div class="text-[10px] text-[#9298A3] text-right font-mono mt-1">${timeStr}</div>
               </div>
             </div>
           `;
         } else {
           return `
             <div class="flex justify-start items-end gap-2">
-              <div class="chat-bubble-ai p-3.5 max-w-[90%] sm:max-w-[80%] space-y-1">
-                <div class="text-[10px] font-bold text-[#111111] border-b border-[#E0E0E0] pb-1 mb-1 flex items-center justify-between">
-                  <span>NEURA AI</span>
-                  ${m.metadata?.msg_type ? `<span class="text-[9px] font-mono text-[#6B6B6B]">(${m.metadata.msg_type})</span>` : ''}
+              <div class="bg-white border border-[#E4E6EA] rounded p-3 max-w-[90%] sm:max-w-[80%] space-y-1 shadow-xs">
+                <div class="text-[10px] font-bold text-[#17181A] border-b border-[#E4E6EA] pb-1 mb-1 flex items-center justify-between">
+                  <span>NEURA AI Clinical Engine</span>
+                  ${m.metadata?.msg_type ? `<span class="text-[9px] font-mono text-[#5A5E67]">(${m.metadata.msg_type})</span>` : ''}
                 </div>
-                ${hasIssue ? '<div class="mb-1 text-[10px] font-bold text-[#111111] bg-[#F5F5F5] border border-[#111111] px-1.5 py-0.5 rounded w-max">Diagnostic Alert</div>' : ''}
-                <div class="text-xs text-[#111111] whitespace-pre-wrap leading-relaxed">${formatted}</div>
-                <div class="text-[10px] text-[#6B6B6B] text-right font-mono mt-1">${timeStr}</div>
+                ${hasIssue ? '<div class="mb-1 text-[10px] font-bold text-[#C0392B] bg-[#FDEDEC] border border-[#F5B7B1] px-1.5 py-0.5 rounded w-max">Diagnostic Alert</div>' : ''}
+                <div class="text-xs text-[#17181A] whitespace-pre-wrap leading-relaxed">${formatted}</div>
+                <div class="text-[10px] text-[#9298A3] text-right font-mono mt-1">${timeStr}</div>
               </div>
             </div>
           `;
@@ -4971,11 +4936,11 @@ async def admin_dashboard_page():
       document.getElementById("char-count").innerText = raw.length + " chars";
       
       let formatted = raw
-        .replace(/\*(.*?)\*/g, '<b class="font-bold text-[#111111]">$1</b>')
-        .replace(/_(.*?)_/g, '<i class="italic text-[#6B6B6B]">$1</i>');
+        .replace(/\*(.*?)\*/g, '<b class="font-bold text-[#17181A]">$1</b>')
+        .replace(/_(.*?)_/g, '<i class="italic text-[#5A5E67]">$1</i>');
         
       if (!formatted.trim()) {
-        formatted = "Type your announcement on the left to see how it renders live on students' WhatsApp screens in real-time.";
+        formatted = "Type announcement on the left to see live rendering.";
       }
       document.getElementById("preview-text").innerHTML = formatted;
       
@@ -4998,10 +4963,10 @@ async def admin_dashboard_page():
       const msg = document.getElementById("broadcast-msg").value.trim();
       const target = document.getElementById("broadcast-target").value;
       if (!msg) {
-        alert("Please enter an announcement text to broadcast.");
+        alert("Please enter announcement text to broadcast.");
         return;
       }
-      document.getElementById("confirm-details").innerText = `You are about to dispatch this WhatsApp announcement to target audience: ${target}.`;
+      document.getElementById("confirm-details").innerText = `You are about to dispatch this WhatsApp announcement to target cohort: ${target}.`;
       document.getElementById("confirm-modal").classList.remove("hidden");
     }
 
@@ -5037,14 +5002,14 @@ async def admin_dashboard_page():
           alert("Broadcast initiated successfully.");
           document.getElementById("broadcast-msg").value = "";
           updateLivePreview();
-          setTimeout(loadAllData, 1200);
+          setTimeout(loadAllData, 1000);
         } else {
-          alert("Broadcast failed to initialize. Please check connection.");
+          alert("Broadcast failed to initialize.");
         }
       } catch (e) {
         alert("Error sending broadcast: " + e.message);
       } finally {
-        btn.innerHTML = 'Confirm &amp; Dispatch';
+        btn.innerHTML = 'Confirm Dispatch';
         btn.disabled = false;
       }
     }
