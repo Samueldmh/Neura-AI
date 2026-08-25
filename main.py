@@ -83,8 +83,29 @@ qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=30, max_connections=60))
 embedding_pool = ThreadPoolExecutor(max_workers=4)
 
-# OpenRouter Provider Routing: Prioritize highest throughput endpoints (SiliconFlow, DeepInfra, Novita, Groq, Together) with seamless fallbacks
-DEFAULT_PROVIDER_ORDER = ["SiliconFlow", "DeepInfra", "Novita", "StreamLake", "Together", "Fireworks", "DeepSeek", "Groq"]
+# Model Architecture & Provider Routing (openai/gpt-oss-120b with Groq priority and dynamic reasoning control)
+DEFAULT_MODEL = "openai/gpt-oss-120b"
+DEFAULT_PROVIDER_ORDER = ["Groq", "Together", "Fireworks", "Novita", "DeepInfra", "SiliconFlow", "StreamLake", "DeepSeek"]
+
+def get_reasoning_config(prompt: str = "", is_micro: bool = False) -> dict:
+    """Returns dynamic reasoning configuration:
+    - Micro-LLMs (normalizers/classifiers): effort='low', exclude=True
+    - Complex clinical differential / case studies: effort='medium', exclude=True
+    - General medical Q&A: effort='low', exclude=True
+    """
+    if is_micro:
+        return {"effort": "low", "exclude": True}
+    
+    p_lower = prompt.lower()
+    complex_triggers = [
+        "differential diagnosis", "differentiate between", "compare and contrast",
+        "case study", "35-year-old", "45-year-old", "50-year-old", "patient presents",
+        "acid-base", "interpret the following", "management of refractory"
+    ]
+    if any(t in p_lower for t in complex_triggers):
+        return {"effort": "medium", "exclude": True}
+    
+    return {"effort": "low", "exclude": True}
 
 def get_embedding_sync(text: str):
     t0 = time.perf_counter()
@@ -492,13 +513,14 @@ async def classify_intent(message: str) -> str:
                 "X-Title": "NEURA AI Intent Router"
             }
             payload = {
-                "model": "deepseek/deepseek-v4-flash",
+                "model": DEFAULT_MODEL,
                 "messages": [
                     {"role": "system", "content": router_prompt},
                     {"role": "user", "content": message}
                 ],
                 "temperature": 0.0,
                 "max_tokens": 10,
+                "reasoning": get_reasoning_config(message, is_micro=True),
                 "provider": {
                     "order": DEFAULT_PROVIDER_ORDER,
                     "allow_fallbacks": True
@@ -540,10 +562,11 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
     messages.append({"role": "user", "content": user_prompt})
     
     payload = {
-        "model": "deepseek/deepseek-v4-flash",
+        "model": DEFAULT_MODEL,
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": max_tokens,
+        "reasoning": get_reasoning_config(user_prompt, is_micro=False),
         "provider": {
             "order": DEFAULT_PROVIDER_ORDER,
             "allow_fallbacks": True
@@ -583,7 +606,7 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
             print(f"Retry error: {retry_err}")
 
     dt = time.perf_counter() - t_start
-    print(f"⏱️ [LLM TIMER] call_openrouter_llm completed in {dt:.3f}s (Provider: {provider_used}, Tokens Generated: ~{len(content.split())*4/3:.0f})")
+    print(f"⏱️ [LLM TIMER] call_openrouter_llm completed in {dt:.3f}s (Model: {DEFAULT_MODEL}, Provider: {provider_used}, Tokens Generated: ~{len(content.split())*4/3:.0f})")
     return (content or "").strip()
 
 async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str, sender_phone: str, chat_history: list = None) -> str:
@@ -606,11 +629,12 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
     messages.append({"role": "user", "content": user_prompt})
     
     payload = {
-        "model": "deepseek/deepseek-v4-flash",
+        "model": DEFAULT_MODEL,
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": 2500,
         "stream": True,
+        "reasoning": get_reasoning_config(user_prompt, is_micro=False),
         "provider": {
             "order": DEFAULT_PROVIDER_ORDER,
             "allow_fallbacks": True
@@ -1703,13 +1727,14 @@ async def normalize_medical_query(user_msg: str) -> dict:
         "Output ONLY valid JSON."
     )
     payload = {
-        "model": "deepseek/deepseek-v4-flash",
+        "model": DEFAULT_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg}
         ],
         "temperature": 0.0,
         "max_tokens": 500,
+        "reasoning": get_reasoning_config(user_msg, is_micro=True),
         "provider": {
             "order": DEFAULT_PROVIDER_ORDER,
             "allow_fallbacks": True
@@ -1772,13 +1797,14 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list) -> 
         f"RETRIEVED TEXTBOOK CONTEXT SNIPPETS:\n{combined_context_summary}"
     )
     payload = {
-        "model": "deepseek/deepseek-v4-flash",
+        "model": DEFAULT_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_payload_text}
         ],
         "temperature": 0.0,
         "max_tokens": 500,
+        "reasoning": get_reasoning_config(user_msg, is_micro=True),
         "provider": {
             "order": DEFAULT_PROVIDER_ORDER,
             "allow_fallbacks": True
