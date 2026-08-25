@@ -3544,6 +3544,63 @@ async def admin_stats(request: Request):
         "recent_broadcasts": recent_broadcasts
     }
 
+async def resolve_user_last_active(u: dict, uid: str) -> str:
+    """Helper to resolve the most accurate last active date string (YYYY-MM-DD) for any user document."""
+    # 1. Check explicit last_study_date or last_active
+    raw_date = u.get("last_study_date") or u.get("last_active")
+    if raw_date and str(raw_date).strip() and str(raw_date).strip() not in ("N/A", "None", ""):
+        return str(raw_date).strip().split("T")[0].split(" ")[0]
+        
+    # 2. Check last_active_timestamp
+    lat = u.get("last_active_timestamp")
+    if lat:
+        try:
+            if isinstance(lat, (int, float)):
+                return datetime.utcfromtimestamp(lat).strftime("%Y-%m-%d")
+            elif isinstance(lat, str) and lat.strip():
+                return lat.strip().split("T")[0].split(" ")[0]
+        except Exception:
+            pass
+
+    # 3. Check chat_logs_col for latest message
+    if chat_logs_col is not None and uid:
+        try:
+            latest_log = await chat_logs_col.find_one({"user_id": uid}, sort=[("timestamp", -1)])
+            if latest_log:
+                ts = latest_log.get("timestamp")
+                if isinstance(ts, str) and ts.strip():
+                    return ts.strip().split("T")[0].split(" ")[0]
+                elif isinstance(ts, (int, float)):
+                    return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    # 4. Check chat_history_col
+    if chat_history_col is not None and uid:
+        try:
+            h = await chat_history_col.find_one({"user_id": uid})
+            if h and "messages" in h and len(h["messages"]) > 0:
+                latest_m = h["messages"][-1]
+                ts = latest_m.get("timestamp")
+                if isinstance(ts, str) and ts.strip():
+                    return ts.strip().split("T")[0].split(" ")[0]
+                elif isinstance(ts, (int, float)):
+                    return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    # 5. Check document creation time via ObjectId _id
+    doc_id = u.get("_id")
+    if doc_id and hasattr(doc_id, "generation_time"):
+        try:
+            return doc_id.generation_time.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    # 6. Fallback to current date in WAT
+    now_wat = datetime.utcnow() + timedelta(hours=1)
+    return now_wat.strftime("%Y-%m-%d")
+
 @app.get("/admin/api/students")
 async def admin_students(request: Request):
     token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
@@ -3556,14 +3613,16 @@ async def admin_students(request: Request):
     cursor = users_col.find({}).sort("_id", -1)
     students = []
     async for u in cursor:
+        uid = u.get("user_id", "")
+        last_active = await resolve_user_last_active(u, uid)
         students.append({
-            "user_id": u.get("user_id", ""),
+            "user_id": uid,
             "name": u.get("name", "Student"),
             "level": u.get("level", "Unset"),
             "wallet_balance_ngn": round(float(u.get("wallet_balance_ngn", 0.0)), 2),
             "total_spent_ngn": round(float(u.get("total_spent_ngn", 0.0)), 2),
             "study_streak_days": int(u.get("study_streak_days", 1)),
-            "last_study_date": u.get("last_study_date", "N/A"),
+            "last_study_date": last_active,
             "preferred_books_list": u.get("preferred_books_list", []),
             "onboarding_step": u.get("onboarding_step", "COMPLETED"),
             "reminders_enabled": u.get("reminders_enabled", True)
@@ -3583,7 +3642,7 @@ async def admin_get_student_chats(user_id: str, request: Request):
         "wallet_balance_ngn": 0.0,
         "total_spent_ngn": 0.0,
         "study_streak_days": 1,
-        "last_study_date": "N/A",
+        "last_study_date": (datetime.utcnow() + timedelta(hours=1)).strftime("%Y-%m-%d"),
         "preferred_books_list": [],
         "onboarding_step": "COMPLETED",
         "reminders_enabled": True
@@ -3591,6 +3650,7 @@ async def admin_get_student_chats(user_id: str, request: Request):
     if users_col is not None:
         u = await users_col.find_one({"user_id": user_id})
         if u:
+            last_active = await resolve_user_last_active(u, user_id)
             user_info = {
                 "user_id": u.get("user_id", user_id),
                 "name": u.get("name", "Student"),
@@ -3598,7 +3658,7 @@ async def admin_get_student_chats(user_id: str, request: Request):
                 "wallet_balance_ngn": round(float(u.get("wallet_balance_ngn", 0.0)), 2),
                 "total_spent_ngn": round(float(u.get("total_spent_ngn", 0.0)), 2),
                 "study_streak_days": int(u.get("study_streak_days", 1)),
-                "last_study_date": u.get("last_study_date", "N/A"),
+                "last_study_date": last_active,
                 "preferred_books_list": u.get("preferred_books_list", []),
                 "onboarding_step": u.get("onboarding_step", "COMPLETED"),
                 "reminders_enabled": u.get("reminders_enabled", True)
@@ -3674,7 +3734,7 @@ async def admin_get_recent_chats(request: Request):
             continue
             
         last_msg = ""
-        last_time = s.get("last_study_date", "")
+        last_time = await resolve_user_last_active(s, uid)
         msg_count = 0
         has_issue = False
         
@@ -3682,7 +3742,7 @@ async def admin_get_recent_chats(request: Request):
             latest_doc = await chat_logs_col.find_one({"user_id": uid}, sort=[("timestamp", -1)])
             if latest_doc:
                 last_msg = latest_doc.get("content", "")[:120]
-                last_time = latest_doc.get("timestamp", last_time)
+                last_time = str(latest_doc.get("timestamp", last_time)).split("T")[0].split(" ")[0]
                 msg_count = await chat_logs_col.count_documents({"user_id": uid})
                 has_issue = bool(latest_doc.get("metadata", {}).get("has_issue"))
         
@@ -3692,7 +3752,7 @@ async def admin_get_recent_chats(request: Request):
                 msg_count = len(h["messages"])
                 latest = h["messages"][-1]
                 last_msg = latest.get("content", "")[:120]
-                last_time = latest.get("timestamp", last_time)
+                last_time = str(latest.get("timestamp", last_time)).split("T")[0].split(" ")[0]
                 has_issue = any(
                     m.get("has_issue") or "connection delay" in str(m.get("content", "")).lower()
                     for m in h["messages"] if isinstance(m, dict)
@@ -4672,6 +4732,13 @@ async def admin_dashboard_page():
       renderStudentsTable(filtered);
     }
 
+    function formatActiveDate(d) {
+      if (!d || d === "N/A" || d === "None" || d === "Recent") {
+        return new Date().toISOString().split("T")[0];
+      }
+      return String(d).split("T")[0].split(" ")[0];
+    }
+
     function renderStudentsTable(students) {
       const tbody = document.getElementById("students-tbody");
       if (!students || students.length === 0) {
@@ -4690,6 +4757,7 @@ async def admin_dashboard_page():
         const booksText = booksCount > 0 ? `${booksCount} Textbook(s)` : "Standard Core";
         const balance = "₦" + (s.wallet_balance_ngn || 0).toLocaleString();
         const spent = "₦" + (s.total_spent_ngn || 0).toLocaleString();
+        const formattedDate = formatActiveDate(s.last_study_date);
 
         return `
           <tr class="hover:bg-[#F1F2F4] transition-colors">
@@ -4715,7 +4783,7 @@ async def admin_dashboard_page():
               ${booksText}
             </td>
             <td class="py-2.5 px-4 font-mono text-[#5A5E67] text-[11px]">
-              ${s.last_study_date || "Recent"}
+              ${formattedDate}
             </td>
             <td class="py-2.5 px-4 text-right">
               <div class="inline-flex items-center gap-1">
