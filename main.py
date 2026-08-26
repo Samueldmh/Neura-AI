@@ -334,32 +334,19 @@ async def start_inactivity_reminder_loop():
             print(f"Error in reminder loop: {loop_err}")
             await asyncio.sleep(60)
 
-async def sync_all_students_curriculum_textbooks():
-    """Automatically synchronizes and guarantees ALL curriculum textbooks for every student across all levels in MongoDB."""
+async def cleanup_legacy_textbook_titles():
+    """Migrates any occurrences of legacy textbook titles in MongoDB to new names."""
     if users_col is None:
         return
     try:
         old_book = "Crook Martin Andrew Clinical B"
         chem_book = "Martin and crooke clinical biochemistry"
-        
-        # 1. Clean up legacy title if present in any user's book list
         await users_col.update_many(
             {"preferred_books_list": old_book},
             {"$set": {"preferred_books_list.$": chem_book}}
         )
-        
-        # 2. Synchronize complete curriculum textbooks for each level
-        for lvl in ["200L", "300L", "400L", "500L", "600L"]:
-            std_books = get_all_curriculum_books_for_level(lvl)
-            if std_books:
-                res = await users_col.update_many(
-                    {"level": lvl},
-                    {"$addToSet": {"preferred_books_list": {"$each": std_books}}}
-                )
-                if res.modified_count > 0:
-                    print(f"✅ [DATABASE AUTO-SYNC] Synced all {len(std_books)} textbooks for {res.modified_count} {lvl} students.")
     except Exception as e:
-        print(f"⚠️ Error in global student textbook sync: {e}")
+        print(f"⚠️ Error cleaning up legacy titles: {e}")
 
 @app.on_event("startup")
 async def startup_event():
@@ -373,8 +360,8 @@ async def startup_event():
     except Exception as idx_err:
         print(f"ℹ️ Payload index info: {idx_err}")
         
-    # Auto-sync all students' curriculum textbooks in MongoDB
-    asyncio.create_task(sync_all_students_curriculum_textbooks())
+    # Clean up legacy title naming in database
+    asyncio.create_task(cleanup_legacy_textbook_titles())
     
     # Launch inactivity streak reminder worker in the background
     asyncio.create_task(start_inactivity_reminder_loop())
@@ -2698,17 +2685,6 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         {"$set": {"preferred_books_list.$": new_name}}
                     ))
 
-                # Automatically guarantee that every student has ALL official textbooks for their academic level
-                if level in CURRICULUM:
-                    standard_books = get_all_curriculum_books_for_level(level)
-                    missing_books = [b for b in standard_books if b not in preferred_books_list]
-                    if missing_books:
-                        preferred_books_list.extend(missing_books)
-                        asyncio.create_task(users_col.update_one(
-                            {"user_id": sender_phone},
-                            {"$addToSet": {"preferred_books_list": {"$each": missing_books}}}
-                        ))
-
         # Update daily study streak and activity timestamp
         streak = await update_user_study_streak(sender_phone)
         print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] User profile loaded: '{name}' ({level}), Streak: {streak}d")
@@ -2832,11 +2808,11 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     )
                     await send_whatsapp_cloud_msg(sender_phone, feedback_msg)
                     return
-                elif msg_lower == "/update name":
+                elif msg_lower in ["/update name", "/updatename", "/update_name", "/name", "update name", "updatename"]:
                     await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_NAME"}})
                     await send_whatsapp_cloud_msg(sender_phone, "What would you like to change your name to?")
                     return
-                elif msg_lower == "/update level":
+                elif msg_lower in ["/update level", "/updatelevel", "/update_level", "/level", "update level", "updatelevel"]:
                     await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_LEVEL"}})
                     await send_whatsapp_interactive_list(
                         sender_phone, 
@@ -2845,7 +2821,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         ["200L", "300L", "400L", "500L", "600L"]
                     )
                     return
-                elif msg_lower == "/update books":
+                elif msg_lower in ["/update books", "/updatebooks", "/update_books", "/books", "/textbooks", "update books", "updatebooks", "books", "textbooks"]:
                     await users_col.update_one({"user_id": sender_phone}, {"$set": {"preferred_books_list": []}})
                     has_subjects = await send_next_subject_menu(sender_phone, level)
                     if not has_subjects:
