@@ -324,6 +324,26 @@ async def start_inactivity_reminder_loop():
             print(f"Error in reminder loop: {loop_err}")
             await asyncio.sleep(60)
 
+async def sync_400l_curriculum_textbooks():
+    """Automatically adds 'Crook Martin Andrew Clinical B' to all existing 400L students in MongoDB."""
+    if users_col is None:
+        return
+    try:
+        chem_book = "Crook Martin Andrew Clinical B"
+        res = await users_col.update_many(
+            {
+                "level": "400L",
+                "preferred_books_list": {"$nin": [chem_book]}
+            },
+            {
+                "$addToSet": {"preferred_books_list": chem_book}
+            }
+        )
+        if res.modified_count > 0:
+            print(f"✅ [DATABASE AUTO-SYNC] Added '{chem_book}' to {res.modified_count} existing 400L students' textbooks in MongoDB.")
+    except Exception as e:
+        print(f"⚠️ Error syncing 400L textbooks: {e}")
+
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -336,6 +356,9 @@ async def startup_event():
     except Exception as idx_err:
         print(f"ℹ️ Payload index info: {idx_err}")
         
+    # Auto-sync 400L students' textbooks in MongoDB
+    asyncio.create_task(sync_400l_curriculum_textbooks())
+    
     # Launch inactivity streak reminder worker in the background
     asyncio.create_task(start_inactivity_reminder_loop())
 
@@ -2643,7 +2666,15 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             if user_doc:
                 name = user_doc.get("name", "Student")
                 level = user_doc.get("level", "Unknown Level")
-                preferred_books_list = user_doc.get("preferred_books_list", [])
+                preferred_books_list = list(user_doc.get("preferred_books_list", []))
+                
+                # Seamless 400L auto-enrollment for Chemical Pathology
+                if level == "400L" and "Crook Martin Andrew Clinical B" not in preferred_books_list:
+                    preferred_books_list.append("Crook Martin Andrew Clinical B")
+                    asyncio.create_task(users_col.update_one(
+                        {"user_id": sender_phone},
+                        {"$addToSet": {"preferred_books_list": "Crook Martin Andrew Clinical B"}}
+                    ))
 
         # Update daily study streak and activity timestamp
         streak = await update_user_study_streak(sender_phone)
