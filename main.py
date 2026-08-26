@@ -67,6 +67,16 @@ AVAILABLE_BOOKS = {
     "Pharmacology": ["Lippincott Illustrated Reviews: Pharmacology"]
 }
 
+def get_all_curriculum_books_for_level(level: str) -> list:
+    """Returns the complete list of official textbooks for a given academic level."""
+    subjects = CURRICULUM.get(level, [])
+    books = []
+    for s in subjects:
+        for b in AVAILABLE_BOOKS.get(s, []):
+            if b and b not in books:
+                books.append(b)
+    return books
+
 app = FastAPI(title="NEURA AI Backend", version="2.0.0")
 
 # Initialize FastEmbed & Qdrant Client
@@ -324,33 +334,32 @@ async def start_inactivity_reminder_loop():
             print(f"Error in reminder loop: {loop_err}")
             await asyncio.sleep(60)
 
-async def sync_400l_curriculum_textbooks():
-    """Automatically adds 'Martin and crooke clinical biochemistry' to all existing 400L students in MongoDB."""
+async def sync_all_students_curriculum_textbooks():
+    """Automatically synchronizes and guarantees ALL curriculum textbooks for every student across all levels in MongoDB."""
     if users_col is None:
         return
     try:
         old_book = "Crook Martin Andrew Clinical B"
         chem_book = "Martin and crooke clinical biochemistry"
         
-        # Replace old book name if present in student records
+        # 1. Clean up legacy title if present in any user's book list
         await users_col.update_many(
             {"preferred_books_list": old_book},
             {"$set": {"preferred_books_list.$": chem_book}}
         )
         
-        res = await users_col.update_many(
-            {
-                "level": "400L",
-                "preferred_books_list": {"$nin": [chem_book]}
-            },
-            {
-                "$addToSet": {"preferred_books_list": chem_book}
-            }
-        )
-        if res.modified_count > 0:
-            print(f"✅ [DATABASE AUTO-SYNC] Added '{chem_book}' to {res.modified_count} existing 400L students' textbooks in MongoDB.")
+        # 2. Synchronize complete curriculum textbooks for each level
+        for lvl in ["200L", "300L", "400L", "500L", "600L"]:
+            std_books = get_all_curriculum_books_for_level(lvl)
+            if std_books:
+                res = await users_col.update_many(
+                    {"level": lvl},
+                    {"$addToSet": {"preferred_books_list": {"$each": std_books}}}
+                )
+                if res.modified_count > 0:
+                    print(f"✅ [DATABASE AUTO-SYNC] Synced all {len(std_books)} textbooks for {res.modified_count} {lvl} students.")
     except Exception as e:
-        print(f"⚠️ Error syncing 400L textbooks: {e}")
+        print(f"⚠️ Error in global student textbook sync: {e}")
 
 @app.on_event("startup")
 async def startup_event():
@@ -364,8 +373,8 @@ async def startup_event():
     except Exception as idx_err:
         print(f"ℹ️ Payload index info: {idx_err}")
         
-    # Auto-sync 400L students' textbooks in MongoDB
-    asyncio.create_task(sync_400l_curriculum_textbooks())
+    # Auto-sync all students' curriculum textbooks in MongoDB
+    asyncio.create_task(sync_all_students_curriculum_textbooks())
     
     # Launch inactivity streak reminder worker in the background
     asyncio.create_task(start_inactivity_reminder_loop())
@@ -2678,22 +2687,27 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 name = user_doc.get("name", "Student")
                 level = user_doc.get("level", "Unknown Level")
                 preferred_books_list = list(user_doc.get("preferred_books_list", []))
-                
-                # Seamless 400L auto-enrollment for Chemical Pathology
-                chem_book = "Martin and crooke clinical biochemistry"
-                old_book = "Crook Martin Andrew Clinical B"
-                if old_book in preferred_books_list:
-                    preferred_books_list = [chem_book if b == old_book else b for b in preferred_books_list]
+
+                # Clean up legacy title if present
+                old_name = "Crook Martin Andrew Clinical B"
+                new_name = "Martin and crooke clinical biochemistry"
+                if old_name in preferred_books_list:
+                    preferred_books_list = [new_name if b == old_name else b for b in preferred_books_list]
                     asyncio.create_task(users_col.update_one(
-                        {"user_id": sender_phone, "preferred_books_list": old_book},
-                        {"$set": {"preferred_books_list.$": chem_book}}
+                        {"user_id": sender_phone, "preferred_books_list": old_name},
+                        {"$set": {"preferred_books_list.$": new_name}}
                     ))
-                elif level == "400L" and chem_book not in preferred_books_list:
-                    preferred_books_list.append(chem_book)
-                    asyncio.create_task(users_col.update_one(
-                        {"user_id": sender_phone},
-                        {"$addToSet": {"preferred_books_list": chem_book}}
-                    ))
+
+                # Automatically guarantee that every student has ALL official textbooks for their academic level
+                if level in CURRICULUM:
+                    standard_books = get_all_curriculum_books_for_level(level)
+                    missing_books = [b for b in standard_books if b not in preferred_books_list]
+                    if missing_books:
+                        preferred_books_list.extend(missing_books)
+                        asyncio.create_task(users_col.update_one(
+                            {"user_id": sender_phone},
+                            {"$addToSet": {"preferred_books_list": {"$each": missing_books}}}
+                        ))
 
         # Update daily study streak and activity timestamp
         streak = await update_user_study_streak(sender_phone)
