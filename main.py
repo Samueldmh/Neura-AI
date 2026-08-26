@@ -295,8 +295,11 @@ async def check_and_send_inactivity_reminders(force_ignore_quiet_hours: bool = F
             
             topic_snippet = last_topic[:100] if last_topic else "High-Yield Clinical Concepts"
             
-            # Send reminder message directly
-            await send_whatsapp_cloud_msg(phone, streak_msg)
+            # Send reminder message directly; auto fallback to Meta template if outside 24h window
+            delivered = await send_whatsapp_cloud_msg(phone, streak_msg)
+            if not delivered:
+                print(f"[NUDGE] Direct reminder unconfirmed for {phone} (>24h inactive). Delivering via neura_announcement template...")
+                await send_whatsapp_template_msg(phone, "neura_announcement", [name, streak_msg])
             
             # Mark reminder sent date to ensure strict 1-per-day cap
             await users_col.update_one(
@@ -1171,7 +1174,8 @@ async def mark_message_as_read(message_id: str):
 
 async def send_whatsapp_template_msg(to_number: str, template_name: str, parameters: list, language_code: str = "en") -> bool:
     """Sends a Meta Pre-Approved Template Message (Utility / Marketing) to a student.
-    Handles templates with Header + Body parameters (like neura_announcement: {{student_name}} in Header, {{announcement_text}} in Body).
+    Handles templates with named body parameters (e.g. neura_announcement: {{student_name}} and {{announcement_text}} in body)
+    as well as positional and custom component parameters.
     """
     if not to_number or not WHATSAPP_TOKEN:
         return False
@@ -1181,31 +1185,42 @@ async def send_whatsapp_template_msg(to_number: str, template_name: str, paramet
         "Content-Type": "application/json"
     }
     
-    # Structure components specifically for neura_announcement (Header = name, Body = announcement)
+    # Structure components specifically for neura_announcement (Body with named parameters: student_name & announcement_text)
     if template_name == "neura_announcement" and len(parameters) >= 2:
         student_name = str(parameters[0])
         announcement_text = str(parameters[1])
         components = [
             {
-                "type": "header",
-                "parameters": [
-                    {"type": "text", "text": student_name}
-                ]
-            },
-            {
                 "type": "body",
                 "parameters": [
-                    {"type": "text", "text": announcement_text}
+                    {
+                        "type": "text",
+                        "parameter_name": "student_name",
+                        "text": student_name
+                    },
+                    {
+                        "type": "text",
+                        "parameter_name": "announcement_text",
+                        "text": announcement_text
+                    }
                 ]
             }
         ]
+    elif parameters and isinstance(parameters[0], dict) and "type" in parameters[0] and "parameters" in parameters[0]:
+        # User passed fully structured components list directly
+        components = parameters
     else:
-        # Standard body-only parameters fallback
-        body_parameters = [{"type": "text", "text": str(p)} for p in parameters]
+        # Standard parameters list
+        body_params = []
+        for p in parameters:
+            if isinstance(p, dict):
+                body_params.append(p)
+            else:
+                body_params.append({"type": "text", "text": str(p)})
         components = [
             {
                 "type": "body",
-                "parameters": body_parameters
+                "parameters": body_params
             }
         ]
 
