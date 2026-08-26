@@ -3547,7 +3547,7 @@ class BroadcastRequest(BaseModel):
     message: str
     target_level: str = "ALL"
     template_name: str = "neura_announcement"
-    mode: str = "template_only" # "template_only", "smart", "direct_only"
+    mode: str = "smart" # "smart", "direct_only", "template_only"
 
 class AdminLoginRequest(BaseModel):
     password: str
@@ -3558,8 +3558,18 @@ async def execute_broadcast_task(broadcast_id: str, message: str, target_level: 
         return
         
     query = {}
-    if target_level and target_level != "ALL":
+    if target_level and target_level not in ["ALL", "ACTIVE_24H"]:
         query["level"] = target_level
+        
+    if mode == "direct_only" or target_level == "ACTIVE_24H":
+        # Target candidates active in last 24h (100% Free Standard Session)
+        cutoff_date = (datetime.utcnow() + timedelta(hours=1) - timedelta(days=1)).strftime("%Y-%m-%d")
+        now_ts = time.time()
+        query["$or"] = [
+            {"last_active_timestamp": {"$gte": now_ts - 86400}},
+            {"last_study_date": {"$gte": cutoff_date}},
+            {"last_active": {"$gte": cutoff_date}}
+        ]
         
     cursor = users_col.find(query)
     students = await cursor.to_list(length=10000)
@@ -3597,8 +3607,7 @@ async def execute_broadcast_task(broadcast_id: str, message: str, target_level: 
             if mode == "template_only":
                 success = await send_whatsapp_template_msg(phone, template_name, [student_name, message])
             elif mode == "direct_only":
-                await send_whatsapp_cloud_msg(phone, message)
-                success = True
+                success = await send_whatsapp_cloud_msg(phone, message)
             else: # smart hybrid
                 direct_delivered = await send_whatsapp_cloud_msg(phone, message)
                 if direct_delivered:
@@ -4017,7 +4026,7 @@ async def admin_broadcast(req: BroadcastRequest, request: Request, background_ta
 
 class AdminDirectMessageRequest(BaseModel):
     message: str
-    mode: str = "template_only" # "template_only", "smart", "direct_only"
+    mode: str = "smart" # "smart", "direct_only", "template_only"
     template_name: str = "neura_announcement"
 
 @app.post("/admin/api/students/{user_id}/send-message")
@@ -4570,8 +4579,13 @@ async def admin_dashboard_page():
                 </div>
               </div>
 
-              <!-- DIRECT MESSAGE COMPOSER FOR ADMIN (WITH AUTOMATIC 24H TEMPLATE DISPATCH) -->
-              <div id="chat-composer-bar" class="p-2.5 bg-[#F0F2F5] border-t border-[#E4E6EA] flex items-center gap-2">
+              <!-- DIRECT MESSAGE COMPOSER FOR ADMIN (WITH MODE SELECTOR: 24H FREE SESSION VS TEMPLATE VS SMART) -->
+              <div id="chat-composer-bar" class="p-2.5 bg-[#F0F2F5] border-t border-[#E4E6EA] flex flex-wrap sm:flex-nowrap items-center gap-2">
+                <select id="direct-msg-mode" class="input-compact text-xs py-1.5 px-2 bg-white rounded border border-[#E4E6EA]">
+                  <option value="direct_only" selected>🟢 Free Session (&lt;24h Active - 100% Free)</option>
+                  <option value="template_only">📢 Template Message (All / &gt;24h)</option>
+                  <option value="smart">⚡ Smart Hybrid (Direct + Template Fallback)</option>
+                </select>
                 <input type="text" id="direct-msg-input" placeholder="Type a direct reply or announcement..."
                        onkeydown="if(event.key==='Enter') sendDirectStudentMessage()"
                        class="flex-1 input-compact text-xs py-1.5 px-3 bg-white rounded border border-[#E4E6EA]">
@@ -4598,9 +4612,10 @@ async def admin_dashboard_page():
 
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label class="block text-[11px] font-semibold text-[#5A5E67] uppercase tracking-wider mb-1">Target Cohort</label>
+                  <label class="block text-[11px] font-semibold text-[#5A5E67] uppercase tracking-wider mb-1">Target Audience</label>
                   <select id="broadcast-target" class="input-compact w-full text-xs">
                     <option value="ALL">All Registered Students</option>
+                    <option value="ACTIVE_24H">🟢 Active in Last 24 Hours Only (100% Free)</option>
                     <option value="200L">200 Level Only</option>
                     <option value="300L">300 Level Only</option>
                     <option value="400L">400 Level Only</option>
@@ -4612,9 +4627,9 @@ async def admin_dashboard_page():
                 <div>
                   <label class="block text-[11px] font-semibold text-[#5A5E67] uppercase tracking-wider mb-1">Dispatch Mode</label>
                   <select id="broadcast-mode" class="input-compact w-full text-xs">
-                    <option value="template_only" selected>Direct Template (neura_announcement - 100% Delivery Guaranteed)</option>
-                    <option value="smart">Smart Hybrid (Direct + Auto-Template fallback for >24h)</option>
-                    <option value="direct_only">Direct Message Only (Active 24h Session Only)</option>
+                    <option value="direct_only">🟢 Free Direct Message (Active 24h Session Only — 100% Free)</option>
+                    <option value="template_only">📢 Meta Template Broadcast (neura_announcement — All / &gt;24h)</option>
+                    <option value="smart" selected>⚡ Smart Hybrid (Free Direct first + Template fallback for &gt;24h)</option>
                   </select>
                 </div>
               </div>
@@ -5337,6 +5352,9 @@ async def admin_dashboard_page():
         btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-xs"></i> <span>Sending...</span>';
       }
 
+      const modeSelect = document.getElementById("direct-msg-mode");
+      const selectedMode = modeSelect ? modeSelect.value : "direct_only";
+
       try {
         const res = await fetch(`/admin/api/students/${currentSelectedUserId}/send-message`, {
           method: "POST",
@@ -5346,7 +5364,7 @@ async def admin_dashboard_page():
           },
           body: JSON.stringify({
             message: text,
-            mode: "template_only",
+            mode: selectedMode,
             template_name: "neura_announcement"
           })
         });
