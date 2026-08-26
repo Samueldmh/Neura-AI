@@ -61,6 +61,7 @@ AVAILABLE_BOOKS = {
     "Physiology": ["K Sembulingam Essentials of Medical Physiology 6th Edition"],
     "Biochemistry": ["Textbook of Biochemistry For Medical Students 7th Edition"],
     "Histopathology": ["Robbins Basic Pathology 10th Edition 2017 (1)"],
+    "Chemical Pathology": ["Crook Martin Andrew Clinical B"],
     "Haematology": ["Essentials of Haematology"],
     "Microbiology": ["Jawetz_Melnick_Adelbergs_Medical_Microbiology_27_edition_Med_zoneTV"],
     "Pharmacology": ["Lippincott Illustrated Reviews: Pharmacology"]
@@ -1563,6 +1564,8 @@ def get_explicit_book_override(user_msg: str, preferred_books: list) -> list:
             override_books.append(b)
         elif "haematology" in msg_lower and ("haematology" in b_lower or "hoffbrand" in b_lower):
             override_books.append(b)
+        elif "chemical pathology" in msg_lower and ("crook" in b_lower or "chemical" in b_lower or "clinical" in b_lower):
+            override_books.append(b)
         elif "microbiology" in msg_lower and ("microbiology" in b_lower or "jawetz" in b_lower):
             override_books.append(b)
         elif "lippincott" in msg_lower and "lippincott" in b_lower:
@@ -1570,6 +1573,8 @@ def get_explicit_book_override(user_msg: str, preferred_books: list) -> list:
         elif "robbins" in msg_lower and "robbins" in b_lower:
             override_books.append(b)
         elif "sembulingam" in msg_lower and "sembulingam" in b_lower:
+            override_books.append(b)
+        elif "crook" in msg_lower and "crook" in b_lower:
             override_books.append(b)
             
     return override_books if override_books else preferred_books
@@ -1908,6 +1913,10 @@ def extract_book_keywords(preferred_books: list) -> list:
         elif "hoffbrand" in b_lower or "haematology" in b_lower:
             keywords.append("hoffbrand")
             keywords.append("haematology")
+        elif "crook" in b_lower or "chemical pathology" in b_lower:
+            keywords.append("crook")
+            keywords.append("chemical")
+            keywords.append("clinical")
         else:
             words = [w.lower() for w in re.sub(r'[^\w\s]', '', b).split() if len(w) > 3]
             keywords.extend(words)
@@ -1945,6 +1954,7 @@ async def search_single_book(query_vector: list, book: str, limit: int = 4) -> l
     elif "microbiology" in b_lower or "jawetz" in b_lower: book_kw = "microbiology"
     elif "sembulingam" in b_lower: book_kw = "sembulingam"
     elif "moore" in b_lower or "anatomy" in b_lower: book_kw = "moore"
+    elif "crook" in b_lower or "chemical pathology" in b_lower: book_kw = "crook"
 
     if book_kw:
         try:
