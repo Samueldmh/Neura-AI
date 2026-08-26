@@ -1185,19 +1185,24 @@ async def send_whatsapp_template_msg(to_number: str, template_name: str, paramet
         "Content-Type": "application/json"
     }
     
-    # Structure components specifically for neura_announcement (Body with named parameters: student_name & announcement_text)
+    # Structure components specifically for neura_announcement (Header with student_name, Body with announcement_text)
     if template_name == "neura_announcement" and len(parameters) >= 2:
         student_name = str(parameters[0])
         announcement_text = str(parameters[1])
         components = [
             {
-                "type": "body",
+                "type": "header",
                 "parameters": [
                     {
                         "type": "text",
                         "parameter_name": "student_name",
                         "text": student_name
-                    },
+                    }
+                ]
+            },
+            {
+                "type": "body",
+                "parameters": [
                     {
                         "type": "text",
                         "parameter_name": "announcement_text",
