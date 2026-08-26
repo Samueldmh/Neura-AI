@@ -61,7 +61,7 @@ AVAILABLE_BOOKS = {
     "Physiology": ["K Sembulingam Essentials of Medical Physiology 6th Edition"],
     "Biochemistry": ["Textbook of Biochemistry For Medical Students 7th Edition"],
     "Histopathology": ["Robbins Basic Pathology 10th Edition 2017 (1)"],
-    "Chemical Pathology": ["Crook Martin Andrew Clinical B"],
+    "Chemical Pathology": ["Martin and crooke clinical biochemistry"],
     "Haematology": ["Essentials of Haematology"],
     "Microbiology": ["Jawetz_Melnick_Adelbergs_Medical_Microbiology_27_edition_Med_zoneTV"],
     "Pharmacology": ["Lippincott Illustrated Reviews: Pharmacology"]
@@ -325,11 +325,19 @@ async def start_inactivity_reminder_loop():
             await asyncio.sleep(60)
 
 async def sync_400l_curriculum_textbooks():
-    """Automatically adds 'Crook Martin Andrew Clinical B' to all existing 400L students in MongoDB."""
+    """Automatically adds 'Martin and crooke clinical biochemistry' to all existing 400L students in MongoDB."""
     if users_col is None:
         return
     try:
-        chem_book = "Crook Martin Andrew Clinical B"
+        old_book = "Crook Martin Andrew Clinical B"
+        chem_book = "Martin and crooke clinical biochemistry"
+        
+        # Replace old book name if present in student records
+        await users_col.update_many(
+            {"preferred_books_list": old_book},
+            {"$set": {"preferred_books_list.$": chem_book}}
+        )
+        
         res = await users_col.update_many(
             {
                 "level": "400L",
@@ -1587,7 +1595,7 @@ def get_explicit_book_override(user_msg: str, preferred_books: list) -> list:
             override_books.append(b)
         elif "haematology" in msg_lower and ("haematology" in b_lower or "hoffbrand" in b_lower):
             override_books.append(b)
-        elif "chemical pathology" in msg_lower and ("crook" in b_lower or "chemical" in b_lower or "clinical" in b_lower):
+        elif "chemical pathology" in msg_lower and ("crook" in b_lower or "martin" in b_lower or "chemical" in b_lower or "clinical" in b_lower):
             override_books.append(b)
         elif "microbiology" in msg_lower and ("microbiology" in b_lower or "jawetz" in b_lower):
             override_books.append(b)
@@ -1597,7 +1605,7 @@ def get_explicit_book_override(user_msg: str, preferred_books: list) -> list:
             override_books.append(b)
         elif "sembulingam" in msg_lower and "sembulingam" in b_lower:
             override_books.append(b)
-        elif "crook" in msg_lower and "crook" in b_lower:
+        elif ("crook" in msg_lower or "martin" in msg_lower) and ("crook" in b_lower or "martin" in b_lower):
             override_books.append(b)
             
     return override_books if override_books else preferred_books
@@ -1936,10 +1944,13 @@ def extract_book_keywords(preferred_books: list) -> list:
         elif "hoffbrand" in b_lower or "haematology" in b_lower:
             keywords.append("hoffbrand")
             keywords.append("haematology")
-        elif "crook" in b_lower or "chemical pathology" in b_lower:
+        elif "crook" in b_lower or "martin" in b_lower or "chemical pathology" in b_lower or "clinical biochemistry" in b_lower:
+            keywords.append("martin")
             keywords.append("crook")
+            keywords.append("crooke")
             keywords.append("chemical")
             keywords.append("clinical")
+            keywords.append("biochemistry")
         else:
             words = [w.lower() for w in re.sub(r'[^\w\s]', '', b).split() if len(w) > 3]
             keywords.extend(words)
@@ -1977,7 +1988,7 @@ async def search_single_book(query_vector: list, book: str, limit: int = 4) -> l
     elif "microbiology" in b_lower or "jawetz" in b_lower: book_kw = "microbiology"
     elif "sembulingam" in b_lower: book_kw = "sembulingam"
     elif "moore" in b_lower or "anatomy" in b_lower: book_kw = "moore"
-    elif "crook" in b_lower or "chemical pathology" in b_lower: book_kw = "crook"
+    elif "crook" in b_lower or "martin" in b_lower or "chemical pathology" in b_lower: book_kw = "martin"
 
     if book_kw:
         try:
@@ -2669,11 +2680,19 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 preferred_books_list = list(user_doc.get("preferred_books_list", []))
                 
                 # Seamless 400L auto-enrollment for Chemical Pathology
-                if level == "400L" and "Crook Martin Andrew Clinical B" not in preferred_books_list:
-                    preferred_books_list.append("Crook Martin Andrew Clinical B")
+                chem_book = "Martin and crooke clinical biochemistry"
+                old_book = "Crook Martin Andrew Clinical B"
+                if old_book in preferred_books_list:
+                    preferred_books_list = [chem_book if b == old_book else b for b in preferred_books_list]
+                    asyncio.create_task(users_col.update_one(
+                        {"user_id": sender_phone, "preferred_books_list": old_book},
+                        {"$set": {"preferred_books_list.$": chem_book}}
+                    ))
+                elif level == "400L" and chem_book not in preferred_books_list:
+                    preferred_books_list.append(chem_book)
                     asyncio.create_task(users_col.update_one(
                         {"user_id": sender_phone},
-                        {"$addToSet": {"preferred_books_list": "Crook Martin Andrew Clinical B"}}
+                        {"$addToSet": {"preferred_books_list": chem_book}}
                     ))
 
         # Update daily study streak and activity timestamp
