@@ -2311,7 +2311,8 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             return True
             
         new_level = user_msg
-        await users_col.update_one({"user_id": sender_phone}, {"$set": {"level": new_level, "preferred_books_list": []}})
+        std_books = get_all_curriculum_books_for_level(new_level)
+        await users_col.update_one({"user_id": sender_phone}, {"$set": {"level": new_level, "preferred_books_list": std_books}})
         
         # Start subject loop
         has_subjects = await send_next_subject_menu(sender_phone, new_level)
@@ -2774,10 +2775,20 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     )
                     return
                 elif msg_lower == "/profile":
-                    books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None"
-                    balance = user_doc.get("wallet_balance_ngn", 0.0) if user_doc else 0.0
-                    streak_count = user_doc.get("study_streak_days", streak) if user_doc else streak
-                    reminders_status = "Enabled 🔔" if (user_doc and user_doc.get("reminders_enabled", True)) else "Disabled 🔕"
+                    fresh_doc = await users_col.find_one({"user_id": sender_phone}) if users_col is not None else None
+                    if fresh_doc:
+                        preferred_books_list = list(fresh_doc.get("preferred_books_list", []))
+                        name = fresh_doc.get("name", name)
+                        level = fresh_doc.get("level", level)
+                        balance = fresh_doc.get("wallet_balance_ngn", 0.0)
+                        streak_count = fresh_doc.get("study_streak_days", streak)
+                        reminders_status = "Enabled 🔔" if fresh_doc.get("reminders_enabled", True) else "Disabled 🔕"
+                    else:
+                        balance = 0.0
+                        streak_count = streak
+                        reminders_status = "Enabled 🔔"
+
+                    books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None selected"
                     await send_whatsapp_cloud_msg(
                         sender_phone, 
                         f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Study Streak: 🔥 {streak_count} Days\n• Reminders: {reminders_status}\n• Wallet Balance: ₦{balance:.2f}\n• Books:\n  - {books_str}\n\n"
@@ -2822,7 +2833,6 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     )
                     return
                 elif msg_lower in ["/update books", "/updatebooks", "/update_books", "/books", "/textbooks", "update books", "updatebooks", "books", "textbooks"]:
-                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"preferred_books_list": []}})
                     has_subjects = await send_next_subject_menu(sender_phone, level)
                     if not has_subjects:
                         await complete_onboarding(sender_phone)
