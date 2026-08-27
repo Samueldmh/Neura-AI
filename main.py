@@ -914,7 +914,6 @@ def format_whatsapp_text(text: str) -> str:
     text = re.sub(r'(?mi)^\s*📚\s*\*?CITATIONS\*?[\s\S]*$', '', text)
     text = re.sub(r'(?mi)^\s*\*?CITATIONS:\*?[\s\S]*$', '', text)
     text = re.sub(r'(?mi)^\s*📚\s*\*?TEXTBOOK CITATIONS\*?[\s\S]*$', '', text)
-    text = re.sub(r'(?mi)^\s*-\s+(?:Robbins|Lippincott|Guyton|Moore|Hoffbrand|Jawetz|Sembulingam|Katzung|Ganong|Kumar)[^\n]*$', '', text)
 
     # 3. Ensure double newline before markdown headings (#, ##, ###) and clean spacing
     text = re.sub(r'(?m)^(#{1,3})([^\s#])', r'\1 \2', text)
