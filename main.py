@@ -35,11 +35,12 @@ from concurrent.futures import ThreadPoolExecutor
 QDRANT_URL = os.getenv("QDRANT_URL", "https://76ce5d85-4701-4671-8c3f-02bcc741b078.us-west-1-0.aws.cloud.qdrant.io")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
 FLUTTERWAVE_SECRET_KEY = os.getenv("FLUTTERWAVE_SECRET_KEY", "")
 FLUTTERWAVE_SECRET_HASH = os.getenv("FLUTTERWAVE_SECRET_HASH", "neura_flw_hash_2026")
-BASE_URL = os.getenv("BASE_URL", "https://neura-ai-df6q.onrender.com")
+BASE_URL = os.getenv("BASE_URL", "https://neura-ai-qtux.onrender.com")
 
 # Official Meta WhatsApp Cloud API credentials
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAM3F01f3nYBSKwpMPZAU2Nhgdvr7b4481UQ2sCTosr3Hu6UIL3U5BTBiN8I5932PfnEx6GzDWiUfwMYiFok4eZCaMrLPNhhMvnAQ27fVsxxqpxIvES3SYhSi6speeab3FaBq8anZCoPVXS2f9LXA7b7ZA2kWrZBRA8zmBv03cBe2yTR3OWAAhgEh0lEk3ULqfAZDZD")
@@ -84,6 +85,7 @@ print("Initializing FastEmbed & Qdrant Client...")
 print(f"QDRANT_URL: {QDRANT_URL}")
 print(f"QDRANT_API_KEY Present: {bool(QDRANT_API_KEY)}")
 print(f"OPENROUTER_API_KEY Present: {bool(OPENROUTER_API_KEY)}")
+print(f"GROQ_API_KEY Present: {bool(GROQ_API_KEY)}")
 print(f"PHONE_NUMBER_ID: {PHONE_NUMBER_ID}")
 
 from collections import OrderedDict
@@ -1350,6 +1352,205 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
     # Step 3: If image bytes could not be downloaded server-side, abort sending media to prevent Meta 131053 error
     print(f"⚠️ Image could not be fetched server-side from {image_url}. Aborting image delivery to protect WhatsApp delivery status.")
     return
+
+# ==========================================
+# VOICE NOTE & SPEECH-TO-TEXT ENGINE (Groq Whisper Large v3)
+# ==========================================
+WHISPER_MEDICAL_PROMPT = (
+    "NEURA AI medical study session: MBBS student discussing Anatomy, Physiology, "
+    "Biochemistry, Pathology, Pharmacology, Microbiology, Haematology, Histopathology, "
+    "Chemical Pathology, Obstetrics & Gynaecology, Medicine & Surgery, Nigerian context."
+)
+
+WHISPER_HALLUCINATION_PATTERNS = [
+    "thank you for watching", "thanks for watching", "subtitles by", "amara.org",
+    "please subscribe", "like and subscribe", "subscribe", "copyright", "all rights reserved",
+    "music", "applause", "silence", "laughter", "cheering",
+    "mbc", "al jazeera", "bbc news", "transcription by", "translated by",
+    "video by", "audio by", "silent", "you"
+]
+
+def is_gibberish_or_silence(text: str) -> bool:
+    """Detects inaudible audio, silence, or hallucinated repetitive non-speech."""
+    if not text or not text.strip():
+        return True
+    import re
+    # 1. Clean raw text to lowercase
+    raw_lower = text.strip().lower()
+    # If wrapped in brackets e.g. [music], (applause)
+    if raw_lower.startswith(("[", "(")) and raw_lower.endswith(("]", ")")):
+        return True
+
+    # 2. Strip leading/trailing punctuation and whitespace
+    clean = re.sub(r'^[^\w]+|[^\w]+$', '', raw_lower)
+    if len(clean) < 4:
+        return True
+
+    # 3. Check known silence hallucination phrases
+    for p in WHISPER_HALLUCINATION_PATTERNS:
+        if clean == p or clean.startswith(p) or p in clean:
+            if len(clean) <= len(p) + 25 or clean == p:
+                return True
+
+    # 4. Check if mostly punctuation or single characters repeating
+    alphanumeric = [c for c in clean if c.isalnum()]
+    if len(alphanumeric) < 3:
+        return True
+
+    # 5. Check repetitive tokens loop (e.g., "you you you you you" or "ah ah ah")
+    words = [w.strip(".,!?:;\"'()[]{}") for w in clean.split() if w.strip(".,!?:;\"'()[]{}")]
+    if len(words) >= 3 and len(set(words)) == 1:
+        return True
+    return False
+
+async def download_whatsapp_media(media_id: str) -> tuple[bytes, str]:
+    """Downloads binary audio/media from Meta Graph API using the media ID.
+    Returns (media_bytes, mime_type).
+    """
+    if not media_id or not WHATSAPP_TOKEN:
+        print("⚠️ Cannot download media: missing media_id or WHATSAPP_TOKEN")
+        return b"", ""
+    try:
+        meta_media_url = f"https://graph.facebook.com/v19.0/{media_id}"
+        auth_headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}"}
+        
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Step 1: Query Graph API for media download URL
+            res = await client.get(meta_media_url, headers=auth_headers)
+            if res.status_code != 200:
+                print(f"⚠️ Meta media lookup failed ({res.status_code}) for {media_id}: {res.text}")
+                return b"", ""
+            
+            media_info = res.json()
+            download_url = media_info.get("url")
+            mime_type = media_info.get("mime_type", "audio/ogg")
+            if not download_url:
+                print(f"⚠️ No download URL in Meta media response for {media_id}")
+                return b"", ""
+            
+            # Step 2: Fetch raw binary audio from Meta CDN using auth headers
+            audio_res = await client.get(download_url, headers=auth_headers)
+            if audio_res.status_code == 200:
+                print(f"✅ Successfully downloaded audio ({len(audio_res.content)} bytes, {mime_type}) for {media_id}")
+                return audio_res.content, mime_type
+            else:
+                print(f"⚠️ Meta CDN audio download failed ({audio_res.status_code}) for {media_id}")
+                return b"", ""
+    except Exception as e:
+        print(f"⚠️ Exception downloading WhatsApp media {media_id}: {e}")
+        return b"", ""
+
+async def transcribe_voice_note(audio_bytes: bytes, mime_type: str = "audio/ogg") -> tuple[str, bool, str]:
+    """Transcribes a voice note using Groq Whisper Large v3 (with OpenAI fallback).
+    Returns (transcript_text, is_valid_speech, error_reason).
+    """
+    if not audio_bytes or len(audio_bytes) < 100:
+        return "", False, "Empty or corrupted audio stream"
+
+    # Determine file extension from mime_type
+    ext = "ogg"
+    if "mp4" in mime_type or "m4a" in mime_type:
+        ext = "m4a"
+    elif "wav" in mime_type:
+        ext = "wav"
+    elif "mp3" in mime_type or "mpeg" in mime_type:
+        ext = "mp3"
+
+    # 1. Primary: Try Groq Whisper Large v3 Turbo
+    groq_key = os.getenv("GROQ_API_KEY", "") or GROQ_API_KEY
+    if groq_key:
+        try:
+            groq_url = "https://api.groq.com/openai/v1/audio/transcriptions"
+            headers = {"Authorization": f"Bearer {groq_key.strip()}"}
+            files = {
+                "file": (f"voice_note.{ext}", audio_bytes, mime_type or "audio/ogg")
+            }
+            data = {
+                "model": "whisper-large-v3-turbo",
+                "prompt": WHISPER_MEDICAL_PROMPT,
+                "response_format": "json",
+                "language": "en"
+            }
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                res = await client.post(groq_url, headers=headers, files=files, data=data)
+                if res.status_code == 200:
+                    result_json = res.json()
+                    transcript = result_json.get("text", "").strip()
+                    if is_gibberish_or_silence(transcript):
+                        return transcript, False, "Inaudible / Gibberish / Silence"
+                    return transcript, True, ""
+                else:
+                    print(f"⚠️ Groq Whisper transcription failed ({res.status_code}): {res.text}")
+        except Exception as e:
+            print(f"⚠️ Groq Whisper transcription exception: {e}")
+
+    # 2. Fallback: OpenAI-compatible audio endpoint if configured
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    if openai_key:
+        try:
+            oai_url = "https://api.openai.com/v1/audio/transcriptions"
+            headers = {"Authorization": f"Bearer {openai_key.strip()}"}
+            files = {
+                "file": (f"voice_note.{ext}", audio_bytes, mime_type or "audio/ogg")
+            }
+            data = {
+                "model": "whisper-1",
+                "prompt": WHISPER_MEDICAL_PROMPT,
+                "response_format": "json",
+                "language": "en"
+            }
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                res = await client.post(oai_url, headers=headers, files=files, data=data)
+                if res.status_code == 200:
+                    result_json = res.json()
+                    transcript = result_json.get("text", "").strip()
+                    if is_gibberish_or_silence(transcript):
+                        return transcript, False, "Inaudible / Gibberish / Silence"
+                    return transcript, True, ""
+        except Exception as e:
+            print(f"⚠️ OpenAI Whisper fallback exception: {e}")
+
+    return "", False, "Transcription service unavailable (Please ensure GROQ_API_KEY is configured in Render)"
+
+async def process_whatsapp_audio(sender_phone: str, media_id: str, is_tagged_reply: bool = False):
+    """Downloads, transcribes, and processes incoming WhatsApp voice notes."""
+    print(f"\n🎙️ [VOICE START] Processing voice note from {sender_phone} (Media ID: {media_id})...")
+    
+    # Send typing indicator while transcribing
+    try:
+        await send_whatsapp_typing_indicator(sender_phone)
+    except Exception:
+        pass
+
+    # Step 1: Download audio bytes from Meta CDN
+    audio_bytes, mime_type = await download_whatsapp_media(media_id)
+    if not audio_bytes:
+        await send_whatsapp_cloud_msg(
+            sender_phone,
+            "⚠️ I had trouble downloading your voice note from WhatsApp. Please try recording again or type your question! 🎙️📚"
+        )
+        return
+
+    # Step 2: Transcribe via Groq Whisper Large v3
+    transcript, is_valid, error_reason = await transcribe_voice_note(audio_bytes, mime_type)
+    print(f"🎙️ [VOICE TRANSCRIPT] ({sender_phone}): '{transcript}' | Valid: {is_valid} | Reason: {error_reason}")
+
+    # Step 3: Handle inaudible / gibberish audio
+    if not is_valid or not transcript:
+        inaudible_msg = (
+            "🎙️ *Voice Note Received*\n\n"
+            "I couldn't clearly hear your medical question due to low volume or background noise.\n\n"
+            "Could you please re-record in a quiet room or type your question? 💡📚"
+        )
+        await send_whatsapp_cloud_msg(sender_phone, inaudible_msg)
+        try:
+            await log_user_chat_message(sender_phone, "user", "[🎙️ Inaudible Voice Note]", msg_type="voice", metadata={"has_issue": True})
+        except Exception:
+            pass
+        return
+
+    # Step 4: Route into standard WhatsApp message processor with is_voice=True
+    await process_whatsapp_message(sender_phone, transcript, is_tagged_reply, is_voice=True)
 
 
 
@@ -2647,20 +2848,23 @@ def get_user_lock(user_id: str) -> asyncio.Lock:
         _user_locks[user_id] = asyncio.Lock()
     return _user_locks[user_id]
 
-async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_reply: bool = False):
+async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_reply: bool = False, is_voice: bool = False):
     """Background task wrapper to process messages sequentially per user lock"""
     lock = get_user_lock(sender_phone)
     async with lock:
-        await _process_whatsapp_message_internal(sender_phone, user_msg, is_tagged_reply)
+        await _process_whatsapp_message_internal(sender_phone, user_msg, is_tagged_reply, is_voice)
 
-async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, is_tagged_reply: bool = False):
+async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, is_tagged_reply: bool = False, is_voice: bool = False):
     """Internal task to run RAG & OpenRouter LLM and send WhatsApp reply"""
     req_t0 = time.perf_counter()
-    print(f"\n🚀 [PIPELINE START] Received message from {sender_phone}: '{user_msg[:60]}'")
+    prefix = "🎙️ [VOICE QUERY]" if is_voice else "🚀 [PIPELINE START]"
+    print(f"\n{prefix} Received message from {sender_phone}: '{user_msg[:60]}'")
     try:
         # Log incoming user message for admin conversation transcript and diagnostics
         try:
-            asyncio.create_task(log_user_chat_message(sender_phone, "user", user_msg, msg_type="user_query", metadata={"is_tagged_reply": is_tagged_reply}))
+            msg_type_tag = "voice_query" if is_voice else "user_query"
+            logged_content = f"🎙️ {user_msg}" if is_voice else user_msg
+            asyncio.create_task(log_user_chat_message(sender_phone, "user", logged_content, msg_type=msg_type_tag, metadata={"is_tagged_reply": is_tagged_reply, "is_voice": is_voice}))
         except Exception:
             pass
 
@@ -3508,9 +3712,20 @@ async def handle_whatsapp_webhook(request: Request):
                         # Process in background task to respond to Meta immediately (prevents timeout)
                         task = BackgroundTask(process_whatsapp_message, sender_phone, text_body, is_tagged_reply)
                         return Response(content=json.dumps({"status": "processing"}), media_type="application/json", background=task)
+                    elif msg_type in ("audio", "voice"):
+                        audio_obj = msg.get("audio", {}) or msg.get("voice", {})
+                        media_id = audio_obj.get("id")
+                        if media_id:
+                            print(f"🎙️ Received Voice Note from {sender_phone} (Media ID: {media_id})")
+                            task = BackgroundTask(process_whatsapp_audio, sender_phone, media_id, is_tagged_reply)
+                            return Response(content=json.dumps({"status": "processing_audio"}), media_type="application/json", background=task)
+                        else:
+                            print(f"⚠️ Voice note from {sender_phone} missing media_id")
+                            task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read voice note. Please try recording again! 🎙️")
+                            return Response(content=json.dumps({"status": "missing_media_id"}), media_type="application/json", background=task)
                     else:
                         print(f"⚠️ Received unsupported message type '{msg_type}' from {sender_phone}")
-                        task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "I only read text messages right now! Please type out your medical question. 🤖📚")
+                        task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "I can read text and voice notes! Please type or record your medical question. 🤖🎙️📚")
                         return Response(content=json.dumps({"status": "unsupported_media"}), media_type="application/json", background=task)
 
         return Response(content=json.dumps({"status": "ignored"}), media_type="application/json")
