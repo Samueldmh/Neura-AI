@@ -1508,7 +1508,6 @@ async def transcribe_voice_note(audio_bytes: bytes, mime_type: str = "audio/ogg"
             }
             data = {
                 "model": "whisper-large-v3-turbo",
-                "prompt": WHISPER_MEDICAL_PROMPT,
                 "response_format": "verbose_json",
                 "temperature": "0.0",
                 "language": "en"
@@ -1551,7 +1550,6 @@ async def transcribe_voice_note(audio_bytes: bytes, mime_type: str = "audio/ogg"
             }
             data = {
                 "model": "whisper-1",
-                "prompt": WHISPER_MEDICAL_PROMPT,
                 "response_format": "verbose_json",
                 "temperature": "0.0",
                 "language": "en"
