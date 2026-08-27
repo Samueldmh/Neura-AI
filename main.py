@@ -1367,7 +1367,7 @@ WHISPER_HALLUCINATION_PATTERNS = [
     "please subscribe", "like and subscribe", "subscribe", "copyright", "all rights reserved",
     "music", "applause", "silence", "laughter", "cheering",
     "mbc", "al jazeera", "bbc news", "transcription by", "translated by",
-    "video by", "audio by", "silent", "you"
+    "video by", "audio by", "silent", "you", "satsang", "video of the", "new video", "watching"
 ]
 
 DANGLING_FRAGMENTS = [
@@ -1376,17 +1376,37 @@ DANGLING_FRAGMENTS = [
     "and the", "or the", "is a", "was a", "are the", "were the", "of", "the", "a", "an", "in", "to", "at"
 ]
 
-def is_gibberish_or_silence(text: str, no_speech_prob: float = 0.0, avg_logprob: float = 0.0) -> tuple[bool, str]:
+def has_repeated_phrases(text: str) -> bool:
+    """Detects looping repetitive hallucinated phrases in Whisper output (e.g. 'video of the video of the video')."""
+    words = [w.strip(".,!?:;\"'()[]{}").lower() for w in text.split() if w.strip(".,!?:;\"'()[]{}")]
+    if len(words) < 4:
+        return False
+    # Check 1-word, 2-word, 3-word ngrams for repetition loops (>=3 occurrences)
+    for n in (1, 2, 3):
+        ngrams = [" ".join(words[i:i+n]) for i in range(len(words)-n+1)]
+        for ng in ngrams:
+            if ngrams.count(ng) >= 3:
+                return True
+    return False
+
+def is_gibberish_or_silence(text: str, no_speech_prob: float = 0.0, avg_logprob: float = 0.0, compression_ratio: float = 1.0) -> tuple[bool, str]:
     """Detects inaudible audio, silence, hallucinated repetitive non-speech, or incomplete fragments."""
     if not text or not text.strip():
         return True, "Empty transcript"
         
     # Check Whisper acoustic confidence metrics if available
-    if no_speech_prob > 0.45:
+    if no_speech_prob > 0.40:
         return True, f"High silence probability ({no_speech_prob:.2f})"
         
-    if avg_logprob < -1.2:
+    if avg_logprob < -1.1:
         return True, f"Low acoustic confidence ({avg_logprob:.2f})"
+
+    if compression_ratio > 2.2:
+        return True, f"High compression ratio loop ({compression_ratio:.2f})"
+
+    # Check repeated phrase hallucination loops
+    if has_repeated_phrases(text):
+        return True, "Repetitive phrase hallucination loop"
 
     import re
     # 1. Clean raw text to lowercase
@@ -1403,7 +1423,7 @@ def is_gibberish_or_silence(text: str, no_speech_prob: float = 0.0, avg_logprob:
     # 3. Check known silence hallucination phrases
     for p in WHISPER_HALLUCINATION_PATTERNS:
         if clean == p or clean.startswith(p) or p in clean:
-            if len(clean) <= len(p) + 25 or clean == p:
+            if len(clean) <= len(p) + 40 or clean == p:
                 return True, f"Silence hallucination pattern ('{p}')"
 
     # 4. Check if mostly punctuation or single characters repeating
@@ -1499,17 +1519,19 @@ async def transcribe_voice_note(audio_bytes: bytes, mime_type: str = "audio/ogg"
                     result_json = res.json()
                     transcript = result_json.get("text", "").strip()
                     
-                    # Extract segment confidence metrics
+                    # Extract segment confidence and compression metrics
                     segments = result_json.get("segments", [])
                     max_no_speech = 0.0
                     avg_logprob = 0.0
+                    max_comp_ratio = 1.0
                     if segments:
                         max_no_speech = max(s.get("no_speech_prob", 0.0) for s in segments)
+                        max_comp_ratio = max(s.get("compression_ratio", 1.0) for s in segments)
                         logprobs = [s.get("avg_logprob", 0.0) for s in segments if "avg_logprob" in s]
                         if logprobs:
                             avg_logprob = sum(logprobs) / len(logprobs)
                     
-                    is_gib, reason = is_gibberish_or_silence(transcript, no_speech_prob=max_no_speech, avg_logprob=avg_logprob)
+                    is_gib, reason = is_gibberish_or_silence(transcript, no_speech_prob=max_no_speech, avg_logprob=avg_logprob, compression_ratio=max_comp_ratio)
                     if is_gib:
                         return transcript, False, reason
                     return transcript, True, ""
@@ -1542,12 +1564,14 @@ async def transcribe_voice_note(audio_bytes: bytes, mime_type: str = "audio/ogg"
                     segments = result_json.get("segments", [])
                     max_no_speech = 0.0
                     avg_logprob = 0.0
+                    max_comp_ratio = 1.0
                     if segments:
                         max_no_speech = max(s.get("no_speech_prob", 0.0) for s in segments)
+                        max_comp_ratio = max(s.get("compression_ratio", 1.0) for s in segments)
                         logprobs = [s.get("avg_logprob", 0.0) for s in segments if "avg_logprob" in s]
                         if logprobs:
                             avg_logprob = sum(logprobs) / len(logprobs)
-                    is_gib, reason = is_gibberish_or_silence(transcript, no_speech_prob=max_no_speech, avg_logprob=avg_logprob)
+                    is_gib, reason = is_gibberish_or_silence(transcript, no_speech_prob=max_no_speech, avg_logprob=avg_logprob, compression_ratio=max_comp_ratio)
                     if is_gib:
                         return transcript, False, reason
                     return transcript, True, ""
