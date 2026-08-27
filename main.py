@@ -1370,38 +1370,59 @@ WHISPER_HALLUCINATION_PATTERNS = [
     "video by", "audio by", "silent", "you"
 ]
 
-def is_gibberish_or_silence(text: str) -> bool:
-    """Detects inaudible audio, silence, or hallucinated repetitive non-speech."""
+DANGLING_FRAGMENTS = [
+    "of the", "in the", "to the", "at the", "for the", "on the", "by the", "from the", "with the",
+    "of a", "in a", "to a", "at a", "for a", "on a", "by a", "from a", "with a",
+    "and the", "or the", "is a", "was a", "are the", "were the", "of", "the", "a", "an", "in", "to", "at"
+]
+
+def is_gibberish_or_silence(text: str, no_speech_prob: float = 0.0, avg_logprob: float = 0.0) -> tuple[bool, str]:
+    """Detects inaudible audio, silence, hallucinated repetitive non-speech, or incomplete fragments."""
     if not text or not text.strip():
-        return True
+        return True, "Empty transcript"
+        
+    # Check Whisper acoustic confidence metrics if available
+    if no_speech_prob > 0.45:
+        return True, f"High silence probability ({no_speech_prob:.2f})"
+        
+    if avg_logprob < -1.2:
+        return True, f"Low acoustic confidence ({avg_logprob:.2f})"
+
     import re
     # 1. Clean raw text to lowercase
     raw_lower = text.strip().lower()
     # If wrapped in brackets e.g. [music], (applause)
     if raw_lower.startswith(("[", "(")) and raw_lower.endswith(("]", ")")):
-        return True
+        return True, "Bracketed sound tag"
 
     # 2. Strip leading/trailing punctuation and whitespace
     clean = re.sub(r'^[^\w]+|[^\w]+$', '', raw_lower)
     if len(clean) < 4:
-        return True
+        return True, "Too short (<4 chars)"
 
     # 3. Check known silence hallucination phrases
     for p in WHISPER_HALLUCINATION_PATTERNS:
         if clean == p or clean.startswith(p) or p in clean:
             if len(clean) <= len(p) + 25 or clean == p:
-                return True
+                return True, f"Silence hallucination pattern ('{p}')"
 
     # 4. Check if mostly punctuation or single characters repeating
     alphanumeric = [c for c in clean if c.isalnum()]
     if len(alphanumeric) < 3:
-        return True
+        return True, "Insufficient alphanumeric content"
 
-    # 5. Check repetitive tokens loop (e.g., "you you you you you" or "ah ah ah")
+    # 5. Check incomplete dangling fragments on very short transcripts (e.g. "Translator of the")
     words = [w.strip(".,!?:;\"'()[]{}") for w in clean.split() if w.strip(".,!?:;\"'()[]{}")]
+    if len(words) <= 3:
+        for df in DANGLING_FRAGMENTS:
+            if clean.endswith(" " + df) or clean == df:
+                return True, f"Dangling incomplete fragment ('{df}')"
+
+    # 6. Check repetitive tokens loop (e.g., "you you you you you" or "ah ah ah")
     if len(words) >= 3 and len(set(words)) == 1:
-        return True
-    return False
+        return True, "Repetitive stutter"
+
+    return False, ""
 
 async def download_whatsapp_media(media_id: str) -> tuple[bytes, str]:
     """Downloads binary audio/media from Meta Graph API using the media ID.
@@ -1468,7 +1489,8 @@ async def transcribe_voice_note(audio_bytes: bytes, mime_type: str = "audio/ogg"
             data = {
                 "model": "whisper-large-v3-turbo",
                 "prompt": WHISPER_MEDICAL_PROMPT,
-                "response_format": "json",
+                "response_format": "verbose_json",
+                "temperature": "0.0",
                 "language": "en"
             }
             async with httpx.AsyncClient(timeout=25.0) as client:
@@ -1476,8 +1498,20 @@ async def transcribe_voice_note(audio_bytes: bytes, mime_type: str = "audio/ogg"
                 if res.status_code == 200:
                     result_json = res.json()
                     transcript = result_json.get("text", "").strip()
-                    if is_gibberish_or_silence(transcript):
-                        return transcript, False, "Inaudible / Gibberish / Silence"
+                    
+                    # Extract segment confidence metrics
+                    segments = result_json.get("segments", [])
+                    max_no_speech = 0.0
+                    avg_logprob = 0.0
+                    if segments:
+                        max_no_speech = max(s.get("no_speech_prob", 0.0) for s in segments)
+                        logprobs = [s.get("avg_logprob", 0.0) for s in segments if "avg_logprob" in s]
+                        if logprobs:
+                            avg_logprob = sum(logprobs) / len(logprobs)
+                    
+                    is_gib, reason = is_gibberish_or_silence(transcript, no_speech_prob=max_no_speech, avg_logprob=avg_logprob)
+                    if is_gib:
+                        return transcript, False, reason
                     return transcript, True, ""
                 else:
                     print(f"⚠️ Groq Whisper transcription failed ({res.status_code}): {res.text}")
@@ -1496,7 +1530,8 @@ async def transcribe_voice_note(audio_bytes: bytes, mime_type: str = "audio/ogg"
             data = {
                 "model": "whisper-1",
                 "prompt": WHISPER_MEDICAL_PROMPT,
-                "response_format": "json",
+                "response_format": "verbose_json",
+                "temperature": "0.0",
                 "language": "en"
             }
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -1504,8 +1539,17 @@ async def transcribe_voice_note(audio_bytes: bytes, mime_type: str = "audio/ogg"
                 if res.status_code == 200:
                     result_json = res.json()
                     transcript = result_json.get("text", "").strip()
-                    if is_gibberish_or_silence(transcript):
-                        return transcript, False, "Inaudible / Gibberish / Silence"
+                    segments = result_json.get("segments", [])
+                    max_no_speech = 0.0
+                    avg_logprob = 0.0
+                    if segments:
+                        max_no_speech = max(s.get("no_speech_prob", 0.0) for s in segments)
+                        logprobs = [s.get("avg_logprob", 0.0) for s in segments if "avg_logprob" in s]
+                        if logprobs:
+                            avg_logprob = sum(logprobs) / len(logprobs)
+                    is_gib, reason = is_gibberish_or_silence(transcript, no_speech_prob=max_no_speech, avg_logprob=avg_logprob)
+                    if is_gib:
+                        return transcript, False, reason
                     return transcript, True, ""
         except Exception as e:
             print(f"⚠️ OpenAI Whisper fallback exception: {e}")
