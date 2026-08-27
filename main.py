@@ -140,7 +140,7 @@ async def log_user_chat_message(user_id: str, role: str, content: str, msg_type:
     """Persists every user and AI message for audit, diagnostic, and admin chat inspection."""
     if not user_id or not content:
         return
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = datetime.utcnow().isoformat() + "Z"
     meta = dict(metadata or {})
     meta["msg_type"] = msg_type
     
@@ -1026,10 +1026,11 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
             all_success = False
         print(f"Meta Graph API Send Status {res.status_code if 'res' in locals() else 'ERR'}: {getattr(res, 'text', '')}")
         
-    try:
-        asyncio.create_task(log_user_chat_message(to_number, "assistant", message_text, msg_type="text"))
-    except Exception:
-        pass
+    if all_success:
+        try:
+            asyncio.create_task(log_user_chat_message(to_number, "assistant", message_text, msg_type="text"))
+        except Exception:
+            pass
 
     return all_success
 
@@ -1083,11 +1084,11 @@ async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_
     async with httpx.AsyncClient(timeout=20.0) as client:
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta Graph API List Send Status {res.status_code}: {res.text}")
-        
-    try:
-        asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text, msg_type="interactive_list"))
-    except Exception:
-        pass
+        if res.status_code == 200:
+            try:
+                asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text, msg_type="interactive_list"))
+            except Exception:
+                pass
 
 async def send_whatsapp_interactive_button(to_number: str, body_text: str, buttons: list):
     """Sends an Interactive Button Message (max 3 buttons)"""
@@ -1126,12 +1127,12 @@ async def send_whatsapp_interactive_button(to_number: str, body_text: str, butto
     async with httpx.AsyncClient(timeout=20.0) as client:
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta Graph API Button Send Status {res.status_code}: {res.text}")
-        
-    try:
-        btn_summary = " [Options: " + ", ".join(str(b.get("title", "")) for b in buttons) + "]"
-        asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text + btn_summary, msg_type="interactive_button"))
-    except Exception:
-        pass
+        if res.status_code == 200:
+            try:
+                btn_summary = " [Options: " + ", ".join(str(b.get("title", "")) for b in buttons) + "]"
+                asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text + btn_summary, msg_type="interactive_button"))
+            except Exception:
+                pass
 
 async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_label: str, url_target: str):
     """Sends an Interactive CTA URL Button that opens directly in WhatsApp's in-app webview"""
@@ -1163,11 +1164,11 @@ async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_la
     async with httpx.AsyncClient(timeout=20.0) as client:
         res = await client.post(url, headers=headers, json=payload)
         print(f"Meta CTA URL Button Send Status {res.status_code}: {res.text}")
-        
-    try:
-        asyncio.create_task(log_user_chat_message(to_number, "assistant", f"{body_text} [Link: {button_label} -> {url_target}]", msg_type="cta_button"))
-    except Exception:
-        pass
+        if res.status_code == 200:
+            try:
+                asyncio.create_task(log_user_chat_message(to_number, "assistant", f"{body_text} [Link: {button_label} -> {url_target}]", msg_type="cta_button"))
+            except Exception:
+                pass
 
 async def mark_message_as_read(message_id: str):
     """Marks incoming message as read and activates WhatsApp native floating typing indicator bubble (<50ms)"""
@@ -3768,24 +3769,93 @@ async def admin_students(request: Request):
         
     cursor = users_col.find({}).sort("_id", -1)
     students = []
+    now_ts = time.time()
     async for u in cursor:
         uid = u.get("user_id", "")
         last_active = await resolve_user_last_active(u, uid)
+        lat = u.get("last_active_timestamp")
+        is_active_24h = False
+        if lat:
+            try:
+                is_active_24h = ((now_ts - float(lat)) < 86400)
+            except Exception:
+                pass
+                
+        books_list = list(u.get("preferred_books_list", []))
         students.append({
             "user_id": uid,
             "name": u.get("name", "Student"),
             "level": u.get("level", "Unset"),
             "study_streak_days": int(u.get("study_streak_days", 1)),
             "total_queries_count": int(u.get("total_queries_count", 0)),
+            "wallet_balance_ngn": float(u.get("wallet_balance_ngn", 0.0)),
             "last_study_date": last_active,
-            "preferred_books_list": u.get("preferred_books_list", []),
+            "is_active_24h": is_active_24h,
+            "preferred_books_list": books_list,
+            "books_count": len(books_list),
             "onboarding_step": u.get("onboarding_step", "COMPLETED"),
             "reminders_enabled": u.get("reminders_enabled", True)
         })
     return {"students": students}
 
+@app.get("/admin/api/students/{user_id}/activity")
+async def admin_get_student_activity(user_id: str, request: Request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    if token not in ADMIN_SESSIONS:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    if users_col is None:
+        raise HTTPException(status_code=404, detail="Database uninitialized")
+        
+    u = await users_col.find_one({"user_id": user_id})
+    if not u:
+        raise HTTPException(status_code=404, detail="Student not found")
+        
+    last_active = await resolve_user_last_active(u, user_id)
+    lat = u.get("last_active_timestamp")
+    now_ts = time.time()
+    is_active_24h = False
+    if lat:
+        try:
+            is_active_24h = ((now_ts - float(lat)) < 86400)
+        except Exception:
+            pass
+            
+    total_msgs = 0
+    recent_events = []
+    if chat_logs_col is not None:
+        total_msgs = await chat_logs_col.count_documents({"user_id": user_id})
+        recent_cursor = chat_logs_col.find({"user_id": user_id}).sort("timestamp", -1).limit(10)
+        async for doc in recent_cursor:
+            ts = doc.get("timestamp", "")
+            if ts and isinstance(ts, str) and not ts.endswith("Z"):
+                ts += "Z"
+            recent_events.append({
+                "role": doc.get("role", "user"),
+                "content": doc.get("content", "")[:150],
+                "timestamp": ts,
+                "msg_type": doc.get("metadata", {}).get("msg_type", "text"),
+                "has_issue": doc.get("metadata", {}).get("has_issue", False)
+            })
+            
+    return {
+        "user_id": user_id,
+        "name": u.get("name", "Student"),
+        "level": u.get("level", "Unset"),
+        "study_streak_days": int(u.get("study_streak_days", 1)),
+        "total_queries_count": int(u.get("total_queries_count", 0)),
+        "wallet_balance_ngn": float(u.get("wallet_balance_ngn", 0.0)),
+        "reminders_enabled": bool(u.get("reminders_enabled", True)),
+        "onboarding_step": u.get("onboarding_step", "COMPLETED"),
+        "preferred_books_list": list(u.get("preferred_books_list", [])),
+        "last_active": last_active,
+        "is_active_24h": is_active_24h,
+        "total_messages": total_msgs,
+        "recent_events": recent_events
+    }
+
 @app.get("/admin/api/students/{user_id}/chats")
-async def admin_get_student_chats(user_id: str, request: Request):
+async def admin_get_student_chats(user_id: str, request: Request, include_broadcasts: bool = False):
     token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     if token not in ADMIN_SESSIONS:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -3796,6 +3866,7 @@ async def admin_get_student_chats(user_id: str, request: Request):
         "level": "Unset",
         "study_streak_days": 1,
         "total_queries_count": 0,
+        "wallet_balance_ngn": 0.0,
         "last_study_date": (datetime.utcnow() + timedelta(hours=1)).strftime("%Y-%m-%d"),
         "preferred_books_list": [],
         "onboarding_step": "COMPLETED",
@@ -3811,20 +3882,28 @@ async def admin_get_student_chats(user_id: str, request: Request):
                 "level": u.get("level", "Unset"),
                 "study_streak_days": int(u.get("study_streak_days", 1)),
                 "total_queries_count": int(u.get("total_queries_count", 0)),
+                "wallet_balance_ngn": float(u.get("wallet_balance_ngn", 0.0)),
                 "last_study_date": last_active,
-                "preferred_books_list": u.get("preferred_books_list", []),
+                "preferred_books_list": list(u.get("preferred_books_list", [])),
                 "onboarding_step": u.get("onboarding_step", "COMPLETED"),
                 "reminders_enabled": u.get("reminders_enabled", True)
             }
 
     messages = []
     if chat_logs_col is not None:
-        cursor = chat_logs_col.find({"user_id": user_id}).sort("timestamp", 1)
+        query = {"user_id": user_id}
+        if not include_broadcasts:
+            query["metadata.msg_type"] = {"$ne": "broadcast"}
+            
+        cursor = chat_logs_col.find(query).sort("timestamp", 1)
         async for doc in cursor:
+            ts = doc.get("timestamp", "")
+            if ts and isinstance(ts, str) and not ts.endswith("Z"):
+                ts += "Z"
             messages.append({
                 "role": doc.get("role", "user"),
                 "content": doc.get("content", ""),
-                "timestamp": doc.get("timestamp", ""),
+                "timestamp": ts,
                 "metadata": doc.get("metadata", {})
             })
 
@@ -3833,11 +3912,17 @@ async def admin_get_student_chats(user_id: str, request: Request):
         if h and "messages" in h:
             for m in h["messages"]:
                 if isinstance(m, dict):
+                    mtype = m.get("msg_type", "text")
+                    if not include_broadcasts and mtype == "broadcast":
+                        continue
+                    ts = m.get("timestamp", "")
+                    if ts and isinstance(ts, str) and not ts.endswith("Z"):
+                        ts += "Z"
                     messages.append({
                         "role": m.get("role", "user"),
                         "content": m.get("content", ""),
-                        "timestamp": m.get("timestamp", ""),
-                        "metadata": {"has_issue": m.get("has_issue", False), "msg_type": m.get("msg_type", "text")}
+                        "timestamp": ts,
+                        "metadata": {"has_issue": m.get("has_issue", False), "msg_type": mtype}
                     })
 
     issue_count = 0
@@ -4405,6 +4490,7 @@ async def admin_dashboard_page():
                     <th class="py-2.5 px-4 font-semibold">Candidate</th>
                     <th class="py-2.5 px-4 font-semibold">WhatsApp Number</th>
                     <th class="py-2.5 px-4 font-semibold">Level</th>
+                    <th class="py-2.5 px-4 font-semibold text-center">24h Session</th>
                     <th class="py-2.5 px-4 font-semibold text-right">Streak</th>
                     <th class="py-2.5 px-4 font-semibold text-right">Queries</th>
                     <th class="py-2.5 px-4 font-semibold">Preferred Textbooks</th>
@@ -4414,7 +4500,7 @@ async def admin_dashboard_page():
                 </thead>
                 <tbody id="students-tbody" class="divide-y divide-[#E4E6EA] text-[#17181A] bg-white">
                   <tr>
-                    <td colspan="8" class="py-8 text-center text-[#5A5E67]">
+                    <td colspan="9" class="py-8 text-center text-[#5A5E67]">
                       Loading candidates directory...
                     </td>
                   </tr>
@@ -4437,9 +4523,10 @@ async def admin_dashboard_page():
                 </div>
                 <input type="text" id="search-chat-students" oninput="filterChatThreadsList()" placeholder="Filter candidate..."
                        class="input-compact w-full text-xs">
-                <div class="flex items-center gap-1">
+                <div class="flex items-center gap-1 flex-wrap">
                   <button onclick="setChatThreadFilter('ALL')" id="ct-filter-ALL" class="filter-pill active text-[10px] py-0.5 px-2">All</button>
                   <button onclick="setChatThreadFilter('ISSUES')" id="ct-filter-ISSUES" class="filter-pill text-[10px] py-0.5 px-2">Alerts Only</button>
+                  <button onclick="toggleBroadcastsInChat()" id="ct-filter-BROADCAST" class="filter-pill text-[10px] py-0.5 px-2">Broadcasts: Hidden</button>
                 </div>
               </div>
 
@@ -4648,14 +4735,113 @@ async def admin_dashboard_page():
     </div>
   </div>
 
+  <!-- CANDIDATE ACTIVITY & TELEMETRY INSPECTOR MODAL -->
+  <div id="activity-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 hidden">
+    <div class="card w-full max-w-xl max-h-[90vh] flex flex-col bg-white overflow-hidden shadow-lg border border-[#E4E6EA]">
+      <!-- MODAL HEADER -->
+      <div class="p-4 border-b border-[#E4E6EA] bg-[#F7F8FA] flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div id="act-modal-avatar" class="w-10 h-10 rounded-full bg-[#008069] text-white font-bold text-sm flex items-center justify-center shadow-xs">
+            --
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h3 id="act-modal-name" class="text-sm font-bold text-[#17181A]">Candidate Profile</h3>
+              <span id="act-modal-level" class="badge-status-neutral text-[10px]">--</span>
+            </div>
+            <div class="flex items-center gap-2 text-xs text-[#5A5E67] font-mono mt-0.5">
+              <span id="act-modal-phone">--</span>
+              <button onclick="copyModalPhone()" title="Copy Phone Number" class="text-[#008069] hover:underline text-[11px]"><i class="fa-regular fa-copy"></i></button>
+            </div>
+          </div>
+        </div>
+        <button onclick="closeActivityModal()" class="text-[#9298A3] hover:text-[#17181A] p-1.5 rounded hover:bg-[#E4E6EA]">
+          <i class="fa-solid fa-xmark text-sm"></i>
+        </button>
+      </div>
+
+      <!-- MODAL BODY (SCROLLABLE) -->
+      <div class="p-4 space-y-4 overflow-y-auto custom-scrollbar flex-1 text-xs">
+        <!-- 24H SESSION STATUS CARD -->
+        <div id="act-modal-session-card" class="p-3 rounded border flex items-center justify-between">
+          <div class="flex items-center gap-2.5">
+            <span id="act-modal-session-dot" class="w-2.5 h-2.5 rounded-full bg-[#1F8A56]"></span>
+            <div>
+              <div id="act-modal-session-title" class="font-bold text-[#17181A]">WhatsApp Session Window: Active (&lt;24h)</div>
+              <div id="act-modal-session-desc" class="text-[11px] text-[#5A5E67]">Active conversational session open. Standard replies deliver 100% freely.</div>
+            </div>
+          </div>
+          <span id="act-modal-session-badge" class="badge-status-success text-[10px]">Active 24h</span>
+        </div>
+
+        <!-- 4-METRICS STATS GRID -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          <div class="p-2.5 bg-[#F7F8FA] rounded border border-[#E4E6EA] space-y-0.5">
+            <div class="text-[10px] font-semibold text-[#5A5E67] uppercase">Study Streak</div>
+            <div id="act-modal-streak" class="font-bold text-sm text-[#17181A]">🔥 1d</div>
+          </div>
+          <div class="p-2.5 bg-[#F7F8FA] rounded border border-[#E4E6EA] space-y-0.5">
+            <div class="text-[10px] font-semibold text-[#5A5E67] uppercase">Queries Mastered</div>
+            <div id="act-modal-queries" class="font-bold text-sm text-[#17181A]">0</div>
+          </div>
+          <div class="p-2.5 bg-[#F7F8FA] rounded border border-[#E4E6EA] space-y-0.5">
+            <div class="text-[10px] font-semibold text-[#5A5E67] uppercase">Total Messages</div>
+            <div id="act-modal-messages" class="font-bold text-sm text-[#17181A]">0</div>
+          </div>
+          <div class="p-2.5 bg-[#F7F8FA] rounded border border-[#E4E6EA] space-y-0.5">
+            <div class="text-[10px] font-semibold text-[#5A5E67] uppercase">Reminders</div>
+            <div id="act-modal-reminders" class="font-bold text-sm text-[#1F8A56]">🔔 Enabled</div>
+          </div>
+        </div>
+
+        <!-- ACTIVE BOOKSHELF -->
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-[#17181A] text-xs">Active Curriculum Bookshelf</span>
+            <span id="act-modal-books-count" class="text-[11px] text-[#5A5E67] font-mono">-- Books</span>
+          </div>
+          <div id="act-modal-books-list" class="p-2.5 bg-[#F7F8FA] rounded border border-[#E4E6EA] space-y-1.5">
+            <div class="text-center py-2 text-[#5A5E67]">Loading bookshelf...</div>
+          </div>
+        </div>
+
+        <!-- RECENT ENGAGEMENT TIMELINE -->
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-[#17181A] text-xs">Recent Message Activity Timeline</span>
+            <span id="act-modal-last-active" class="text-[11px] text-[#5A5E67]">Last seen: --</span>
+          </div>
+          <div id="act-modal-events-list" class="space-y-1.5 max-h-48 overflow-y-auto custom-scrollbar">
+            <div class="text-center py-2 text-[#5A5E67]">Loading events...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MODAL FOOTER -->
+      <div class="p-3 border-t border-[#E4E6EA] bg-[#F7F8FA] flex items-center justify-between">
+        <button onclick="closeActivityModal()" class="btn-secondary text-xs py-1.5 px-3">Close</button>
+        <div class="flex items-center gap-2">
+          <button id="act-modal-chat-btn" onclick="openChatFromModal()" class="btn-secondary text-xs py-1.5 px-3 text-[#008069] border-[#008069]/30 hover:bg-[#008069]/5">
+            <i class="fa-solid fa-comments text-xs"></i> <span>Open Full Transcript</span>
+          </button>
+          <a id="act-modal-wa-btn" href="#" target="_blank" class="btn-primary text-xs py-1.5 px-3 bg-[#008069] hover:bg-[#006A57]">
+            <i class="fa-brands fa-whatsapp text-xs"></i> <span>Chat on WhatsApp</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     let authToken = localStorage.getItem("neura_admin_token") || "";
     let rawStudentsList = [];
     let rawChatThreads = [];
     let activeLevelFilter = "ALL";
     let activeChatThreadFilter = "ALL";
+    let showBroadcastsInChat = false;
     let currentSelectedUserId = null;
     let currentActiveMessages = [];
+    let currentModalStudentId = null;
 
     const VIEW_TITLES = {
       'students': 'Registered Students Directory',
@@ -4663,6 +4849,32 @@ async def admin_dashboard_page():
       'broadcast': 'WhatsApp Broadcast Studio',
       'analytics': 'Cohort Analytics & Telemetry'
     };
+
+    function formatChatTime(isoStr) {
+      if (!isoStr) return "";
+      try {
+        const s = String(isoStr).trim();
+        const utc = s.endsWith("Z") ? s : s + "Z";
+        const d = new Date(utc);
+        if (isNaN(d.getTime())) return isoStr;
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+      } catch(e) {
+        return isoStr;
+      }
+    }
+
+    function formatFullDateTime(isoStr) {
+      if (!isoStr) return "--";
+      try {
+        const s = String(isoStr).trim();
+        const utc = s.endsWith("Z") ? s : s + "Z";
+        const d = new Date(utc);
+        if (isNaN(d.getTime())) return String(isoStr);
+        return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) + " at " + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+      } catch(e) {
+        return String(isoStr);
+      }
+    }
 
     function togglePass() {
       const p = document.getElementById("admin-pass");
@@ -4877,7 +5089,7 @@ async def admin_dashboard_page():
       if (!students || students.length === 0) {
         tbody.innerHTML = `
           <tr>
-            <td colspan="8" class="py-6 text-center text-[#5A5E67]">
+            <td colspan="9" class="py-6 text-center text-[#5A5E67]">
               No candidates found matching criteria.
             </td>
           </tr>
@@ -4889,11 +5101,14 @@ async def admin_dashboard_page():
         const booksCount = (s.preferred_books_list || []).length;
         const booksText = booksCount > 0 ? `${booksCount} Textbook(s)` : "Standard Core";
         const formattedDate = formatActiveDate(s.last_study_date);
+        const sessionBadge = s.is_active_24h 
+          ? `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-[#1F8A56] bg-[#E8F8F0] px-2 py-0.5 rounded-full"><span class="w-1.5 h-1.5 rounded-full bg-[#1F8A56]"></span>&lt;24h Open</span>`
+          : `<span class="inline-flex items-center gap-1 text-[10px] font-medium text-[#5A5E67] bg-[#F1F2F4] px-2 py-0.5 rounded-full">&gt;24h Closed</span>`;
 
         return `
-          <tr class="hover:bg-[#F1F2F4] transition-colors">
+          <tr class="hover:bg-[#F1F2F4] transition-colors cursor-pointer" onclick="openStudentActivity('${s.user_id}')">
             <td class="py-2.5 px-4 font-semibold text-[#17181A]">
-              ${s.name || "Candidate"}
+              <div class="hover:text-[#008069] flex items-center gap-1.5">${s.name || "Candidate"} <i class="fa-solid fa-circle-info text-[10px] text-[#9298A3]"></i></div>
             </td>
             <td class="py-2.5 px-4 font-mono text-[#5A5E67]">
               ${s.user_id}
@@ -4901,8 +5116,11 @@ async def admin_dashboard_page():
             <td class="py-2.5 px-4">
               <span class="badge-status-neutral">${s.level || "Unset"}</span>
             </td>
+            <td class="py-2.5 px-4 text-center">
+              ${sessionBadge}
+            </td>
             <td class="py-2.5 px-4 text-right font-mono font-medium text-[#17181A]">
-              ${s.study_streak_days || 1}d
+              🔥 ${s.study_streak_days || 1}d
             </td>
             <td class="py-2.5 px-4 text-right font-mono text-[#17181A]">
               ${s.total_queries_count || 0}
@@ -4913,8 +5131,11 @@ async def admin_dashboard_page():
             <td class="py-2.5 px-4 font-mono text-[#5A5E67] text-[11px]">
               ${formattedDate}
             </td>
-            <td class="py-2.5 px-4 text-right">
+            <td class="py-2.5 px-4 text-right" onclick="event.stopPropagation()">
               <div class="inline-flex items-center gap-1">
+                <button onclick="openStudentActivity('${s.user_id}')" class="btn-secondary text-[11px] py-0.5 px-2 bg-[#F1F2F4] hover:bg-[#E4E6EA]">
+                  Activity
+                </button>
                 <button onclick="openStudentChat('${s.user_id}')" class="btn-secondary text-[11px] py-0.5 px-2">
                   Chats
                 </button>
@@ -4928,7 +5149,147 @@ async def admin_dashboard_page():
       }).join("");
     }
 
+    // ================= CANDIDATE ACTIVITY MODAL =================
+    async function openStudentActivity(userId) {
+      currentModalStudentId = userId;
+      const modal = document.getElementById("activity-modal");
+      modal.classList.remove("hidden");
+
+      document.getElementById("act-modal-name").innerText = "Loading profile...";
+      document.getElementById("act-modal-level").innerText = "--";
+      document.getElementById("act-modal-phone").innerText = userId;
+      document.getElementById("act-modal-avatar").innerText = "--";
+      document.getElementById("act-modal-streak").innerText = "🔥 --";
+      document.getElementById("act-modal-queries").innerText = "--";
+      document.getElementById("act-modal-messages").innerText = "--";
+      document.getElementById("act-modal-reminders").innerText = "--";
+      document.getElementById("act-modal-books-list").innerHTML = '<div class="text-center py-2 text-[#5A5E67]">Loading bookshelf...</div>';
+      document.getElementById("act-modal-events-list").innerHTML = '<div class="text-center py-2 text-[#5A5E67]">Loading events...</div>';
+
+      try {
+        const res = await fetch(`/admin/api/students/${userId}/activity`, {
+          headers: { "Authorization": "Bearer " + authToken }
+        });
+        if (res.status === 401) { performLogout(); return; }
+        const act = await res.json();
+
+        const initials = (act.name || "S").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase();
+        document.getElementById("act-modal-avatar").innerText = initials;
+        document.getElementById("act-modal-name").innerText = act.name || "Candidate";
+        document.getElementById("act-modal-level").innerText = act.level || "Unset";
+        document.getElementById("act-modal-phone").innerText = act.user_id || userId;
+        document.getElementById("act-modal-streak").innerText = `🔥 ${act.study_streak_days || 1}d`;
+        document.getElementById("act-modal-queries").innerText = (act.total_queries_count || 0).toLocaleString();
+        document.getElementById("act-modal-messages").innerText = (act.total_messages || 0).toLocaleString();
+        document.getElementById("act-modal-reminders").innerText = act.reminders_enabled ? "🔔 Enabled" : "🔕 Paused";
+        document.getElementById("act-modal-last-active").innerText = `Last study date: ${act.last_active || "--"}`;
+        document.getElementById("act-modal-wa-btn").href = `https://wa.me/${act.user_id || userId}`;
+
+        // 24h session window card
+        const sessCard = document.getElementById("act-modal-session-card");
+        const sessDot = document.getElementById("act-modal-session-dot");
+        const sessTitle = document.getElementById("act-modal-session-title");
+        const sessDesc = document.getElementById("act-modal-session-desc");
+        const sessBadge = document.getElementById("act-modal-session-badge");
+
+        if (act.is_active_24h) {
+          sessCard.className = "p-3 rounded border border-[#A3E635]/40 bg-[#F7FEE7] flex items-center justify-between";
+          sessDot.className = "w-2.5 h-2.5 rounded-full bg-[#1F8A56]";
+          sessTitle.innerText = "WhatsApp Free Session Window: Active (<24h)";
+          sessDesc.innerText = "Student messaged recently. Free interactive replies and queries can be exchanged freely.";
+          sessBadge.className = "badge-status-success text-[10px]";
+          sessBadge.innerText = "Active <24h";
+        } else {
+          sessCard.className = "p-3 rounded border border-[#FAD7A0] bg-[#FEF7EC] flex items-center justify-between";
+          sessDot.className = "w-2.5 h-2.5 rounded-full bg-[#B7791F]";
+          sessTitle.innerText = "WhatsApp Session Closed (>24h Inactive)";
+          sessDesc.innerText = "Direct free messages will fail Meta's 24h policy. Use Broadcast / Template message to re-engage.";
+          sessBadge.className = "badge-status-warning text-[10px]";
+          sessBadge.innerText = ">24h Inactive";
+        }
+
+        // Active bookshelf
+        const books = act.preferred_books_list || [];
+        document.getElementById("act-modal-books-count").innerText = `${books.length} Active Book(s)`;
+        const booksListEl = document.getElementById("act-modal-books-list");
+        if (books.length === 0) {
+          booksListEl.innerHTML = '<div class="text-[#5A5E67] text-xs py-1">No custom textbooks selected yet (using default curriculum).</div>';
+        } else {
+          booksListEl.innerHTML = books.map((b, idx) => `
+            <div class="flex items-center gap-2 p-1.5 bg-white rounded border border-[#E4E6EA] text-xs">
+              <span class="w-5 h-5 rounded bg-[#008069]/10 text-[#008069] font-bold text-[10px] flex items-center justify-center">${idx+1}</span>
+              <span class="font-medium text-[#17181A] flex-1">${b}</span>
+              <span class="badge-status-neutral text-[9px]">Enrolled</span>
+            </div>
+          `).join("");
+        }
+
+        // Recent events
+        const events = act.recent_events || [];
+        const eventsListEl = document.getElementById("act-modal-events-list");
+        if (events.length === 0) {
+          eventsListEl.innerHTML = '<div class="text-[#5A5E67] text-xs py-1">No message history recorded yet.</div>';
+        } else {
+          eventsListEl.innerHTML = events.map(e => {
+            const isUser = e.role === "user";
+            const timeFormatted = formatFullDateTime(e.timestamp);
+            const roleBadge = isUser 
+              ? '<span class="text-[9px] font-bold text-[#008069] bg-[#E8F8F0] px-1.5 py-0.5 rounded">STUDENT</span>'
+              : '<span class="text-[9px] font-bold text-[#17181A] bg-[#F1F2F4] px-1.5 py-0.5 rounded">NEURA AI</span>';
+
+            return `
+              <div class="p-2 bg-white rounded border border-[#E4E6EA] space-y-1">
+                <div class="flex items-center justify-between text-[10px] text-[#5A5E67]">
+                  <div class="flex items-center gap-1.5">${roleBadge} <span class="font-mono text-[#9298A3]">(${e.msg_type || 'text'})</span></div>
+                  <span>${timeFormatted}</span>
+                </div>
+                <div class="text-xs text-[#17181A] truncate">${e.content || "Empty content"}</div>
+              </div>
+            `;
+          }).join("");
+        }
+      } catch (err) {
+        document.getElementById("act-modal-name").innerText = "Error loading details";
+      }
+    }
+
+    function closeActivityModal() {
+      document.getElementById("activity-modal").classList.add("hidden");
+    }
+
+    function copyModalPhone() {
+      const phone = document.getElementById("act-modal-phone").innerText;
+      if (phone) {
+        navigator.clipboard.writeText(phone);
+        alert(`Copied WhatsApp Number: ${phone}`);
+      }
+    }
+
+    function openChatFromModal() {
+      if (currentModalStudentId) {
+        closeActivityModal();
+        openStudentChat(currentModalStudentId);
+      }
+    }
+
     // ================= CHAT TRANSCRIPTS LOGIC =================
+    function toggleBroadcastsInChat() {
+      showBroadcastsInChat = !showBroadcastsInChat;
+      const btn = document.getElementById("ct-filter-BROADCAST");
+      if (btn) {
+        if (showBroadcastsInChat) {
+          btn.innerText = "Broadcasts: Visible";
+          btn.classList.add("active");
+        } else {
+          btn.innerText = "Broadcasts: Hidden";
+          btn.classList.remove("active");
+        }
+      }
+      if (currentSelectedUserId) {
+        loadConversationForUser(currentSelectedUserId);
+      }
+    }
+
     async function loadRecentChats() {
       if (!authToken) return;
       try {
@@ -4959,7 +5320,7 @@ async def admin_dashboard_page():
     function setChatThreadFilter(filterKey) {
       activeChatThreadFilter = filterKey;
       document.querySelectorAll(".filter-pill").forEach(b => {
-        if (b.id && b.id.startsWith("ct-filter-")) {
+        if (b.id && (b.id === "ct-filter-ALL" || b.id === "ct-filter-ISSUES")) {
           b.classList.remove("active");
         }
       });
@@ -5015,7 +5376,7 @@ async def admin_dashboard_page():
 
             <div class="flex items-center justify-between text-[11px] text-[#9298A3] pt-0.5 font-mono">
               <span>${t.user_id}</span>
-              <span>${t.study_streak_days || 1}d &bull; ${t.message_count || 0} msgs</span>
+              <span>🔥 ${t.study_streak_days || 1}d &bull; ${t.message_count || 0} msgs</span>
             </div>
           </div>
         `;
@@ -5039,7 +5400,7 @@ async def admin_dashboard_page():
       `;
 
       try {
-        const res = await fetch(`/admin/api/students/${userId}/chats`, {
+        const res = await fetch(`/admin/api/students/${userId}/chats?include_broadcasts=${showBroadcastsInChat}`, {
           headers: { "Authorization": "Bearer " + authToken }
         });
         if (res.status === 401) { performLogout(); return; }
@@ -5108,7 +5469,7 @@ async def admin_dashboard_page():
       if (!messages || messages.length === 0) {
         container.innerHTML = `
           <div class="m-auto text-center text-[#667781] p-8 text-xs">
-            No message interactions recorded.
+            No message interactions recorded in this thread.
           </div>
         `;
         return;
@@ -5117,7 +5478,9 @@ async def admin_dashboard_page():
       container.innerHTML = messages.map(m => {
         const isUser = m.role === "user";
         const hasIssue = m.metadata?.has_issue;
-        const timeStr = m.timestamp ? (new Date(m.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})) : "";
+        const isBroadcast = m.metadata?.msg_type === "broadcast";
+        const timeStr = formatChatTime(m.timestamp);
+        const fullDateStr = formatFullDateTime(m.timestamp);
         const formatted = formatChatMarkdown(m.content, highlightQuery);
 
         if (isUser) {
@@ -5126,7 +5489,7 @@ async def admin_dashboard_page():
               <div class="wa-bubble-user p-2.5 max-w-[85%] sm:max-w-[75%] space-y-0.5">
                 <div class="text-[10px] font-semibold text-[#008069]">Candidate</div>
                 <div class="text-xs text-[#111B21] whitespace-pre-wrap leading-relaxed">${formatted}</div>
-                <div class="text-[10px] text-[#667781] text-right font-sans flex items-center justify-end gap-1 mt-0.5">
+                <div class="text-[10px] text-[#667781] text-right font-sans flex items-center justify-end gap-1 mt-0.5" title="${fullDateStr}">
                   <span>${timeStr}</span>
                   <i class="fa-solid fa-check-double text-[#53bdeb] text-[10px]"></i>
                 </div>
@@ -5138,12 +5501,12 @@ async def admin_dashboard_page():
             <div class="flex justify-start items-end gap-2">
               <div class="wa-bubble-ai p-3 max-w-[90%] sm:max-w-[80%] space-y-1">
                 <div class="text-[11px] font-bold text-[#008069] border-b border-[#E9EDEF] pb-1 mb-1 flex items-center justify-between">
-                  <span>NEURA AI Clinical Engine</span>
+                  <span>${isBroadcast ? '📢 NEURA AI Broadcast' : 'NEURA AI Clinical Engine'}</span>
                   ${m.metadata?.msg_type ? `<span class="text-[9px] font-mono text-[#667781]">(${m.metadata.msg_type})</span>` : ''}
                 </div>
                 ${hasIssue ? '<div class="mb-1 text-[10px] font-bold text-[#B7791F] bg-[#FEF7EC] border border-[#FAD7A0] px-1.5 py-0.5 rounded w-max">Diagnostic Alert</div>' : ''}
                 <div class="text-xs text-[#111B21] whitespace-pre-wrap leading-relaxed">${formatted}</div>
-                <div class="text-[10px] text-[#667781] text-right font-sans mt-0.5">${timeStr}</div>
+                <div class="text-[10px] text-[#667781] text-right font-sans mt-0.5" title="${fullDateStr}">${timeStr}</div>
               </div>
             </div>
           `;
