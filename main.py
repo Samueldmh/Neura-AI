@@ -2749,6 +2749,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         streak_count = streak
                         reminders_status = "Enabled 🔔"
 
+                    print(f"👤 [/profile for {sender_phone}] Loaded {len(preferred_books_list)} books from MongoDB: {preferred_books_list}")
                     books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None selected"
                     await send_whatsapp_cloud_msg(
                         sender_phone, 
