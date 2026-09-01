@@ -12,7 +12,8 @@ import httpx
 import hmac
 import hashlib
 import uuid
-from datetime import datetime, timedelta
+import urllib.parse
+from datetime import datetime, timedelta, timezone
 import time
 from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks
 from fastapi.responses import HTMLResponse
@@ -134,6 +135,7 @@ chat_history_col = db.chat_history if db is not None else None
 users_col = db.users if db is not None else None
 broadcasts_col = db.broadcasts if db is not None else None
 chat_logs_col = db.chat_logs if db is not None else None
+youtube_video_cache_col = db.youtube_video_cache if db is not None else None
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neura2026admin")
 ADMIN_SESSIONS = set()
@@ -972,7 +974,7 @@ def format_whatsapp_text(text: str) -> str:
 
     return text.strip()
 
-async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
+async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url: bool = False):
     """Sends a text response directly to the student via Meta WhatsApp Cloud API. Automatically chunks messages exceeding Meta's 4000 char limit."""
     message_text = format_whatsapp_text(message_text)
     if not message_text:
@@ -1003,13 +1005,14 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str):
 
     all_success = True
     for chunk in chunks:
+        has_url = bool(preview_url or "http://" in chunk or "https://" in chunk)
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
             "to": to_number,
             "type": "text",
             "text": {
-                "preview_url": False,
+                "preview_url": has_url,
                 "body": chunk
             }
         }
@@ -1617,6 +1620,133 @@ async def process_whatsapp_audio(sender_phone: str, media_id: str, is_tagged_rep
 
     # Step 4: Route into standard WhatsApp message processor with is_voice=True
     await process_whatsapp_message(sender_phone, transcript, is_tagged_reply, is_voice=True)
+
+# ==========================================
+# CURATED MEDICAL YOUTUBE VIDEO LECTURE ENGINE
+# ==========================================
+
+TRUSTED_MEDICAL_CHANNELS = [
+    "Ninja Nerd", "Osmosis", "Armando Hasudungan", "Medicosis Perfectionalis",
+    "Dirty Medicine", "Speed Pharmacology", "Dr. Najeeb", "Geeky Medics",
+    "Khan Academy Medicine", "MedCram", "Alila Medical Media", "Interactive Biology",
+    "Rhesus Medicine", "MEDSimplified", "Dr. Constantin", "Hasudungan", "Pathoma",
+    "Picmonic", "Sketchy", "Zero To Finals", "Chirag Navadia"
+]
+
+def slugify_topic(text: str) -> str:
+    """Creates a normalized alphanumeric cache key for a medical topic."""
+    import re
+    clean = re.sub(r'[^\w\s]', '', text.lower()).strip()
+    words = [w for w in clean.split() if w not in SEARCH_STOP_WORDS]
+    return "_".join(words[:6]) if words else clean[:30]
+
+async def get_curated_youtube_lecture(query: str) -> dict | None:
+    """Retrieves a top authentic medical lecture video for the topic (from MongoDB cache or fast YouTube scrape)."""
+    if not query or len(query.strip()) < 3:
+        return None
+
+    cache_key = slugify_topic(query)
+    if not cache_key:
+        return None
+
+    # Step 1: Check MongoDB Video Cache for instant 1ms retrieval
+    if youtube_video_cache_col is not None:
+        try:
+            cached_doc = await youtube_video_cache_col.find_one({"cache_key": cache_key})
+            if cached_doc:
+                print(f"⚡ [YOUTUBE CACHE HIT] '{query}' -> {cached_doc.get('title')} ({cached_doc.get('channel')})")
+                return {
+                    "video_id": cached_doc.get("video_id"),
+                    "url": cached_doc.get("url"),
+                    "title": cached_doc.get("title"),
+                    "channel": cached_doc.get("channel"),
+                    "duration": cached_doc.get("duration", "")
+                }
+        except Exception as cache_err:
+            print(f"⚠️ YouTube cache lookup error: {cache_err}")
+
+    # Step 2: Query YouTube Search with medical bias
+    search_term = f"{query} medical lecture"
+    encoded = urllib.parse.quote_plus(search_term)
+    yt_url = f"https://www.youtube.com/results?search_query={encoded}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True, headers=headers) as client:
+            res = await client.get(yt_url)
+            if res.status_code == 200:
+                html = res.text
+                match = re.search(r'var ytInitialData = ({.*?});</script>', html)
+                if not match:
+                    match = re.search(r'window\["ytInitialData"\] = ({.*?});</script>', html)
+
+                if match:
+                    data = json.loads(match.group(1))
+                    contents = (
+                        data.get("contents", {})
+                        .get("twoColumnSearchResultsRenderer", {})
+                        .get("primaryContents", {})
+                        .get("sectionListRenderer", {})
+                        .get("contents", [])
+                    )
+
+                    candidate_videos = []
+                    for section in contents:
+                        items = section.get("itemSectionRenderer", {}).get("contents", [])
+                        for item in items:
+                            v = item.get("videoRenderer")
+                            if not v:
+                                continue
+                            v_id = v.get("videoId")
+                            v_title = v.get("title", {}).get("runs", [{}])[0].get("text", "")
+                            v_owner = v.get("ownerText", {}).get("runs", [{}])[0].get("text", "")
+                            v_len = v.get("lengthText", {}).get("simpleText", "")
+
+                            if v_id and v_title:
+                                is_trusted = any(c.lower() in v_owner.lower() for c in TRUSTED_MEDICAL_CHANNELS)
+                                candidate_videos.append({
+                                    "video_id": v_id,
+                                    "url": f"https://www.youtube.com/watch?v={v_id}",
+                                    "title": v_title,
+                                    "channel": v_owner,
+                                    "duration": v_len,
+                                    "is_trusted": is_trusted
+                                })
+
+                    if candidate_videos:
+                        # Prioritize trusted medical channels first
+                        best_video = next((v for v in candidate_videos if v["is_trusted"]), candidate_videos[0])
+                        
+                        # Step 3: Cache result in MongoDB
+                        if youtube_video_cache_col is not None:
+                            try:
+                                await youtube_video_cache_col.update_one(
+                                    {"cache_key": cache_key},
+                                    {"$set": {
+                                        "cache_key": cache_key,
+                                        "topic_query": query,
+                                        "video_id": best_video["video_id"],
+                                        "url": best_video["url"],
+                                        "title": best_video["title"],
+                                        "channel": best_video["channel"],
+                                        "duration": best_video["duration"],
+                                        "updated_at": datetime.utcnow().isoformat() + "Z"
+                                    }},
+                                    upsert=True
+                                )
+                            except Exception as save_err:
+                                print(f"⚠️ YouTube cache save error: {save_err}")
+
+                        print(f"🎬 [YOUTUBE DISCOVERED] '{query}' -> {best_video['title']} ({best_video['channel']})")
+                        return best_video
+    except Exception as scrape_err:
+        print(f"⚠️ YouTube search scrape exception: {scrape_err}")
+
+    return None
+
 
 
 
@@ -3258,8 +3388,26 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             if cached_answer:
                 clean_topic = clean_medical_topic_title(search_term)
                 print(f"[CACHE HIT ⚡] Returning instant cached explanation for '{clean_topic}'")
+                
+                # Fetch video recommendation (hits 1ms MongoDB cache if present)
+                video_info = None
+                try:
+                    video_info = await get_curated_youtube_lecture(clean_topic)
+                except Exception:
+                    pass
+
+                video_footer = ""
+                if video_info and "Recommended Video Lecture:" not in cached_answer:
+                    duration_str = f" ({video_info['duration']})" if video_info.get("duration") else ""
+                    video_footer = (
+                        f"\n\n🎥 *Recommended Video Lecture:*\n"
+                        f"▶️ *{video_info['channel']}* – {video_info['title']}{duration_str}\n"
+                        f"🔗 {video_info['url']}"
+                    )
+
                 streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
-                await send_whatsapp_cloud_msg(sender_phone, cached_answer + streak_footer)
+                final_answer = cached_answer + video_footer + streak_footer
+                await send_whatsapp_cloud_msg(sender_phone, final_answer, preview_url=bool(video_footer))
                 
                 if chat_history_col is not None:
                     new_msgs = [
@@ -3408,10 +3556,13 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             if user_doc and "messages" in user_doc:
                 chat_history = user_doc["messages"][-6:]
 
-        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Dispatching to Main Medical LLM ({len(context_blocks)} chunks, ~{len(formatted_context)} context chars)...")
+        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Dispatching to Main Medical LLM ({len(context_blocks)} chunks, ~{len(formatted_context)} context chars) & Curated YouTube Engine...")
         t_llm_start = time.perf_counter()
-        ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
-        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Main Medical LLM finished in {time.perf_counter()-t_llm_start:.3f}s")
+        task_llm = call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
+        task_video = get_curated_youtube_lecture(clean_topic)
+
+        ai_answer, video_info = await asyncio.gather(task_llm, task_video)
+        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Main Medical LLM finished in {time.perf_counter()-t_llm_start:.3f}s | Video: {bool(video_info)}")
 
         if not ai_answer or not isinstance(ai_answer, str) or len(ai_answer.strip()) == 0:
             await send_whatsapp_cloud_msg(
@@ -3420,9 +3571,23 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             )
             return
 
+        # Check if the answer indicates information is missing from textbooks
+        ai_lower = ai_answer.lower()
+        is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
+
+        video_footer = ""
+        if video_info and not is_not_covered and "Recommended Video Lecture:" not in ai_answer:
+            duration_str = f" ({video_info['duration']})" if video_info.get("duration") else ""
+            video_footer = (
+                f"\n\n🎥 *Recommended Video Lecture:*\n"
+                f"▶️ *{video_info['channel']}* – {video_info['title']}{duration_str}\n"
+                f"🔗 {video_info['url']}"
+            )
+
         streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
+        final_answer = ai_answer + video_footer + streak_footer
         t_wa_start = time.perf_counter()
-        await send_whatsapp_cloud_msg(sender_phone, ai_answer + streak_footer)
+        await send_whatsapp_cloud_msg(sender_phone, final_answer, preview_url=bool(video_footer))
         dt_total = time.perf_counter() - req_t0
         print(f"🎉 [PIPELINE COMPLETE | TOTAL: {dt_total:.3f}s] Delivered response to {sender_phone} via WhatsApp Cloud API in {(time.perf_counter()-t_wa_start)*1000:.1f}ms")
 
