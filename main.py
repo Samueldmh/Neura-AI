@@ -1748,6 +1748,82 @@ async def get_curated_youtube_lecture(query: str) -> dict | None:
 
     return None
 
+async def send_whatsapp_video_cta_card(to_number: str, video_info: dict):
+    """Sends a high-resolution video thumbnail card with a 1-tap interactive CTA button that opens YouTube"""
+    if not video_info or not video_info.get("url") or not WHATSAPP_TOKEN:
+        return
+    
+    video_id = video_info.get("video_id")
+    title = video_info.get("title", "Medical Lecture")
+    channel = video_info.get("channel", "Medical Channel")
+    duration = f" ({video_info['duration']})" if video_info.get("duration") else ""
+    yt_url = video_info.get("url")
+    
+    # YouTube HD thumbnail URL (hqdefault is universally available on all YouTube videos)
+    image_url = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg" if video_id else ""
+    
+    body_text = (
+        f"🎥 *Recommended Video Lecture*\n\n"
+        f"▶️ *{channel}* – {title}{duration}\n\n"
+        f"Tap the button below to watch the full lecture on YouTube:"
+    )
+    body_text = format_whatsapp_text(body_text)
+
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
+        "Content-Type": "application/json"
+    }
+    
+    interactive_obj = {
+        "type": "cta_url",
+        "body": {
+            "text": body_text
+        },
+        "action": {
+            "name": "cta_url",
+            "parameters": {
+                "display_text": "🎬 Watch on YouTube",
+                "url": yt_url
+            }
+        }
+    }
+    
+    if image_url:
+        interactive_obj["header"] = {
+            "type": "image",
+            "image": {
+                "link": image_url
+            }
+        }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": "interactive",
+        "interactive": interactive_obj
+    }
+    
+    try:
+        res = await shared_http_client.post(url, headers=headers, json=payload)
+        print(f"Meta Video CTA Card Status {res.status_code}: {res.text}")
+        if res.status_code != 200:
+            # Fallback if image header was rejected: send without header
+            interactive_obj.pop("header", None)
+            payload["interactive"] = interactive_obj
+            async with httpx.AsyncClient(timeout=15.0) as fallback_client:
+                fallback_res = await fallback_client.post(url, headers=headers, json=payload)
+                print(f"Meta Video CTA Fallback Status {fallback_res.status_code}: {fallback_res.text}")
+        else:
+            try:
+                asyncio.create_task(log_user_chat_message(to_number, "assistant", f"🎥 [Video Lecture Card: {channel} - {title}]", msg_type="video_card"))
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"⚠️ Exception sending Video CTA card: {e}")
+
+
 
 
 
@@ -3390,25 +3466,17 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 clean_topic = clean_medical_topic_title(search_term)
                 print(f"[CACHE HIT ⚡] Returning instant cached explanation for '{clean_topic}'")
                 
-                # Fetch video recommendation (hits 1ms MongoDB cache if present)
-                video_info = None
+                streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
+                final_answer = cached_answer + streak_footer
+                await send_whatsapp_cloud_msg(sender_phone, final_answer)
+                
+                # Fetch and deliver HD Video CTA Card
                 try:
                     video_info = await get_curated_youtube_lecture(clean_topic)
-                except Exception:
-                    pass
-
-                video_footer = ""
-                if video_info and "Recommended Video Lecture:" not in cached_answer:
-                    duration_str = f" ({video_info['duration']})" if video_info.get("duration") else ""
-                    video_footer = (
-                        f"\n\n🎥 *Recommended Video Lecture:*\n"
-                        f"▶️ *{video_info['channel']}* – {video_info['title']}{duration_str}\n"
-                        f"🔗 {video_info['url']}"
-                    )
-
-                streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
-                final_answer = cached_answer + video_footer + streak_footer
-                await send_whatsapp_cloud_msg(sender_phone, final_answer, preview_url=bool(video_footer))
+                    if video_info:
+                        await send_whatsapp_video_cta_card(sender_phone, video_info)
+                except Exception as vid_err:
+                    print(f"⚠️ Cache video send error: {vid_err}")
                 
                 if chat_history_col is not None:
                     new_msgs = [
@@ -3576,21 +3644,19 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         ai_lower = ai_answer.lower()
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
 
-        video_footer = ""
-        if video_info and not is_not_covered and "Recommended Video Lecture:" not in ai_answer:
-            duration_str = f" ({video_info['duration']})" if video_info.get("duration") else ""
-            video_footer = (
-                f"\n\n🎥 *Recommended Video Lecture:*\n"
-                f"▶️ *{video_info['channel']}* – {video_info['title']}{duration_str}\n"
-                f"🔗 {video_info['url']}"
-            )
-
         streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
-        final_answer = ai_answer + video_footer + streak_footer
+        final_answer = ai_answer + streak_footer
         t_wa_start = time.perf_counter()
-        await send_whatsapp_cloud_msg(sender_phone, final_answer, preview_url=bool(video_footer))
+        await send_whatsapp_cloud_msg(sender_phone, final_answer)
         dt_total = time.perf_counter() - req_t0
         print(f"🎉 [PIPELINE COMPLETE | TOTAL: {dt_total:.3f}s] Delivered response to {sender_phone} via WhatsApp Cloud API in {(time.perf_counter()-t_wa_start)*1000:.1f}ms")
+
+        # Deliver High-Definition Video Lecture Card with 1-Tap Play Button
+        if video_info and not is_not_covered:
+            try:
+                await send_whatsapp_video_cta_card(sender_phone, video_info)
+            except Exception as vid_err:
+                print(f"⚠️ Error sending video CTA card: {vid_err}")
 
         if chat_history_col is not None:
             new_msgs = [
