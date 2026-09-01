@@ -1630,7 +1630,8 @@ TRUSTED_MEDICAL_CHANNELS = [
     "Dirty Medicine", "Speed Pharmacology", "Dr. Najeeb", "Geeky Medics",
     "Khan Academy Medicine", "MedCram", "Alila Medical Media", "Interactive Biology",
     "Rhesus Medicine", "MEDSimplified", "Dr. Constantin", "Hasudungan", "Pathoma",
-    "Picmonic", "Sketchy", "Zero To Finals", "Chirag Navadia"
+    "Picmonic", "Sketchy", "Zero To Finals", "Chirag Navadia", "AnatomyZone",
+    "Sam Webster", "ICU Advantage", "Strong Medicine", "Medinaz", "Siebert Science"
 ]
 
 def slugify_topic(text: str) -> str:
