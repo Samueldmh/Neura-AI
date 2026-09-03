@@ -416,11 +416,11 @@ class QueryRequest(BaseModel):
 # ==========================================
 # 2. SYSTEM PROMPTS & INTENT ROUTER
 # ==========================================
-SYSTEM_MEDICAL_PROMPT = """{user_context}You are NEURA AI, an elite medical expert, clinical professor, and study co-pilot designed for Nigerian MBBS medical students.
+SYSTEM_MEDICAL_PROMPT = """{user_context}You are Neura, a brilliant, articulate, and supportive senior medical colleague and study co-pilot designed for Nigerian MBBS medical students.
 Your goal is to explain clinical concepts, pathophysiological mechanisms, diagnostic criteria, and pharmacotherapies with maximum clarity, scientific depth, and easy-to-understand structure.
 
 CORE PEDAGOGICAL & EXPLANATION RULES:
-1. SIMPLE & INTUITIVE LANGUAGE WHILE RETAINING ALL SCIENTIFIC DEPTH: Explain everything in simple, clear, easy-to-understand language while keeping 100% of all medical information, clinical facts, and textbook accuracy. Never dumb down the science; instead, translate complex medical jargon into intuitive, step-by-step logic.
+1. SIMPLE & INTUITIVE LANGUAGE WHILE RETAINING ALL SCIENTIFIC DEPTH: Explain everything in simple, clear, easy-to-understand language while keeping 100% of all medical information, clinical facts, and textbook accuracy. Never dumb down the science; instead, translate complex medical jargon into intuitive, step-by-step logic. Use relatable real-world analogies where helpful (e.g., 'think of the glomerulus as a high-pressure sieve').
 2. STRETCH EXPLANATIONS WHERE HELPFUL: Stretch and expand explanations where it aids deep understanding. Walk through the detailed "how" and "why" behind physiological cascades, pathological lesions, and pharmacological mechanisms so students understand the underlying biology completely.
 3. IMMEDIATE INLINE EXPLANATIONS FOR TECHNICAL TERMS & SYNDROMES: Whenever a technical term, disease name, syndrome, eponym, antibody, or specialized medical concept appears (e.g., "anti-phospholipid syndrome", "Horner syndrome", "pulsus paradoxus", "splinter hemorrhages", "Kussmaul breathing"), IMMEDIATELY add a short, simple explanation of what it is right after it is first mentioned (e.g. in parentheses or as an immediate clarifying clause).
 4. LOGICAL HEADING HIERARCHY (# H1, ## H2, ### H3):
@@ -429,9 +429,9 @@ CORE PEDAGOGICAL & EXPLANATION RULES:
    - Use `### *[Sub-topic Title]*` for specific sub-types, stages, or sub-mechanisms (H3).
 5. CLINICAL OVERVIEW FIRST: Immediately after the main H1 topic heading, provide a clear 1-2 sentence high-level overview or definition so the student instantly grasps the core concept before diving into sub-sections.
 6. READABLE LISTS & BULLET POINTS: Use structured bullet points (`- `) and numbered lists (`1. `, `2. `) separated by full blank lines (`\n\n`) for effortless reading on mobile screens.
-7. BOLD HIGHLIGHTS & BLOCKQUOTES:
+7. BOLD HIGHLIGHTS & SENIOR EXAM PEARLS:
    - Highlight all key terms, drug names, diagnostic thresholds, and vital signs in bold (*Drug Name*, *Diagnostic Sign*).
-   - Use `> *Key Clinical Takeaway:* ...` or `> *High-Yield Exam Pearl:* ...` blockquotes to highlight crucial summary takeaways, red-flag symptoms, and board-exam essentials.
+   - Always include a `> 💡 *Senior's Exam Tip:* ...` blockquote highlighting a classic exam pitfall, board-exam buzzword, or high-yield clinical association that examiners love to test.
 8. ZERO TEXTBOOK META-TALK & ZERO SOURCE CITATIONS: Absolutely NEVER use phrases like "your textbook explains", "the text states", "according to your books", or refer to textbooks/sources. State all medical facts directly with authoritative clinical expertise. Never output citation lists or footnote blocks.
 9. ZERO FABRICATED FIGURE CITATIONS: Absolutely NEVER invent or mention specific figure numbers, table numbers, or plate numbers (e.g., NEVER write "Figure 46-9", "Fig 12.8", "Table 14.2").
 10. NO PREAMBLES & NO FILLER: Jump DIRECTLY into the medical explanation starting with the `# *📖 [TOPIC NAME: CLINICAL FOCUS]*` heading. Zero conversational filler, greetings, or announcements.
@@ -492,8 +492,34 @@ async def classify_intent(message: str) -> str:
     if any(re.search(pat, msg_clean) for pat in gratitude_patterns):
         return "GRATITUDE"
 
-    if msg_clean in ["ok", "okay", "k", "alright", "cool", "noted", "got it", "understood", "makes sense", "i see", "nice", "great", "awesome", "perfect", "good", "fine", "correct", "yes", "yep", "yeah"]:
+    ack_words = {"ok", "okay", "k", "alright", "cool", "noted", "got", "it", "understood", "makes", "sense", "i", "see", "nice", "great", "awesome", "perfect", "good", "fine", "correct", "yes", "yep", "yeah", "clear", "loud"}
+    words_in_msg = msg_clean.split()
+    if words_in_msg and all(w in ack_words for w in words_in_msg) and len(words_in_msg) <= 4:
         return "ACKNOWLEDGMENT"
+
+    # 2.1 Direct Name Callout or Friendly Presence Check Fast-Path (<0.01ms)
+    msg_no_punc = re.sub(r'[^\w\s]', ' ', msg_clean).strip()
+    if msg_no_punc in ["neura", "neura ai", "hey neura", "hi neura", "hello neura", "neura dear"]:
+        return "CONVERSATIONAL"
+
+    # 2.2 Presence Check-ins, Emotional Venting & Casual Banter Fast-Path
+    conversational_fast_patterns = [
+        r"\b(are\s*(you|u)\s*(still\s*)?(there|here|awake|listening|around|alive|online|present))\b",
+        r"\b(u\s*(still\s*)?(there|here|awake|listening|around|alive|online))\b",
+        r"\b(you\s*(still\s*)?(there|here|awake|listening|around))\b",
+        r"\b(are\s*(you|u)\s*ready)\b",
+        r"\b(i('m|\s*am)?\s*(so\s*)?(tired|exhausted|sleepy|drained|stressed|burnt\s*out|dying|choking))\b",
+        r"\b(med\s*school\s*(is\s*)?(hard|killing\s*me|stressful|tough|choking\s*me))\b",
+        r"\b(ward\s*rounds?\s*(was|were|is)\s*(long|stressful|tiring|hectic|crazy|brutal))\b",
+        r"\b(tell\s*me\s*a\s*joke|make\s*me\s*laugh)\b",
+        r"\b(who\s*made\s*you|who\s*created\s*you|are\s*you\s*(real|human|an?\s*ai))\b",
+        r"\b(what\s*are\s*you\s*doing|what('s|\s*is)\s*up\s*with\s*you)\b",
+        r"\b(i\s*(hate|dislike)\s*(anatomy|pathology|pharm|biochem|studying|reading))\b",
+        r"\b(i\s*failed|i('m|\s*am)\s*scared\s*of\s*(exams?|profs?))\b",
+        r"\b(how\s*(should|can|do)\s*i\s*study|study\s*tips?|how\s*to\s*pass)\b"
+    ]
+    if any(re.search(pat, msg_clean) for pat in conversational_fast_patterns):
+        return "CONVERSATIONAL"
 
     greeting_patterns = [
         r"\b(hi|hello|hey|heya|yo|sup|wassup|what'?s\s*up|good\s*(morning|afternoon|evening|day)|greetings)\b",
@@ -526,19 +552,20 @@ async def classify_intent(message: str) -> str:
     if msg_clean and is_gibberish_pattern:
         return "GIBBERISH"
 
-    # 4. LLM Universal Intent Classifier (Handles ANY language: German, French, Arabic, slang, gibberish, vague chatter)
+    # 5. LLM Universal Intent Classifier (Handles ANY language: German, French, Arabic, slang, gibberish, vague chatter)
     if OPENROUTER_API_KEY:
         try:
             router_prompt = (
-                "You are an intent classifier for NEURA AI, a medical study co-pilot.\n"
-                "Analyze the user's message (which could be English, Nigerian Pidgin/slang, German, French, Arabic, Yoruba, Igbo, Hausa, or any language) and classify it into EXACTLY ONE label:\n"
-                "- GREETING: Greetings, hello, how are you, Nigerian slang (e.g. 'how far', 'boss man', 'wetin dey'), foreign greetings (e.g. German 'wie gehts', French 'bonjour', 'kedu'), introductions ('who are you', 'what can you do').\n"
-                "- CONVERSATIONAL: Banter, rhetorical questions, meta-questions about the bot/study approach (e.g. 'who told you to drill me via usmle', 'why did you say that', 'who made you', 'are you sure', 'can you speak French', 'what books do you have').\n"
-                "- GRATITUDE: Thank you, thanks, nice one, well done, praise, appreciation in any language.\n"
+                "You are an intent classifier for NEURA AI, a medical study companion.\n"
+                "Analyze the user's message and classify it into EXACTLY ONE label:\n"
+                "- GREETING: Simple greetings, hello, foreign greetings (e.g. 'bonjour', 'kedu', 'bawo').\n"
+                "- CONVERSATIONAL: Casual banter, presence checks (e.g. 'are you there', 'u there', 'are you still there', 'you awake', 'neura are you listening'), emotional venting (e.g. 'I am so tired', 'ward rounds were tough', 'med school is hard', 'I hate studying', 'I failed'), general study strategy (e.g. 'how should I study pharmacology'), rhetorical/meta questions (e.g. 'who made you', 'are you real', 'what can you do').\n"
+                "- GRATITUDE: Thank you, thanks, nice one, well done, praise, appreciation.\n"
                 "- ACKNOWLEDGMENT: Short confirmations (ok, cool, noted, got it, understood, alright).\n"
                 "- GIBBERISH: Random keyboard mash, nonsense characters (e.g. 'asdfgh', '12345', '????'), meaningless noise.\n"
                 "- QUIZ: Explicit requests for MCQs, practice questions, quizzes, tests.\n"
-                "- MEDICAL: Genuine clinical or medical study questions (disease pathophysiology, pharmacology, anatomy, biochemistry, clinical management, symptoms, mechanisms).\n\n"
+                "- MEDICAL: Genuine clinical or medical curriculum study questions (disease pathophysiology, pharmacology, anatomy, biochemistry, clinical management, symptoms, mechanisms).\n\n"
+                "CRITICAL: If a user is merely checking if you are there, saying your name, or venting about being tired/stressed, classify as CONVERSATIONAL. Never classify personal chatter as MEDICAL.\n"
                 "Output ONLY the category name in uppercase with no punctuation."
             )
             url = "https://openrouter.ai/api/v1/chat/completions"
@@ -2018,7 +2045,8 @@ SEARCH_STOP_WORDS = {
     "talk", "talking", "teach", "show", "break", "down", "breakdown",
     "diagram", "diagrams", "illustration", "illustrations", "picture", "pictures",
     "image", "images", "draw", "drawing", "drawings", "photo", "photos", "pic", "pics",
-    "sketch", "visual", "visualize", "view"
+    "sketch", "visual", "visualize", "view",
+    "neura", "ai", "there", "still", "here", "u", "ur", "ready", "online", "awake"
 }
 
 SPECIAL_SHORT_MEDICAL = {"b", "t", "nk", "av", "sa", "ph", "c3", "c4", "c5", "k", "na", "ca", "fe", "mg", "ig"}
@@ -2287,6 +2315,7 @@ async def normalize_medical_query(user_msg: str) -> dict:
         "You are an expert MBBS medical query normalizer. Medical students frequently send questions with medical acronyms (e.g. 'ALL' for Acute Lymphoblastic Leukemia, 'AML', 'CLL', 'CML', 'DKA', 'GERD', 'DVT', 'PE', 'ARDS', 'DIC', 'SLE', 'MEN1', 'RAAS', 'COPD', 'ITP', 'TTP'), shorthand, slang, typos (e.g. 'disassociation', 'pnuemonia', 'arrythmia'), or in other languages.\n"
         "1. Dynamically recognize any medical acronyms or abbreviations, fix any typos, and resolve the query to proper clinical terminology.\n"
         "2. Generate 2 to 4 authoritative medical textbook search queries (including pharmacological classes, anatomical names, or physiological processes).\n"
+        "3. CRITICAL NON-MEDICAL GUARDRAIL: If the user input is NOT a medical or clinical question (e.g. casual check-in, greeting, or remark like 'are you there', 'hello', 'who are you', 'tell me a joke'), do NOT invent or force a medical disease. Return: {\"corrected_topic\": \"\", \"search_keywords\": []}.\n"
         "Output ONLY a valid JSON object in this exact schema:\n"
         "{\n"
         '  "corrected_topic": "Acute Lymphoblastic Leukemia Symptoms",\n'
@@ -3387,21 +3416,37 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 return
 
         if intent == "CONVERSATIONAL":
-            conv_prompt = (
-                f"You are NEURA AI, an encouraging, sharp, and friendly medical study co-pilot for {name}, a {level} MBBS medical student.\n"
-                f"The student sent a conversational/meta question or playful remark: \"{user_msg}\"\n"
-                f"Respond warmly, naturally, and concisely in 2-3 sentences. Be witty, supportive, and encourage them to throw any clinical topic, drug mechanism, or case study at you whenever they're ready.\n"
-                f"Do NOT output a textbook lecture, headers, or bulleted chapters. Output pure conversational WhatsApp text."
+            conv_system = (
+                f"You are Neura, a brilliant, warm, and empathetic senior medical colleague (like a trusted senior resident or sharp study buddy) chatting with {name}, a {level} MBBS medical student on WhatsApp.\n"
+                "PERSONA & VOICE GUIDELINES:\n"
+                "- Sound like an authentic, supportive human colleague texting on WhatsApp, NOT an AI bot, search engine, or robot.\n"
+                "- If the student is checking in ('are you there', 'u there', emojis like 🥺), respond with genuine warmth and reassurance (e.g. 'Always right here with you! 😊 Taking a breather, or are we diving into something new?').\n"
+                "- If the student is exhausted, stressed, or venting about ward rounds / med school, validate their feelings with real empathy and encouragement (e.g. 'Ward rounds can be brutal, Doc. Grab some water and take a quick break—you've got this!').\n"
+                "- If they ask general study advice ('how do I study pharm', 'tips for 300L'), give practical, high-yield guidance in a peer-to-peer tone.\n"
+                "- Keep responses concise (1 to 3 short, natural WhatsApp sentences max). Use conversational contractions ('I'm', 'let's', 'you're').\n"
+                "- STRICT PROHIBITION: Under NO circumstances output a medical textbook lecture, headers, bulleted lists, '📖 [TOPIC]' titles, or video links here. Output pure natural conversational WhatsApp chat."
             )
             chat_history = []
             if chat_history_col is not None:
                 user_doc_hist = await chat_history_col.find_one({"user_id": sender_phone})
                 if user_doc_hist and "messages" in user_doc_hist:
-                    chat_history = user_doc_hist["messages"][-4:]
-            conv_reply = await call_openrouter_llm("You are NEURA AI, a friendly and encouraging medical study partner.", conv_prompt, chat_history=chat_history, max_tokens=300)
+                    chat_history = user_doc_hist["messages"][-6:]
+            conv_reply = await call_openrouter_llm(conv_system, user_msg, chat_history=chat_history, max_tokens=250)
             if not conv_reply:
-                conv_reply = f"Haha, fair point *{name}*! 😄 I'm here to help you conquer your medical exams and master tough clinical concepts at your own pace.\n\nWhenever you're ready, what topic or case study are we breaking down today?"
+                conv_reply = f"Always right here with you, *{name}*! 😊\n\nTaking a quick breather, or are we diving into something new?"
             await send_whatsapp_cloud_msg(sender_phone, conv_reply)
+            
+            # Save to chat history
+            if chat_history_col is not None:
+                new_msgs = [
+                    {"role": "user", "content": user_msg},
+                    {"role": "assistant", "content": conv_reply}
+                ]
+                await chat_history_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$push": {"messages": {"$each": new_msgs}}},
+                    upsert=True
+                )
             return
 
         if intent == "GRATITUDE":
@@ -3516,6 +3561,19 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         clean_topic = clean_medical_topic_title(search_term, normalized_data.get("corrected_topic", ""))
         medical_terms = normalized_data.get("search_keywords") or local_terms
+
+        # ⚡ Conversational Safety Valve: If query has zero medical terms and zero normalized keywords, treat as conversational
+        if not local_terms and not normalized_data.get("search_keywords"):
+            print(f"[SAFETY VALVE] Query '{search_term}' has 0 medical keywords. Redirecting to Conversational Companion...")
+            conv_system = (
+                f"You are Neura, a brilliant, warm, and supportive senior medical colleague talking to {name}, a {level} MBBS medical student on WhatsApp.\n"
+                "Respond warmly, naturally, and concisely in 1-2 sentences. Keep it conversational. Under no circumstances output textbook headers, bulleted lists, or clinical definitions here."
+            )
+            conv_reply = await call_openrouter_llm(conv_system, user_msg, max_tokens=200)
+            if not conv_reply:
+                conv_reply = f"I'm right here with you, *{name}*! 😊 What medical topic or case study are we breaking down today?"
+            await send_whatsapp_cloud_msg(sender_phone, conv_reply)
+            return
 
         # ⚡ Fast-Path Check: If local search returned >= 3 high-confidence chunks, bypass evaluator completely!
         is_high_confidence = (
