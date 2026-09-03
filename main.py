@@ -4,6 +4,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 import os
+import gc
 import re
 import json
 import logging
@@ -92,10 +93,14 @@ print(f"PHONE_NUMBER_ID: {PHONE_NUMBER_ID}")
 from collections import OrderedDict
 import time
 
-embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", threads=1)
 qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=30, max_connections=60))
-embedding_pool = ThreadPoolExecutor(max_workers=4)
+shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=40))
+embedding_pool = ThreadPoolExecutor(max_workers=2)
+
+# Lightweight in-memory query vector cache (<1MB RAM for 500 common curriculum topics)
+QUERY_VECTOR_CACHE = OrderedDict()
+MAX_VECTOR_CACHE = 500
 
 # Model Architecture & Provider Routing (openai/gpt-oss-120b with Ultra-Fast LPU/RDU/WSE silicon priority)
 DEFAULT_MODEL = "openai/gpt-oss-120b"
@@ -122,8 +127,15 @@ def get_reasoning_config(prompt: str = "", is_micro: bool = False) -> dict:
     return {"effort": "low", "exclude": True}
 
 def get_embedding_sync(text: str):
+    clean_k = text.strip().lower()
+    if clean_k in QUERY_VECTOR_CACHE:
+        QUERY_VECTOR_CACHE.move_to_end(clean_k)
+        return QUERY_VECTOR_CACHE[clean_k]
     t0 = time.perf_counter()
     vec = list(embedder.embed(text))[0]
+    if len(QUERY_VECTOR_CACHE) >= MAX_VECTOR_CACHE:
+        QUERY_VECTOR_CACHE.popitem(last=False)
+    QUERY_VECTOR_CACHE[clean_k] = vec
     dt = time.perf_counter() - t0
     print(f"⏱️ [EMBED TIMER] FastEmbed on '{text[:45]}...' took {dt*1000:.1f}ms ({dt:.3f}s)")
     return vec
@@ -1629,6 +1641,8 @@ async def process_whatsapp_audio(sender_phone: str, media_id: str, is_tagged_rep
 
     # Step 2: Transcribe via Groq Whisper Large v3
     transcript, is_valid, error_reason = await transcribe_voice_note(audio_bytes, mime_type)
+    del audio_bytes
+    gc.collect()
     print(f"🎙️ [VOICE TRANSCRIPT] ({sender_phone}): '{transcript}' | Valid: {is_valid} | Reason: {error_reason}")
 
     # Step 3: Handle inaudible / gibberish audio
@@ -3841,6 +3855,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         print(f"ERROR in process_whatsapp_message: {str(e)}")
         print(traceback.format_exc())
         await send_whatsapp_cloud_msg(sender_phone, "Sorry, NEURA AI experienced a temporary connection delay. Please try asking your medical question again!")
+    finally:
+        gc.collect()
 
 # ==========================================
 # 3. ENDPOINTS
