@@ -545,6 +545,10 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
         r"\b(med\s*school\s*(is\s*)?(hard|killing\s*me|stressful|tough|choking\s*me))\b",
         r"\b(ward\s*rounds?\s*(was|were|is)\s*(long|stressful|tiring|hectic|crazy|brutal))\b",
         r"\b(tell\s*me\s*a\s*joke|make\s*me\s*laugh)\b",
+        r"\b(who|which\s*person|is\s*it\s*\w+)\s*(that\s*)?(made|created|built|developed|designed|owns?|founded)\s*(you|neura)\b",
+        r"\b(who\s*(is|are)\s*(your\s*)?(maker|creator|developer|founder|boss|father|owner|team))\b",
+        r"\b(did\s*\w+\s*(make|create|build)\s*(you|neura))\b",
+        r"\b(is\s*it\s*samuel)\b",
         r"\b(who\s*made\s*you|who\s*created\s*you|are\s*you\s*(real|human|an?\s*ai))\b",
         r"\b(what\s*are\s*you\s*doing|what('s|\s*is)\s*up\s*with\s*you)\b",
         r"\b(i\s*(hate|dislike)\s*(anatomy|pathology|pharm|biochem|studying|reading))\b",
@@ -634,6 +638,7 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
             }
             user_input_with_history = f"{dialog_str}LATEST STUDENT MESSAGE:\n\"{message}\""
             payload = {
+                "model": FRONTDESK_MODEL,
                 "models": [FRONTDESK_MODEL, FALLBACK_MODEL],
                 "messages": [
                     {"role": "system", "content": router_prompt},
@@ -650,14 +655,27 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
                 for valid in ["PLATFORM_META", "GREETING", "CONVERSATIONAL", "GRATITUDE", "ACKNOWLEDGMENT", "GIBBERISH", "QUIZ", "MEDICAL"]:
                     if valid in cat:
                         return valid
+            else:
+                print(f"⚠️ LLM Intent Classifier non-200 ({resp.status_code}): {resp.text[:150]}")
         except Exception as e:
             print(f"LLM Intent Classifier fallback error: {e}")
 
-    # Default fallback
+    # Default fallback: Only classify as MEDICAL if genuine clinical indicators or medical query patterns are present
+    known_med_indicators = [
+        "syndrome", "disease", "treatment", "pathology", "pharmacology", "anatomy", "physiology", 
+        "symptoms", "diagnosis", "mechanism", "pathophysiology", "infection", "bacteria", "virus", 
+        "artery", "nerve", "muscle", "bone", "cell", "receptor", "drug", "inhibitor", "agonist", 
+        "antagonist", "furosemide", "prazosin", "malaria", "pneumonia", "diabetes", "hypertension", 
+        "anemia", "carcinoid", "hypersensitivity", "dose", "dosage", "clinical", "patient", "presentation",
+        "sign", "management", "investigation", "surgery", "surgical", "complication"
+    ]
     terms = extract_medical_terms(message)
-    if len(msg_clean) <= 4 or not terms:
+    is_not_conversational = not any(w in msg_clean for w in ["who made", "who created", "samuel", "joke", "weather", "who are you", "what can you do", "introduce yourself"])
+    if any(ind in msg_clean for ind in known_med_indicators) or (terms and is_not_conversational and len(msg_clean.split()) >= 2):
+        return "MEDICAL"
+    if len(msg_clean.split()) <= 2:
         return "GIBBERISH"
-    return "MEDICAL"
+    return "CONVERSATIONAL"
 
 async def call_openrouter_llm(
     system_prompt: str, 
@@ -689,6 +707,7 @@ async def call_openrouter_llm(
     
     target_models = models or ([model] if model else [CLINICAL_MODEL, FRONTDESK_MODEL, FALLBACK_MODEL])
     payload = {
+        "model": target_models[0],
         "models": target_models,
         "messages": messages,
         "temperature": 0.2,
@@ -2112,7 +2131,8 @@ SEARCH_STOP_WORDS = {
     "diagram", "diagrams", "illustration", "illustrations", "picture", "pictures",
     "image", "images", "draw", "drawing", "drawings", "photo", "photos", "pic", "pics",
     "sketch", "visual", "visualize", "view",
-    "neura", "ai", "there", "still", "here", "u", "ur", "ready", "online", "awake"
+    "neura", "ai", "there", "still", "here", "u", "ur", "ready", "online", "awake",
+    "samuel", "sam", "creator", "developer", "founder", "maker", "built", "build"
 }
 
 SPECIAL_SHORT_MEDICAL = {"b", "t", "nk", "av", "sa", "ph", "c3", "c4", "c5", "k", "na", "ca", "fe", "mg", "ig"}
@@ -2403,6 +2423,7 @@ async def normalize_medical_query(user_msg: str, chat_history: list = None) -> d
     )
     user_payload_content = f"{dialog_str}STUDENT QUERY: \"{user_msg}\""
     payload = {
+        "model": FRONTDESK_MODEL,
         "models": [FRONTDESK_MODEL, FALLBACK_MODEL],
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -3535,6 +3556,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 f"You are Neura, a brilliant, warm, and empathetic senior medical colleague (like a trusted senior resident or sharp study buddy) chatting with {name}, a {level} MBBS medical student on WhatsApp.\n"
                 "PERSONA & VOICE GUIDELINES:\n"
                 "- Sound like an authentic, supportive human colleague texting on WhatsApp, NOT an AI bot, search engine, or robot.\n"
+                "- CREATOR / SAMUEL QUESTIONS: If asked who created you, who made you, or if Samuel made you ('Is it Samuel that made you?'): Acknowledge warmly, proudly, and directly! Yes, Samuel is the visionary developer and founder who engineered and trained NEURA AI specifically to help Nigerian MBBS students conquer their medical training.\n"
                 "- If the student is checking in ('are you there', 'u there', emojis like 🥺), respond with genuine warmth and reassurance (e.g. 'Always right here with you! 😊 Taking a breather, or are we diving into something new?').\n"
                 "- If the student is exhausted, stressed, or venting about ward rounds / med school, validate their feelings with real empathy and encouragement (e.g. 'Ward rounds can be brutal, Doc. Grab some water and take a quick break—you've got this!').\n"
                 "- If they ask general study advice ('how do I study pharm', 'tips for 300L'), give practical, high-yield guidance in a peer-to-peer tone.\n"
@@ -3757,14 +3779,9 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         critical_inst = (
             f"CRITICAL PEDAGOGICAL INSTRUCTION:\n"
-            f"1. STRICT TEXTBOOK GROUNDING: Answer using the factual medical mechanisms, clinical classifications, and details provided in the RETRIEVED MEDICAL KNOWLEDGE CONTEXT. Do not invent non-curricular topics.\n"
-            f"2. Start with H1 header: # *📖 {clean_topic.upper()}* followed immediately by a concise 1-2 sentence high-level overview/definition.\n"
-            f"3. Explain everything in simple, clear, easy-to-understand language while keeping all original clinical depth and scientific accuracy. Stretch explanations where it helps understanding (make mechanisms detailed and clear step-by-step).\n"
-            f"4. Use structured headings for logical hierarchy: ## *[Section Name]* (e.g. ## *Pathophysiology & Core Mechanisms*, ## *Clinical Manifestations*, ## *Diagnostic Workup*, ## *Management & Pharmacology*) and ### *[Sub-topic Name]*.\n"
-            f"5. Use bullet points (- ) and numbered lists (1. ) with double-line spacing for readability.\n"
-            f"6. Highlight important points using bold text (*Key Term*) and > blockquotes (> *Key Clinical Takeaway:* ...) for vital takeaways and pearls.\n"
-            f"7. Whenever a technical term, disease name, syndrome, eponym, or special concept appears (e.g., 'anti-phospholipid syndrome', 'Horner syndrome'), immediately add a short, simple explanation of what it is after it is first mentioned.\n"
-            f"8. Zero textbook meta-talk and zero fabricated figure citations."
+            f"1. STRICT TEXTBOOK GROUNDING: Answer using the factual medical mechanisms, clinical classifications, and details provided in the RETRIEVED MEDICAL KNOWLEDGE CONTEXT.\n"
+            f"2. PROPORTIONAL DEPTH: If the student asks a direct, spot, or factual question, give the direct answer in the first sentence and keep the explanation under 2-4 sentences with zero headers. If the student asks for an in-depth breakdown of a disease or mechanism, provide a structured breakdown with concise bullet points (max 2-3 per section).\n"
+            f"3. Zero textbook meta-talk, zero preambles, and zero fabricated figure citations."
         )
 
         if is_tagged_reply and last_assistant_msg:
