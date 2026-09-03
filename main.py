@@ -510,14 +510,14 @@ JSON Schema format:
 ]
 """
 
-async def classify_intent(message: str) -> str:
+async def classify_intent(message: str, chat_history: list = None) -> str:
     msg_clean = message.strip().lower()
     
     # 1. Quizzes & Exam Testing Intent (Instant Fast-Path)
     if any(k in msg_clean for k in ["mcq", "quiz", "practice question", "test me", "exam question", "generate_quiz", "practice mcqs"]):
         return "QUIZ"
 
-    # 2. Obvious Gratitude / Acknowledgment / Nigerian Slang Fast-Path (<0.05ms)
+    # 2. Obvious Gratitude / Acknowledgment / Fast-Paths (<0.05ms)
     gratitude_patterns = [
         r"\b(thank\s*(you|u)|thanks|thx|ty|tysm|appreciate|god\s*bless(\s*you)?|nice\s*one|well\s*done|welldone|good\s*job|great\s*job)\b",
         r"\byou('re|\s*are)?\s*(smart|good|the\s*best|great|awesome|helpful)\b"
@@ -572,13 +572,18 @@ async def classify_intent(message: str) -> str:
     if any(re.search(pat, msg_clean) for pat in platform_fast_patterns) and not any(ind in msg_clean for ind in ["syndrome", "disease", "treatment", "pathology", "pharmacology", "anatomy", "physiology", "symptoms", "diagnosis", "mechanism", "pathophysiology", "drug"]):
         return "PLATFORM_META"
 
-    # 3. Unambiguous Medical Questions (Fast-Path to vector search)
-    terms = extract_medical_terms(message)
-    known_medical_indicators = ["syndrome", "disease", "treatment", "pathology", "pharmacology", "anatomy", "physiology", "symptoms", "diagnosis", "mechanism", "pathophysiology", "infection", "bacteria", "virus", "artery", "nerve", "muscle", "bone", "cell", "receptor", "drug", "inhibitor", "agonist", "antagonist", "furosemide", "prazosin", "malaria", "pneumonia", "diabetes", "hypertension", "anemia", "carcinoid", "hypersensitivity"]
-    if any(ind in msg_clean for ind in known_medical_indicators) and len(msg_clean.split()) >= 2:
-        return "MEDICAL"
+    # 2.5 Contextual Follow-Up Fast-Path: Check previous assistant message for platform topic
+    followup_meta_phrases = ["what do you mean by that", "what do you mean", "how does that work", "what is that", "explain that", "why is that"]
+    if any(fp in msg_clean for fp in followup_meta_phrases) and chat_history:
+        last_assistant_msg = ""
+        for m in reversed(chat_history):
+            if m.get("role") == "assistant":
+                last_assistant_msg = m.get("content", "").lower()
+                break
+        if any(w in last_assistant_msg for w in ["feedback", "beta", "wallet", "deposit", "command", "anonymous", "profile", "streak"]):
+            return "PLATFORM_META"
 
-    # 4. Deterministic Gibberish & Noise Filter (y is treated as vowel)
+    # 3. Deterministic Gibberish & Noise Filter (y is treated as vowel)
     clean_alpha = re.sub(r'[^a-zA-Z]', '', msg_clean)
     has_long_consonants = bool(re.search(r'[bcdfghjklmnpqrstvwxz]{5,}', msg_clean))
     is_gibberish_pattern = bool(
@@ -592,21 +597,32 @@ async def classify_intent(message: str) -> str:
     if msg_clean and is_gibberish_pattern:
         return "GIBBERISH"
 
-    # 5. LLM Universal Intent Classifier (Handles ANY language: German, French, Arabic, slang, gibberish, vague chatter)
+    # 4. Context-Aware LLM Universal Intent Classifier (Gemini 2.5 Flash Lite reads the conversation)
     if OPENROUTER_API_KEY:
         try:
+            # Build conversation snippet
+            dialog_str = ""
+            if chat_history:
+                turns = []
+                for turn in chat_history[-4:]:
+                    r = "Student" if turn.get("role") == "user" else "Assistant"
+                    snippet = str(turn.get("content", ""))[:180].replace("\n", " ")
+                    turns.append(f"{r}: {snippet}")
+                if turns:
+                    dialog_str = "RECENT CONVERSATION HISTORY:\n" + "\n".join(turns) + "\n\n"
+
             router_prompt = (
-                "You are an intent classifier for NEURA AI, a medical study companion.\n"
-                "Analyze the user's message and classify it into EXACTLY ONE label:\n"
-                "- PLATFORM_META: Questions about the NEURA AI platform itself, its features, commands (/wallet, /deposit, /feedback, /profile), anonymous beta feedback, data privacy, confidentiality, pricing, token balance, how the bot works, or who created it.\n"
+                "You are an expert conversational intent classifier for NEURA AI, a medical study companion for MBBS students.\n"
+                "Read the RECENT CONVERSATION HISTORY (if provided) and the student's LATEST MESSAGE to determine their true semantic intent:\n\n"
+                "- PLATFORM_META: Questions about the NEURA AI platform itself, its features, commands (/wallet, /deposit, /feedback, /profile), anonymous beta testing, privacy, data confidentiality, pricing, token balance, how the bot works, or who created it.\n"
+                "  * CRITICAL CONTEXT RULE: If the assistant just mentioned 'beta feedback', 'wallet', 'streak', or commands and the student asks 'what do you mean by that?', 'why?', or asks for clarification, classify as PLATFORM_META!\n"
                 "- GREETING: Simple greetings, hello, foreign greetings (e.g. 'bonjour', 'kedu', 'bawo').\n"
-                "- CONVERSATIONAL: Casual banter, presence checks (e.g. 'are you there', 'u there', 'are you still there', 'you awake', 'neura are you listening'), emotional venting (e.g. 'I am so tired', 'ward rounds were tough', 'med school is hard', 'I hate studying', 'I failed'), general study strategy (e.g. 'how should I study pharmacology'), rhetorical questions.\n"
+                "- CONVERSATIONAL: Casual banter, presence checks ('are you there', 'u there', 'are you still there', 'you awake'), emotional venting ('I am so tired', 'ward rounds were tough', 'med school is hard'), personal chatter.\n"
                 "- GRATITUDE: Thank you, thanks, nice one, well done, praise, appreciation.\n"
                 "- ACKNOWLEDGMENT: Short confirmations (ok, cool, noted, got it, understood, alright).\n"
                 "- GIBBERISH: Random keyboard mash, nonsense characters (e.g. 'asdfgh', '12345', '????'), meaningless noise.\n"
                 "- QUIZ: Explicit requests for MCQs, practice questions, quizzes, tests.\n"
-                "- MEDICAL: Genuine clinical or medical curriculum study questions (disease pathophysiology, pharmacology, anatomy, biochemistry, clinical management, symptoms, mechanisms).\n\n"
-                "CRITICAL: If a user is asking about the app, beta feedback, privacy, or features, classify as PLATFORM_META. If checking presence or venting, classify as CONVERSATIONAL. Never classify platform or personal chatter as MEDICAL.\n"
+                "- MEDICAL: Genuine clinical or medical curriculum study questions (disease pathophysiology, pharmacology, anatomy, biochemistry, clinical management, symptoms, mechanisms, or contextual follow-up questions to an ongoing medical topic).\n\n"
                 "Output ONLY the category name in uppercase with no punctuation."
             )
             url = "https://openrouter.ai/api/v1/chat/completions"
@@ -616,11 +632,12 @@ async def classify_intent(message: str) -> str:
                 "HTTP-Referer": "https://neura-ai.org",
                 "X-Title": "NEURA AI Intent Router"
             }
+            user_input_with_history = f"{dialog_str}LATEST STUDENT MESSAGE:\n\"{message}\""
             payload = {
                 "models": [FRONTDESK_MODEL, FALLBACK_MODEL],
                 "messages": [
                     {"role": "system", "content": router_prompt},
-                    {"role": "user", "content": message}
+                    {"role": "user", "content": user_input_with_history}
                 ],
                 "temperature": 0.0,
                 "max_tokens": 15,
@@ -637,6 +654,7 @@ async def classify_intent(message: str) -> str:
             print(f"LLM Intent Classifier fallback error: {e}")
 
     # Default fallback
+    terms = extract_medical_terms(message)
     if len(msg_clean) <= 4 or not terms:
         return "GIBBERISH"
     return "MEDICAL"
@@ -2345,8 +2363,8 @@ def extract_medical_terms(user_msg: str) -> list:
     print(f"⏱️ [KEYWORD TIMER] extract_medical_terms finished in {(time.perf_counter() - t0)*1000:.2f}ms -> {phrases}")
     return phrases
 
-async def normalize_medical_query(user_msg: str) -> dict:
-    """Upfront Micro-LLM normalizer: resolves typos, abbreviations, and expands clinical concepts into standard textbook search queries."""
+async def normalize_medical_query(user_msg: str, chat_history: list = None) -> dict:
+    """Upfront Micro-LLM normalizer: resolves typos, abbreviations, pronouns ('it', 'that', 'the surgery'), and expands clinical concepts into standard textbook search queries."""
     t_start = time.perf_counter()
     fallback_result = {"search_keywords": extract_medical_terms(user_msg), "corrected_topic": user_msg}
     if not OPENROUTER_API_KEY:
@@ -2359,11 +2377,23 @@ async def normalize_medical_query(user_msg: str) -> dict:
         "HTTP-Referer": "https://neura-ai.org",
         "X-Title": "NEURA AI Medical Assistant"
     }
+    
+    dialog_str = ""
+    if chat_history:
+        turns = []
+        for turn in chat_history[-3:]:
+            r = "Student" if turn.get("role") == "user" else "Assistant"
+            snippet = str(turn.get("content", ""))[:180].replace("\n", " ")
+            turns.append(f"{r}: {snippet}")
+        if turns:
+            dialog_str = "RECENT CONVERSATION CONTEXT:\n" + "\n".join(turns) + "\n\n"
+
     system_prompt = (
-        "You are an expert MBBS medical query normalizer. Medical students frequently send questions with medical acronyms (e.g. 'ALL' for Acute Lymphoblastic Leukemia, 'AML', 'CLL', 'CML', 'DKA', 'GERD', 'DVT', 'PE', 'ARDS', 'DIC', 'SLE', 'MEN1', 'RAAS', 'COPD', 'ITP', 'TTP'), shorthand, slang, typos (e.g. 'disassociation', 'pnuemonia', 'arrythmia'), or in other languages.\n"
-        "1. Dynamically recognize any medical acronyms or abbreviations, fix any typos, and resolve the query to proper clinical terminology.\n"
-        "2. Generate 2 to 4 authoritative medical textbook search queries (including pharmacological classes, anatomical names, or physiological processes).\n"
-        "3. CRITICAL NON-MEDICAL GUARDRAIL: If the user input is NOT a medical or clinical question (e.g. casual check-in, greeting, or remark like 'are you there', 'hello', 'who are you', 'tell me a joke'), do NOT invent or force a medical disease. Return: {\"corrected_topic\": \"\", \"search_keywords\": []}.\n"
+        "You are an expert MBBS medical query normalizer. Medical students frequently send questions with medical acronyms (e.g. 'ALL', 'AML', 'DKA', 'GERD', 'DVT', 'PE', 'ARDS', 'DIC', 'SLE', 'RAAS', 'COPD'), typos, or follow-up questions referencing earlier messages.\n"
+        "1. If the student query uses follow-up pronouns or partial phrases (e.g. 'what of the surgery?', 'can it be cured?', 'side effects of that?'), resolve what 'it' or 'the surgery' refers to using the RECENT CONVERSATION CONTEXT.\n"
+        "2. Dynamically recognize medical acronyms, fix typos, and resolve to proper clinical terminology.\n"
+        "3. Generate 2 to 4 authoritative medical textbook search queries.\n"
+        "4. CRITICAL NON-MEDICAL GUARDRAIL: If the user input is NOT a medical or clinical question (e.g. casual check-in, greeting, or remark like 'are you there', 'hello', 'who are you', 'tell me a joke'), do NOT invent or force a medical disease. Return: {\"corrected_topic\": \"\", \"search_keywords\": []}.\n"
         "Output ONLY a valid JSON object in this exact schema:\n"
         "{\n"
         '  "corrected_topic": "Acute Lymphoblastic Leukemia Symptoms",\n'
@@ -2371,11 +2401,12 @@ async def normalize_medical_query(user_msg: str) -> dict:
         "}\n"
         "Output ONLY valid JSON."
     )
+    user_payload_content = f"{dialog_str}STUDENT QUERY: \"{user_msg}\""
     payload = {
         "models": [FRONTDESK_MODEL, FALLBACK_MODEL],
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_msg}
+            {"role": "user", "content": user_payload_content}
         ],
         "temperature": 0.0,
         "max_tokens": 500,
@@ -3465,9 +3496,16 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             await start_interactive_quiz(sender_phone, quiz_topic.title(), explanation_text=last_explanation)
             return
 
+        # Step 0: Fetch recent conversation history FIRST for 100% contextual awareness
+        recent_chat_history = []
+        if chat_history_col is not None:
+            hist_doc = await chat_history_col.find_one({"user_id": sender_phone})
+            if hist_doc and "messages" in hist_doc:
+                recent_chat_history = hist_doc["messages"][-6:]
+
         query_to_search = user_msg
         t_intent_start = time.perf_counter()
-        intent = await classify_intent(user_msg)
+        intent = await classify_intent(user_msg, chat_history=recent_chat_history)
         print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Intent classified: '{intent}' (took {(time.perf_counter()-t_intent_start)*1000:.1f}ms)")
         
         if intent == "GREETING":
@@ -3687,7 +3725,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         active_books = get_explicit_book_override(search_term, preferred_books_list)
 
         # Launch vector search and micro-LLM normalizer simultaneously in parallel
-        task_norm = normalize_medical_query(search_term)
+        task_norm = normalize_medical_query(search_term, chat_history=recent_chat_history)
         task_search = multi_search_qdrant(local_terms, preferred_books=active_books)
 
         normalized_data, search_res = await asyncio.gather(task_norm, task_search)
