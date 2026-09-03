@@ -102,9 +102,19 @@ embedding_pool = ThreadPoolExecutor(max_workers=2)
 QUERY_VECTOR_CACHE = OrderedDict()
 MAX_VECTOR_CACHE = 500
 
-# Model Architecture & Provider Routing (openai/gpt-oss-120b with Ultra-Fast LPU/RDU/WSE silicon priority)
-DEFAULT_MODEL = "openai/gpt-oss-120b"
-DEFAULT_PROVIDER_ORDER = ["Cerebras", "SambaNova", "Groq", "Together", "Novita", "SiliconFlow", "DeepInfra"]
+# Multi-Engine Intelligent Architecture:
+# 1. Heavy Clinical Medical Engine: Meta Llama 3.3 70B on Cerebras / SambaNova (1,800 tokens/sec)
+CLINICAL_MODEL = "meta-llama/llama-3.3-70b-instruct"
+CLINICAL_PROVIDER_ORDER = ["Cerebras", "SambaNova", "Groq", "Together", "Novita", "DeepInfra"]
+
+# 2. Front-Desk Semantic Intelligence (Intent Classification, Typo Normalizer, Platform & Companion):
+FRONTDESK_MODEL = "google/gemini-2.5-flash-lite"
+
+# 3. Universal Zero-Downtime Fallback:
+FALLBACK_MODEL = "openai/gpt-4o-mini"
+
+DEFAULT_MODEL = CLINICAL_MODEL
+DEFAULT_PROVIDER_ORDER = CLINICAL_PROVIDER_ORDER
 
 def get_reasoning_config(prompt: str = "", is_micro: bool = False) -> dict:
     """Returns dynamic reasoning configuration:
@@ -428,27 +438,38 @@ class QueryRequest(BaseModel):
 # ==========================================
 # 2. SYSTEM PROMPTS & INTENT ROUTER
 # ==========================================
-SYSTEM_MEDICAL_PROMPT = """{user_context}You are Neura, a brilliant, articulate, and supportive senior medical colleague and study co-pilot designed for Nigerian MBBS medical students.
-Your goal is to explain clinical concepts, pathophysiological mechanisms, diagnostic criteria, and pharmacotherapies with maximum clarity, scientific depth, and easy-to-understand structure.
+SYSTEM_MEDICAL_PROMPT = """{user_context}You are Neura, an elite, articulate, and supportive senior medical colleague and study co-pilot designed for Nigerian MBBS medical students.
+Your goal is to explain clinical concepts, pathophysiological mechanisms, diagnostic criteria, and pharmacotherapies with maximum clarity, scientific precision, and mobile-first conciseness.
 
-CORE PEDAGOGICAL & EXPLANATION RULES:
-1. SIMPLE & INTUITIVE LANGUAGE WHILE RETAINING ALL SCIENTIFIC DEPTH: Explain everything in simple, clear, easy-to-understand language while keeping 100% of all medical information, clinical facts, and textbook accuracy. Never dumb down the science; instead, translate complex medical jargon into intuitive, step-by-step logic. Use relatable real-world analogies where helpful (e.g., 'think of the glomerulus as a high-pressure sieve').
-2. STRETCH EXPLANATIONS WHERE HELPFUL: Stretch and expand explanations where it aids deep understanding. Walk through the detailed "how" and "why" behind physiological cascades, pathological lesions, and pharmacological mechanisms so students understand the underlying biology completely.
-3. IMMEDIATE INLINE EXPLANATIONS FOR TECHNICAL TERMS & SYNDROMES: Whenever a technical term, disease name, syndrome, eponym, antibody, or specialized medical concept appears (e.g., "anti-phospholipid syndrome", "Horner syndrome", "pulsus paradoxus", "splinter hemorrhages", "Kussmaul breathing"), IMMEDIATELY add a short, simple explanation of what it is right after it is first mentioned (e.g. in parentheses or as an immediate clarifying clause).
-4. LOGICAL HEADING HIERARCHY (# H1, ## H2, ### H3):
-   - Use `# *📖 [TOPIC NAME: CLINICAL FOCUS]*` for the main title (H1).
-   - Use `## *[Section Title]*` for major clinical sections (e.g., `## *Pathophysiology & Core Mechanisms*`, `## *Clinical Manifestations & Features*`, `## *Diagnostic Criteria & Labs*`, `## *Management & Pharmacology*`) (H2).
-   - Use `### *[Sub-topic Title]*` for specific sub-types, stages, or sub-mechanisms (H3).
-5. CLINICAL OVERVIEW FIRST: Immediately after the main H1 topic heading, provide a clear 1-2 sentence high-level overview or definition so the student instantly grasps the core concept before diving into sub-sections.
-6. READABLE LISTS & BULLET POINTS: Use structured bullet points (`- `) and numbered lists (`1. `, `2. `) separated by full blank lines (`\n\n`) for effortless reading on mobile screens.
-7. BOLD HIGHLIGHTS & SENIOR EXAM PEARLS:
-   - Highlight all key terms, drug names, diagnostic thresholds, and vital signs in bold (*Drug Name*, *Diagnostic Sign*).
-   - Always include a `> 💡 *Senior's Exam Tip:* ...` blockquote highlighting a classic exam pitfall, board-exam buzzword, or high-yield clinical association that examiners love to test.
-8. ZERO TEXTBOOK META-TALK & ZERO SOURCE CITATIONS: Absolutely NEVER use phrases like "your textbook explains", "the text states", "according to your books", or refer to textbooks/sources. State all medical facts directly with authoritative clinical expertise. Never output citation lists or footnote blocks.
-9. ZERO FABRICATED FIGURE CITATIONS: Absolutely NEVER invent or mention specific figure numbers, table numbers, or plate numbers (e.g., NEVER write "Figure 46-9", "Fig 12.8", "Table 14.2").
-10. NO PREAMBLES & NO FILLER: Jump DIRECTLY into the medical explanation starting with the `# *📖 [TOPIC NAME: CLINICAL FOCUS]*` heading. Zero conversational filler, greetings, or announcements.
-11. NO RAW MARKDOWN TABLES: WhatsApp does not render markdown tables. Present all comparisons, drug classifications, or staging summaries as clean bulleted list cards.
-12. DOUBLE-LINE SPACING: Separate every heading, paragraph, bullet point, and blockquote with a blank line (`\n\n`) for clean, spacious mobile readability.
+CORE PEDAGOGICAL & BREVITY RULES:
+1. PROPORTIONAL DEPTH (MATCH THE QUESTION):
+   - DIRECT / SPOT / FACTUAL QUESTIONS (e.g. "What is the drug of choice for X?", "Normal range of Y?", "Which nerve innervates Z?"):
+     * Give the direct, authoritative answer in the very first sentence.
+     * Keep the entire response under 2 to 4 punchy, high-yield sentences.
+     * Do NOT output massive section headers, long introductions, or unnecessary multi-page chapters.
+   - COMPREHENSIVE / MECHANISM TOPICS (e.g. "Explain Tetralogy of Fallot", "Discuss the pathophysiology of DKA"):
+     * Use clean, logical section headings (`## *Pathophysiology*`, `## *Clinical Features*`, `## *Management*`).
+     * Keep each section tight and punchy (max 2-3 structured bullets per section). Never ramble or repeat facts.
+
+2. SIMPLE, INTUITIVE & AUTHORITATIVE: Translate complex jargon into intuitive step-by-step logic while preserving 100% textbook accuracy. Use relatable real-world analogies where helpful (e.g. 'think of the glomerulus as a high-pressure sieve').
+
+3. INLINE CLARIFICATIONS: When an eponym, rare antibody, or complex syndrome appears, add a short parenthetical definition immediately after it.
+
+4. BOLD HIGHLIGHTS: Bold all key drug names, vital signs, diagnostic thresholds, and classic triad signs (*Drug Name*, *Diagnostic Sign*).
+
+5. CONTEXTUAL EXAM TIPS (NEVER FORCED):
+   - Include a `> 💡 *Senior's Exam Tip:* ...` ONLY when genuinely discussing an authentic, exam-tested clinical pitfall, board-exam buzzword, or high-yield medical association.
+   - NEVER invent or force an exam tip for general knowledge, simple queries, or non-clinical topics.
+
+6. ZERO TEXTBOOK META-TALK & ZERO SOURCE CITATIONS: Never say "according to textbooks" or "the text states". Deliver facts directly with senior clinical authority. Never output citation lists or footnote blocks.
+
+7. ZERO FABRICATED FIGURE CITATIONS: Never invent figure numbers (e.g., NEVER write "Figure 46-9", "Fig 12.8").
+
+8. NO PREAMBLES & NO FILLER: Jump DIRECTLY into the answer. Zero conversational filler, greetings, or announcements.
+
+9. NO RAW MARKDOWN TABLES: Present all comparisons or staging summaries as clean bulleted list cards.
+
+10. DOUBLE-LINE SPACING: Separate headings, paragraphs, and bullet points with blank lines (`\n\n`) for effortless reading on mobile screens.
 """
 
 SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based on the retrieved medical context, generate exactly 7 rigorous, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions (MCQs).
@@ -544,6 +565,13 @@ async def classify_intent(message: str) -> str:
     if any(re.search(pat, msg_clean) for pat in greeting_patterns) and len(msg_clean.split()) <= 4:
         return "GREETING"
 
+    # 2.4 Platform, Beta Feedback & Privacy Fast-Path (<0.01ms)
+    platform_fast_patterns = [
+        r"\b(beta\s*feedback|anonymous|feedback|survey|privacy|confidential|wallet|deposit|how\s*to\s*use|commands?|features?)\b"
+    ]
+    if any(re.search(pat, msg_clean) for pat in platform_fast_patterns) and not any(ind in msg_clean for ind in ["syndrome", "disease", "treatment", "pathology", "pharmacology", "anatomy", "physiology", "symptoms", "diagnosis", "mechanism", "pathophysiology", "drug"]):
+        return "PLATFORM_META"
+
     # 3. Unambiguous Medical Questions (Fast-Path to vector search)
     terms = extract_medical_terms(message)
     known_medical_indicators = ["syndrome", "disease", "treatment", "pathology", "pharmacology", "anatomy", "physiology", "symptoms", "diagnosis", "mechanism", "pathophysiology", "infection", "bacteria", "virus", "artery", "nerve", "muscle", "bone", "cell", "receptor", "drug", "inhibitor", "agonist", "antagonist", "furosemide", "prazosin", "malaria", "pneumonia", "diabetes", "hypertension", "anemia", "carcinoid", "hypersensitivity"]
@@ -570,14 +598,15 @@ async def classify_intent(message: str) -> str:
             router_prompt = (
                 "You are an intent classifier for NEURA AI, a medical study companion.\n"
                 "Analyze the user's message and classify it into EXACTLY ONE label:\n"
+                "- PLATFORM_META: Questions about the NEURA AI platform itself, its features, commands (/wallet, /deposit, /feedback, /profile), anonymous beta feedback, data privacy, confidentiality, pricing, token balance, how the bot works, or who created it.\n"
                 "- GREETING: Simple greetings, hello, foreign greetings (e.g. 'bonjour', 'kedu', 'bawo').\n"
-                "- CONVERSATIONAL: Casual banter, presence checks (e.g. 'are you there', 'u there', 'are you still there', 'you awake', 'neura are you listening'), emotional venting (e.g. 'I am so tired', 'ward rounds were tough', 'med school is hard', 'I hate studying', 'I failed'), general study strategy (e.g. 'how should I study pharmacology'), rhetorical/meta questions (e.g. 'who made you', 'are you real', 'what can you do').\n"
+                "- CONVERSATIONAL: Casual banter, presence checks (e.g. 'are you there', 'u there', 'are you still there', 'you awake', 'neura are you listening'), emotional venting (e.g. 'I am so tired', 'ward rounds were tough', 'med school is hard', 'I hate studying', 'I failed'), general study strategy (e.g. 'how should I study pharmacology'), rhetorical questions.\n"
                 "- GRATITUDE: Thank you, thanks, nice one, well done, praise, appreciation.\n"
                 "- ACKNOWLEDGMENT: Short confirmations (ok, cool, noted, got it, understood, alright).\n"
                 "- GIBBERISH: Random keyboard mash, nonsense characters (e.g. 'asdfgh', '12345', '????'), meaningless noise.\n"
                 "- QUIZ: Explicit requests for MCQs, practice questions, quizzes, tests.\n"
                 "- MEDICAL: Genuine clinical or medical curriculum study questions (disease pathophysiology, pharmacology, anatomy, biochemistry, clinical management, symptoms, mechanisms).\n\n"
-                "CRITICAL: If a user is merely checking if you are there, saying your name, or venting about being tired/stressed, classify as CONVERSATIONAL. Never classify personal chatter as MEDICAL.\n"
+                "CRITICAL: If a user is asking about the app, beta feedback, privacy, or features, classify as PLATFORM_META. If checking presence or venting, classify as CONVERSATIONAL. Never classify platform or personal chatter as MEDICAL.\n"
                 "Output ONLY the category name in uppercase with no punctuation."
             )
             url = "https://openrouter.ai/api/v1/chat/completions"
@@ -588,24 +617,20 @@ async def classify_intent(message: str) -> str:
                 "X-Title": "NEURA AI Intent Router"
             }
             payload = {
-                "model": DEFAULT_MODEL,
+                "models": [FRONTDESK_MODEL, FALLBACK_MODEL],
                 "messages": [
                     {"role": "system", "content": router_prompt},
                     {"role": "user", "content": message}
                 ],
                 "temperature": 0.0,
-                "max_tokens": 10,
-                "reasoning": get_reasoning_config(message, is_micro=True),
-                "provider": {
-                    "order": DEFAULT_PROVIDER_ORDER,
-                    "allow_fallbacks": True
-                }
+                "max_tokens": 15,
+                "reasoning": get_reasoning_config(message, is_micro=True)
             }
             resp = await shared_http_client.post(url, headers=headers, json=payload)
             if resp.status_code == 200:
                 choice_msg = resp.json().get("choices", [{}])[0].get("message", {})
                 cat = (choice_msg.get("content") or "").strip().upper()
-                for valid in ["GREETING", "CONVERSATIONAL", "GRATITUDE", "ACKNOWLEDGMENT", "GIBBERISH", "QUIZ", "MEDICAL"]:
+                for valid in ["PLATFORM_META", "GREETING", "CONVERSATIONAL", "GRATITUDE", "ACKNOWLEDGMENT", "GIBBERISH", "QUIZ", "MEDICAL"]:
                     if valid in cat:
                         return valid
         except Exception as e:
@@ -616,7 +641,15 @@ async def classify_intent(message: str) -> str:
         return "GIBBERISH"
     return "MEDICAL"
 
-async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history: list = None, max_tokens: int = 2500) -> str:
+async def call_openrouter_llm(
+    system_prompt: str, 
+    user_prompt: str, 
+    chat_history: list = None, 
+    max_tokens: int = 2500,
+    model: str = None,
+    models: list = None,
+    provider_order: list = None
+) -> str:
     if not OPENROUTER_API_KEY:
         raise ValueError("OPENROUTER_API_KEY environment variable is not set on Render!")
         
@@ -636,14 +669,15 @@ async def call_openrouter_llm(system_prompt: str, user_prompt: str, chat_history
                 messages.append({"role": m["role"], "content": str(m.get("content", ""))})
     messages.append({"role": "user", "content": user_prompt})
     
+    target_models = models or ([model] if model else [CLINICAL_MODEL, FRONTDESK_MODEL, FALLBACK_MODEL])
     payload = {
-        "model": DEFAULT_MODEL,
+        "models": target_models,
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": max_tokens,
         "reasoning": get_reasoning_config(user_prompt, is_micro=False),
         "provider": {
-            "order": DEFAULT_PROVIDER_ORDER,
+            "order": provider_order or DEFAULT_PROVIDER_ORDER,
             "allow_fallbacks": True
         }
     }
@@ -2338,18 +2372,14 @@ async def normalize_medical_query(user_msg: str) -> dict:
         "Output ONLY valid JSON."
     )
     payload = {
-        "model": DEFAULT_MODEL,
+        "models": [FRONTDESK_MODEL, FALLBACK_MODEL],
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg}
         ],
         "temperature": 0.0,
         "max_tokens": 500,
-        "reasoning": get_reasoning_config(user_msg, is_micro=True),
-        "provider": {
-            "order": DEFAULT_PROVIDER_ORDER,
-            "allow_fallbacks": True
-        }
+        "reasoning": get_reasoning_config(user_msg, is_micro=True)
     }
     try:
         res = await shared_http_client.post(url, headers=headers, json=payload)
@@ -3429,6 +3459,39 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
                 return
 
+        if intent == "PLATFORM_META":
+            platform_system = (
+                f"You are Neura, the AI medical study companion for Nigerian MBBS students chatting with {name} on WhatsApp.\n"
+                "The student is asking a question about the NEURA AI platform, beta testing, privacy, feedback, or app features.\n"
+                "GUIDELINES:\n"
+                "- Answer directly, warmly, and naturally in 1 to 3 short sentences.\n"
+                "- If asked what 'anonymous beta feedback' means, explain simply: 'Anonymous beta feedback just means any bug reports, impressions, or suggestions you share are completely confidential and never linked to your name or phone number—so you can be 100% honest with us! 😊'\n"
+                "- If asked who created you or what Neura is, explain that Neura is an AI study co-pilot built specifically for Nigerian MBBS medical students, grounded in accredited curriculum textbooks.\n"
+                "- If asked about commands or wallet, mention they can type /commands to explore features.\n"
+                "- STRICT PROHIBITION: Under NO circumstances output a medical textbook lecture, headers, bulleted chapters, Senior Exam Tips, or YouTube video cards. Output pure natural conversational WhatsApp chat."
+            )
+            chat_history = []
+            if chat_history_col is not None:
+                user_doc_hist = await chat_history_col.find_one({"user_id": sender_phone})
+                if user_doc_hist and "messages" in user_doc_hist:
+                    chat_history = user_doc_hist["messages"][-6:]
+            platform_reply = await call_openrouter_llm(platform_system, user_msg, chat_history=chat_history, max_tokens=250, model=FRONTDESK_MODEL)
+            if not platform_reply:
+                platform_reply = f"Hey *{name}*! Anonymous beta feedback just means any feedback or bug reports you share are completely confidential and not linked to your personal profile or number—so feel free to be 100% honest! 😊"
+            await send_whatsapp_cloud_msg(sender_phone, platform_reply)
+            
+            if chat_history_col is not None:
+                new_msgs = [
+                    {"role": "user", "content": user_msg},
+                    {"role": "assistant", "content": platform_reply}
+                ]
+                await chat_history_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$push": {"messages": {"$each": new_msgs}}},
+                    upsert=True
+                )
+            return
+
         if intent == "CONVERSATIONAL":
             conv_system = (
                 f"You are Neura, a brilliant, warm, and empathetic senior medical colleague (like a trusted senior resident or sharp study buddy) chatting with {name}, a {level} MBBS medical student on WhatsApp.\n"
@@ -3697,10 +3760,28 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             if user_doc and "messages" in user_doc:
                 chat_history = user_doc["messages"][-6:]
 
-        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Dispatching to Main Medical LLM ({len(context_blocks)} chunks, ~{len(formatted_context)} context chars) & Curated YouTube Engine...")
+        # Lock 2: Strict Medical Video Guardrail
+        # A video is ONLY retrieved and attached if:
+        # 1. At least 2 medical chunks were retrieved
+        # 2. At least one chunk has similarity score >= 0.65 (authentic textbook content)
+        # 3. Topic does not contain platform/meta/conversational words
+        non_medical_words = ["feedback", "beta", "anonymous", "wallet", "deposit", "command", "profile", "streak", "hello", "hi", "how are you", "what is neura", "who made", "test", "reminder", "reset"]
+        clean_topic_lower = clean_topic.lower()
+        should_fetch_video = (
+            len(context_blocks) >= 2 and
+            any(getattr(p, 'score', 0) >= 0.65 for p in search_res) and
+            not any(w in clean_topic_lower for w in non_medical_words) and
+            len(clean_topic.strip()) >= 3
+        )
+
+        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Dispatching to Main Medical LLM ({len(context_blocks)} chunks, ~{len(formatted_context)} context chars) | Video Allowed: {should_fetch_video}...")
         t_llm_start = time.perf_counter()
         task_llm = call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
-        task_video = get_curated_youtube_lecture(clean_topic)
+        
+        async def _noop_video():
+            return None
+
+        task_video = get_curated_youtube_lecture(clean_topic) if should_fetch_video else _noop_video()
 
         ai_answer, video_info = await asyncio.gather(task_llm, task_video)
         print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Main Medical LLM finished in {time.perf_counter()-t_llm_start:.3f}s | Video: {bool(video_info)}")
@@ -3723,8 +3804,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         dt_total = time.perf_counter() - req_t0
         print(f"🎉 [PIPELINE COMPLETE | TOTAL: {dt_total:.3f}s] Delivered response to {sender_phone} via WhatsApp Cloud API in {(time.perf_counter()-t_wa_start)*1000:.1f}ms")
 
-        # Deliver High-Definition Video Lecture Card with 1-Tap Play Button
-        if video_info and not is_not_covered:
+        # Deliver High-Definition Video Lecture Card with 1-Tap Play Button ONLY if verified medical topic
+        if video_info and should_fetch_video and not is_not_covered:
             try:
                 await send_whatsapp_video_cta_card(sender_phone, video_info)
             except Exception as vid_err:
