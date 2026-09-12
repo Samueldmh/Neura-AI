@@ -22,6 +22,17 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel
 import numpy as np
 from fastembed import TextEmbedding
+import io
+
+try:
+    import fitz
+except ImportError:
+    fitz = None
+
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -383,6 +394,12 @@ async def startup_event():
             field_schema=models.PayloadSchemaType.KEYWORD
         )
         print("✅ Created/verified Qdrant payload index for 'book_title'")
+        await qdrant.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name="user_id",
+            field_schema=models.PayloadSchemaType.KEYWORD
+        )
+        print("✅ Created/verified Qdrant payload index for 'user_id'")
     except Exception as idx_err:
         print(f"ℹ️ Payload index info: {idx_err}")
         
@@ -1687,8 +1704,8 @@ def is_gibberish_or_silence(text: str, no_speech_prob: float = 0.0, avg_logprob:
 
     return False, ""
 
-async def download_whatsapp_media(media_id: str) -> tuple[bytes, str]:
-    """Downloads binary audio/media from Meta Graph API using the media ID.
+async def download_whatsapp_media(media_id: str, timeout: float = 35.0) -> tuple[bytes, str]:
+    """Downloads binary media (audio, voice notes, PDFs) from Meta Graph API using the media ID.
     Returns (media_bytes, mime_type).
     """
     if not media_id or not WHATSAPP_TOKEN:
@@ -1698,7 +1715,7 @@ async def download_whatsapp_media(media_id: str) -> tuple[bytes, str]:
         meta_media_url = f"https://graph.facebook.com/v19.0/{media_id}"
         auth_headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}"}
         
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             # Step 1: Query Graph API for media download URL
             res = await client.get(meta_media_url, headers=auth_headers)
             if res.status_code != 200:
@@ -1862,6 +1879,502 @@ async def process_whatsapp_audio(sender_phone: str, media_id: str, is_tagged_rep
 
     # Step 4: Route into standard WhatsApp message processor with is_voice=True
     await process_whatsapp_message(sender_phone, transcript, is_tagged_reply, is_voice=True)
+
+# ==========================================
+# USER STUDY VAULT: 3-TIER DOCUMENT GATEKEEPER & INGESTION ENGINE
+# ==========================================
+
+def chunk_text_with_overlap(text: str, chunk_size: int = 850, overlap: int = 150) -> list[str]:
+    """Splits text into overlapping chunks, respecting sentence and paragraph boundaries."""
+    if not text or not text.strip():
+        return []
+    clean_text = re.sub(r'[ \t]+', ' ', text).strip()
+    if len(clean_text) <= chunk_size:
+        return [clean_text]
+    
+    chunks = []
+    start = 0
+    text_len = len(clean_text)
+    
+    while start < text_len:
+        end = start + chunk_size
+        if end >= text_len:
+            chunks.append(clean_text[start:].strip())
+            break
+        
+        # Try to break at a newline or period within the overlap window
+        split_idx = -1
+        sub = clean_text[start:end]
+        for delim in ["\n\n", "\n", ". ", "; ", ", "]:
+            last_pos = sub.rfind(delim, chunk_size - overlap)
+            if last_pos != -1:
+                split_idx = start + last_pos + len(delim)
+                break
+        
+        if split_idx == -1:
+            split_idx = end
+            
+        chunk_str = clean_text[start:split_idx].strip()
+        if len(chunk_str) > 30:
+            chunks.append(chunk_str)
+            
+        start = max(split_idx - overlap, start + 1)
+        
+    return chunks
+
+def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool, str, list[tuple[int, str]], dict]:
+    """
+    Tier 1 Technical Gatekeeper: Extracts text page-by-page from PDF bytes using PyMuPDF (fitz)
+    with pypdf fallback. Enforces encryption checks, page limits, and filters 0-text scanned images.
+    Returns (is_valid, err_code, pages_data, stats) where pages_data is [(page_num, text), ...]
+    """
+    if not pdf_bytes or len(pdf_bytes) < 100:
+        return False, "EMPTY_FILE", [], {"error": "Uploaded file is empty or corrupted."}
+    
+    # Attempt 1: PyMuPDF (fitz)
+    if fitz is not None:
+        try:
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            if doc.is_encrypted:
+                doc.close()
+                return False, "ENCRYPTED", [], {"error": "PDF is password protected."}
+            
+            page_count = len(doc)
+            if page_count == 0:
+                doc.close()
+                return False, "EMPTY_PAGES", [], {"error": "PDF contains 0 pages."}
+            if page_count > 200:
+                doc.close()
+                return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 200).", "page_count": page_count}
+            
+            pages_data = []
+            total_words = 0
+            for idx in range(page_count):
+                page = doc[idx]
+                txt = page.get_text("text").strip()
+                if txt:
+                    words = len(txt.split())
+                    total_words += words
+                    pages_data.append((idx + 1, txt))
+            doc.close()
+            
+            if total_words < 12:
+                return False, "SCANNED_IMAGE", [], {
+                    "error": "Document contains scanned images or photos with no selectable digital text.",
+                    "total_words": total_words,
+                    "page_count": page_count
+                }
+                
+            return True, "OK", pages_data, {"page_count": page_count, "total_words": total_words}
+        except Exception as fitz_err:
+            print(f"⚠️ PyMuPDF extraction failed for {filename}, attempting pypdf fallback: {fitz_err}")
+
+    # Attempt 2: pypdf fallback
+    if pypdf is not None:
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+            if reader.is_encrypted:
+                return False, "ENCRYPTED", [], {"error": "PDF is password protected."}
+            page_count = len(reader.pages)
+            if page_count == 0:
+                return False, "EMPTY_PAGES", [], {"error": "PDF contains 0 pages."}
+            if page_count > 200:
+                return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 200).", "page_count": page_count}
+            
+            pages_data = []
+            total_words = 0
+            for idx, p in enumerate(reader.pages):
+                txt = (p.extract_text() or "").strip()
+                if txt:
+                    words = len(txt.split())
+                    total_words += words
+                    pages_data.append((idx + 1, txt))
+            
+            if total_words < 12:
+                return False, "SCANNED_IMAGE", [], {
+                    "error": "Document contains scanned images or photos with no selectable digital text.",
+                    "total_words": total_words,
+                    "page_count": page_count
+                }
+                
+            return True, "OK", pages_data, {"page_count": page_count, "total_words": total_words}
+        except Exception as pypdf_err:
+            print(f"⚠️ pypdf fallback failed for {filename}: {pypdf_err}")
+
+    return False, "CORRUPTED", [], {"error": "Unable to extract text from this PDF."}
+
+async def evaluate_document_is_medical(sample_text: str, filename: str) -> dict:
+    """
+    Tier 2 AI Gatekeeper: Evaluates whether the extracted text is authentic medical/health study material.
+    Rejects non-medical files (receipts, invoices, CVs, admin forms, non-medical assignments, fiction, spam).
+    """
+    default_title = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ").title()
+    if len(default_title) > 50:
+        default_title = default_title[:47] + "..."
+
+    if not sample_text or len(sample_text.strip()) < 30:
+        return {
+            "is_medical": False,
+            "category": "Unclassified",
+            "title": default_title,
+            "rejection_reason": "The document contains insufficient readable text."
+        }
+
+    prompt = (
+        "You are a strict academic gatekeeper for NEURA AI, an MBBS medical school study assistant.\n"
+        f"File Name: {filename}\n"
+        "Document Sample Text:\n"
+        f"\"\"\"{sample_text[:2000]}\"\"\"\n\n"
+        "Evaluate whether this document is genuine MEDICAL, CLINICAL, BIOMEDICAL, PHARMACEUTICAL, ANATOMICAL, or HEALTH SCIENCES study material (e.g. medical textbooks, lecture slides, clinical guidelines, hospital case notes, pathology slides, pharmacology handouts, journal articles, exam prep questions).\n\n"
+        "REJECT non-medical files, including:\n"
+        "- Receipts, invoices, bank statements, transaction slips, payment receipts\n"
+        "- CVs, resumes, job applications, cover letters\n"
+        "- Administrative documents (admission letters, fee slips, course registration forms, general timetables)\n"
+        "- Non-medical coursework (law, computer science, business, pure literature, non-medical math)\n"
+        "- Personal letters, stories, jokes, memes, spam\n\n"
+        "Output ONLY a valid JSON object in this exact schema (no markdown, no code blocks):\n"
+        "{\n"
+        '  "is_medical": true,\n'
+        '  "category": "Cardiology / Renal Physiology / Pathology / Pharmacology / Anatomy / etc.",\n'
+        '  "title": "Concise, descriptive title for this document (max 50 characters)",\n'
+        '  "rejection_reason": ""\n'
+        "}\n"
+        "If is_medical is false, provide a polite, concise rejection_reason (e.g., 'This file appears to be a financial receipt or payment invoice rather than medical study notes.')."
+    )
+
+    # 1. Ultra-fast evaluation via Groq (<150ms)
+    res_text = await call_groq_chat(prompt, model="llama-3.1-8b-instant", temperature=0.0, max_tokens=250)
+    
+    # 2. OpenRouter fallback if Groq was unavailable
+    if not res_text or not res_text.strip():
+        try:
+            res_text = await call_openrouter_llm("You are an academic gatekeeper. Output ONLY JSON.", prompt, max_tokens=250)
+        except Exception as e:
+            print(f"⚠️ OpenRouter fallback error in document gatekeeper: {e}")
+
+    if res_text:
+        try:
+            clean_json = res_text.strip()
+            if "```json" in clean_json:
+                clean_json = clean_json.split("```json")[-1].split("```")[0].strip()
+            elif "```" in clean_json:
+                clean_json = clean_json.split("```")[-1].split("```")[0].strip()
+            
+            start_brace = clean_json.find("{")
+            end_brace = clean_json.rfind("}")
+            if start_brace != -1 and end_brace != -1:
+                clean_json = clean_json[start_brace:end_brace+1]
+                data = json.loads(clean_json)
+                return {
+                    "is_medical": bool(data.get("is_medical", True)),
+                    "category": data.get("category", "General Medicine"),
+                    "title": data.get("title", default_title) or default_title,
+                    "rejection_reason": data.get("rejection_reason", "")
+                }
+        except Exception as parse_err:
+            print(f"⚠️ Gatekeeper JSON parse error: {parse_err} | Raw: {res_text[:120]}")
+
+    # Heuristic safety fallback: check authentic medical word roots if LLMs are offline
+    MEDICAL_STEMS = [
+        "pharm", "pathol", "physiol", "anatom", "clini", "diagnos", "therap", "syndrom",
+        "diseas", "symptom", "patient", "hyperten", "diabet", "arter", "vein", "nerv",
+        "muscl", "infect", "bacter", "viru", "inhibit", "receptor", "enzym", "protein",
+        "tissu", "cardio", "renal", "nephr", "pulmon", "hepat", "gastr", "cerebr", "vascul",
+        "lesion", "carcin", "biops", "histol", "etiol", "antibiot", "neoplasm", "inflamm",
+        "immun", "antibod", "antigen", "hormon", "endocrin", "metabol", "hematol", "haematol",
+        "leukocyt", "erythrocyt", "platelet", "hemoglobin", "haemoglobin", "surger", "pediatr",
+        "obstetr", "gynecol", "anesthes", "toxicol", "tubul", "glomerul", "microbiol"
+    ]
+    sample_lower = sample_text.lower()
+    matched_stems = [stem for stem in MEDICAL_STEMS if stem in sample_lower]
+    if len(matched_stems) >= 2:
+        return {
+            "is_medical": True,
+            "category": "Medical Study Material",
+            "title": default_title,
+            "rejection_reason": ""
+        }
+    else:
+        return {
+            "is_medical": False,
+            "category": "Unverified",
+            "title": default_title,
+            "rejection_reason": "Could not verify authentic medical, clinical, or health-sciences study content in this document."
+        }
+
+async def index_user_medical_document(
+    sender_phone: str,
+    filename: str,
+    pages_data: list[tuple[int, str]],
+    category: str,
+    clean_title: str
+) -> tuple[bool, int, str]:
+    """
+    Tier 3 Ingestion: Chunks pages, generates embeddings, and upserts into Qdrant collection
+    tagged with user_id=sender_phone and is_user_doc=True.
+    Returns (success, chunk_count, error_msg).
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        
+        # Step 1: Chunk pages with page metadata
+        all_chunks = []
+        for page_num, page_text in pages_data:
+            chunks = chunk_text_with_overlap(page_text, chunk_size=850, overlap=150)
+            for c in chunks:
+                if len(c.strip()) > 35:
+                    all_chunks.append({
+                        "text": c.strip(),
+                        "page_number": page_num
+                    })
+        
+        if not all_chunks:
+            return False, 0, "No extractable chunks found."
+
+        print(f"📑 Ingesting '{clean_title}' for {sender_phone}: {len(all_chunks)} chunks across {len(pages_data)} pages...")
+        
+        # Step 2: Batch compute embeddings using embedding_pool
+        batch_size = 64
+        total_chunks = len(all_chunks)
+        points = []
+        
+        for batch_start in range(0, total_chunks, batch_size):
+            batch_items = all_chunks[batch_start:batch_start + batch_size]
+            batch_texts = [item["text"] for item in batch_items]
+            
+            # Embed synchronously inside ThreadPoolExecutor to keep event loop responsive
+            embeddings = await loop.run_in_executor(
+                embedding_pool,
+                lambda b=batch_texts: list(embedder.embed(b))
+            )
+            
+            for sub_idx, (item, emb) in enumerate(zip(batch_items, embeddings)):
+                chunk_idx = batch_start + sub_idx
+                # Deterministic UUID prevents duplicates on re-upload
+                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{sender_phone}_{clean_title}_{chunk_idx}"))
+                
+                point = models.PointStruct(
+                    id=point_id,
+                    vector=emb.tolist(),
+                    payload={
+                        "text": item["text"],
+                        "book_title": clean_title,
+                        "source_file": filename,
+                        "user_id": str(sender_phone),
+                        "is_user_doc": True,
+                        "category": category,
+                        "page_number": item["page_number"],
+                        "chunk_index": chunk_idx,
+                        "uploaded_at": datetime.utcnow().isoformat()
+                    }
+                )
+                points.append(point)
+
+        # Step 3: Upsert points into Qdrant
+        await qdrant.upsert(
+            collection_name=COLLECTION_NAME,
+            points=points
+        )
+        print(f"✅ Successfully upserted {len(points)} points into Qdrant for {sender_phone} ({clean_title})")
+        
+        # Step 4: Record document metadata in MongoDB users collection
+        if users_col is not None:
+            try:
+                doc_record = {
+                    "filename": filename,
+                    "title": clean_title,
+                    "category": category,
+                    "page_count": len(pages_data),
+                    "chunk_count": len(all_chunks),
+                    "uploaded_at": datetime.utcnow().isoformat()
+                }
+                # Remove prior entry with same filename if re-uploaded, then push updated record
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$pull": {"custom_documents": {"filename": filename}}}
+                )
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {
+                        "$push": {"custom_documents": doc_record},
+                        "$inc": {"total_uploaded_docs": 1}
+                    },
+                    upsert=True
+                )
+            except Exception as mongo_err:
+                print(f"⚠️ Error recording uploaded doc in MongoDB: {mongo_err}")
+                
+        return True, len(all_chunks), ""
+        
+    except Exception as e:
+        print(f"❌ Error indexing user document {filename}: {e}")
+        traceback.print_exc()
+        return False, 0, str(e)
+
+async def process_whatsapp_document(
+    sender_phone: str,
+    media_id: str,
+    filename: str = "document.pdf",
+    caption: str = "",
+    mime_type: str = "application/pdf"
+):
+    """
+    Main background orchestrator for user-uploaded WhatsApp documents:
+    1. Downloads file from Meta CDN.
+    2. Runs Tier 1 Technical Gatekeeper (mime, size, password, page limits, scanned images).
+    3. Runs Tier 2 AI Medical Relevance Gatekeeper (blocks receipts, CVs, invoices, admin slips).
+    4. Indexes into Qdrant user vault (Tier 3).
+    5. Delivers WhatsApp completion card.
+    6. If a caption was provided, answers the student's question immediately!
+    """
+    print(f"\n📄 [DOCUMENT INGESTION START] User: {sender_phone} | File: '{filename}' | Media ID: {media_id} | Caption: '{caption}'")
+    
+    # Send typing indicator
+    try:
+        await send_whatsapp_typing_indicator(sender_phone)
+    except Exception:
+        pass
+        
+    # Tier 1a: Check MIME type & extension
+    fname_lower = filename.lower()
+    if mime_type != "application/pdf" and not fname_lower.endswith(".pdf"):
+        msg = (
+            "📄 *PDF Documents Only*\n\n"
+            f"I received *{filename}*, but Neura AI currently only reads *.pdf* files.\n\n"
+            "Please export or convert your lecture slides, notes, or handouts to PDF and upload again! 🩺📚"
+        )
+        await send_whatsapp_cloud_msg(sender_phone, msg)
+        return
+
+    # Download from Meta CDN with 35s timeout
+    pdf_bytes, detected_mime = await download_whatsapp_media(media_id, timeout=35.0)
+    if not pdf_bytes:
+        msg = (
+            "⚠️ *Download Failed*\n\n"
+            "I couldn't download your document from WhatsApp. This usually happens if the upload was interrupted.\n\n"
+            "Please try sending the PDF again! 📄"
+        )
+        await send_whatsapp_cloud_msg(sender_phone, msg)
+        return
+
+    # Tier 1b: File size sanity check (28MB limit)
+    file_size_mb = len(pdf_bytes) / (1024 * 1024)
+    if file_size_mb > 28.0:
+        msg = (
+            "⚠️ *File Size Limit Exceeded*\n\n"
+            f"Your document is *{file_size_mb:.1f} MB*. To ensure fast search and memory stability on WhatsApp, uploads must be under *28 MB*.\n\n"
+            "💡 *Tip:* Try splitting large slide decks into individual topics or lecture modules!"
+        )
+        await send_whatsapp_cloud_msg(sender_phone, msg)
+        del pdf_bytes
+        gc.collect()
+        return
+
+    # Tier 1c: Text Extraction & Technical Integrity
+    is_valid, err_code, pages_data, stats = extract_pdf_pages_from_bytes(pdf_bytes, filename)
+    del pdf_bytes
+    gc.collect()
+    
+    if not is_valid:
+        if err_code == "ENCRYPTED":
+            msg = (
+                "🔒 *Password-Protected PDF*\n\n"
+                f"*{filename}* is encrypted with a password.\n\n"
+                "Please remove the password protection and re-upload so I can index it into your study vault! 🔑"
+            )
+        elif err_code == "TOO_MANY_PAGES":
+            msg = (
+                "📑 *Document Too Large*\n\n"
+                f"*{filename}* has *{stats.get('page_count')} pages*. Personal study uploads are currently limited to *200 pages* per file.\n\n"
+                "💡 *Tip:* Upload individual chapters or lecture slide modules for optimal results!"
+            )
+        elif err_code == "SCANNED_IMAGE":
+            msg = (
+                "📷 *Scanned Image / Non-Text PDF*\n\n"
+                f"*{filename}* appears to consist of scanned images or photos with no selectable digital text.\n\n"
+                "Neura AI indexes readable digital text. Please run an OCR tool on it or save your presentation slides with selectable text! 💡🔍"
+            )
+        else:
+            msg = (
+                "⚠️ *Unable to Read PDF*\n\n"
+                f"I encountered an issue reading *{filename}*. The file may be empty or corrupted.\n\n"
+                "Please check the PDF file and try uploading again!"
+            )
+        await send_whatsapp_cloud_msg(sender_phone, msg)
+        return
+
+    # Build sample text for Tier 2 Medical Gatekeeper
+    sample_snippets = []
+    for idx, (p_num, p_text) in enumerate(pages_data):
+        if idx < 3 or idx == len(pages_data) // 2:
+            sample_snippets.append(f"--- Page {p_num} ---\n{p_text[:600]}")
+    sample_text = "\n".join(sample_snippets)
+    
+    # Tier 2: AI Medical Relevance Gatekeeper
+    gatekeeper_res = await evaluate_document_is_medical(sample_text, filename)
+    print(f"🩺 [GATEKEEPER RESULT] File: '{filename}' | Medical: {gatekeeper_res.get('is_medical')} | Category: '{gatekeeper_res.get('category')}'")
+
+    if not gatekeeper_res.get("is_medical", True):
+        rejection_reason = gatekeeper_res.get("rejection_reason") or "This document does not appear to contain medical study content."
+        msg = (
+            f"📋 *Document Not Indexed: {filename}*\n\n"
+            f"{rejection_reason}\n\n"
+            "To keep your personal study vault focused and accurate for your MBBS exams, *NEURA AI* only indexes medical lecture slides, textbook chapters, and clinical handouts! 🩺📚"
+        )
+        await send_whatsapp_cloud_msg(sender_phone, msg)
+        try:
+            await log_user_chat_message(sender_phone, "user", f"[📄 Uploaded Non-Medical Document: {filename}]", msg_type="document", metadata={"rejected": True, "reason": rejection_reason})
+        except Exception:
+            pass
+        return
+
+    # Tier 3: Indexing into Qdrant & MongoDB
+    clean_title = gatekeeper_res.get("title") or os.path.splitext(filename)[0].replace("_", " ").title()
+    category = gatekeeper_res.get("category", "General Medicine")
+    
+    progress_msg = (
+        f"📄 *Medical Document Verified: {clean_title}*\n\n"
+        f"Indexing {len(pages_data)} pages into your personal study vault... ⏳"
+    )
+    await send_whatsapp_cloud_msg(sender_phone, progress_msg)
+
+    success, chunk_count, err_msg = await index_user_medical_document(
+        sender_phone=sender_phone,
+        filename=filename,
+        pages_data=pages_data,
+        category=category,
+        clean_title=clean_title
+    )
+
+    if not success:
+        fail_msg = (
+            f"⚠️ *Indexing Error*\n\n"
+            f"I ran into an issue saving *{clean_title}* into your study vault: {err_msg}.\n\n"
+            "Please try uploading the file again!"
+        )
+        await send_whatsapp_cloud_msg(sender_phone, fail_msg)
+        return
+
+    # Success Card
+    success_card = (
+        f"✅ *Added to Your Personal Study Vault!*\n\n"
+        f"📚 *Document:* *{clean_title}*\n"
+        f"📑 *Scope:* {len(pages_data)} pages ({chunk_count} study chunks)\n"
+        f"🩺 *Discipline:* {category}\n\n"
+        f"You can now ask questions about this document anytime!\n"
+        f"💡 _Try: \"Summarize key clinical concepts in {clean_title}\"_"
+    )
+    await send_whatsapp_cloud_msg(sender_phone, success_card)
+
+    try:
+        await log_user_chat_message(sender_phone, "user", f"[📄 Uploaded Document: {clean_title}] ({len(pages_data)} pages)", msg_type="document", metadata={"title": clean_title, "chunks": chunk_count, "category": category})
+    except Exception:
+        pass
+
+    # If the student attached a caption/question with the document, answer it immediately!
+    if caption and len(caption.strip()) > 1:
+        print(f"💬 [DOCUMENT CAPTION QUESTION] Processing user caption: '{caption}'")
+        await process_whatsapp_message(sender_phone, caption.strip(), is_tagged_reply=False)
 
 # ==========================================
 # CURATED MEDICAL YOUTUBE VIDEO LECTURE ENGINE
@@ -2233,8 +2746,7 @@ async def send_commands_menu(sender_phone: str):
         {"id": "/reminders on", "title": "🔔 /reminders on", "description": "Toggle daily study streak reminders on/off"},
         {"id": "/update books", "title": "📚 /update books", "description": "Change or add your preferred medical textbooks"},
         {"id": "/update level", "title": "🎓 /update level", "description": "Update your current class/level (e.g. 400L)"},
-        {"id": "/update name", "title": "✏️ /update name", "description": "Update your student display name"},
-        {"id": "/clearwallet", "title": "🗑️ /clearwallet", "description": "Reset wallet balance to ₦0.00 (for testing)"},
+        {"id": "/documents", "title": "📑 /documents", "description": "View your uploaded lecture slides & handouts"},
         {"id": "/reset", "title": "🔄 /reset", "description": "Reset full profile & chat history to start over"},
         {"id": "/feedback", "title": "📝 /feedback", "description": "Share anonymous feedback on NEURA AI"},
     ]
@@ -2681,6 +3193,29 @@ def extract_book_keywords(preferred_books: list) -> list:
             keywords.extend(words)
     return keywords
 
+async def search_user_documents(query_vector: list, user_id: str, limit: int = 6) -> list:
+    """Searches user's private uploaded documents (lecture slides, notes, handouts) in Qdrant."""
+    if not user_id:
+        return []
+    try:
+        res = await qdrant.query_points(
+            collection_name=COLLECTION_NAME,
+            query=query_vector,
+            query_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="user_id",
+                        match=models.MatchValue(value=str(user_id))
+                    )
+                ]
+            ),
+            limit=limit
+        )
+        return res.points if res and res.points else []
+    except Exception as e:
+        print(f"⚠️ Error searching user documents for {user_id}: {e}")
+        return []
+
 async def search_single_book(query_vector: list, book: str, limit: int = 4) -> list:
     if not book or not isinstance(book, str) or book.startswith("Skip"):
         return []
@@ -2735,8 +3270,8 @@ async def search_single_book(query_vector: list, book: str, limit: int = 4) -> l
             pass
     return []
 
-async def search_qdrant(query_text: str, limit: int = 8, preferred_books: list = None) -> list:
-    """Search Qdrant in PARALLEL across all selected textbooks for sub-second retrieval."""
+async def search_qdrant(query_text: str, limit: int = 8, preferred_books: list = None, user_id: str = None) -> list:
+    """Search Qdrant in PARALLEL across all selected textbooks and user's private study vault."""
     t_start = time.perf_counter()
     try:
         loop = asyncio.get_running_loop()
@@ -2744,39 +3279,52 @@ async def search_qdrant(query_text: str, limit: int = 8, preferred_books: list =
         query_vector = await loop.run_in_executor(embedding_pool, get_embedding_sync, query_text)
         dt_embed = time.perf_counter() - t_embed_start
 
+        # Prepare user documents search task if user_id is provided
+        user_tasks = [search_user_documents(query_vector, user_id, limit=limit)] if user_id else []
+
         if not preferred_books:
             t_qdrant_start = time.perf_counter()
-            res = await qdrant.query_points(
+            book_task = qdrant.query_points(
                 collection_name=COLLECTION_NAME,
                 query=query_vector,
                 limit=limit
             )
+            if user_tasks:
+                gathered = await asyncio.gather(book_task, *user_tasks)
+                res_book = gathered[0]
+                res_user = gathered[1] if len(gathered) > 1 else []
+                all_pts = list(res_book.points or []) + list(res_user or [])
+            else:
+                res = await book_task
+                all_pts = list(res.points or [])
+            all_pts.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
             dt_total = time.perf_counter() - t_start
-            print(f"⏱️ [QDRANT TIMER] search_qdrant(all_books, '{query_text[:30]}') finished in {dt_total:.3f}s (Embed: {dt_embed*1000:.1f}ms, Qdrant: {(time.perf_counter()-t_qdrant_start)*1000:.1f}ms, Chunks: {len(res.points)})")
-            return res.points
+            print(f"⏱️ [QDRANT TIMER] search_qdrant(all_books + user_docs, '{query_text[:30]}') finished in {dt_total:.3f}s (Embed: {dt_embed*1000:.1f}ms, Chunks: {len(all_pts)})")
+            return all_pts
 
-        # Query all selected textbooks concurrently in parallel!
+        # Query all selected textbooks concurrently in parallel alongside user documents!
         t_qdrant_start = time.perf_counter()
         tasks = [search_single_book(query_vector, b, limit=limit) for b in preferred_books if b and not b.startswith("Skip")]
-        book_results = await asyncio.gather(*tasks)
-        all_points = [p for sub in book_results for p in sub]
+        all_tasks = tasks + user_tasks
+        results_list = await asyncio.gather(*all_tasks)
+        all_points = [p for sub in results_list for p in sub]
         all_points.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
         dt_total = time.perf_counter() - t_start
-        print(f"⏱️ [QDRANT TIMER] search_qdrant({len(preferred_books)} books, '{query_text[:30]}') finished in {dt_total:.3f}s (Embed: {dt_embed*1000:.1f}ms, Qdrant: {(time.perf_counter()-t_qdrant_start)*1000:.1f}ms, Chunks: {len(all_points)})")
+        print(f"⏱️ [QDRANT TIMER] search_qdrant({len(preferred_books)} books + user_docs, '{query_text[:30]}') finished in {dt_total:.3f}s (Embed: {dt_embed*1000:.1f}ms, Chunks: {len(all_points)})")
         return all_points
 
     except Exception as outer_e:
         print(f"❌ Error in search_qdrant ({time.perf_counter() - t_start:.3f}s): {outer_e}")
         return []
 
-async def multi_search_qdrant(search_terms: list, preferred_books: list = None) -> list:
+async def multi_search_qdrant(search_terms: list, preferred_books: list = None, user_id: str = None) -> list:
     """Run separate Qdrant searches for each extracted medical keyword CONCURRENTLY, with automatic cross-textbook safety net if single book context is sparse."""
     t_multi_start = time.perf_counter()
     seen_texts = set()
     all_results = []
     
-    # Run all searches concurrently across preferred books with limit=8
-    tasks = [search_qdrant(term, limit=8, preferred_books=preferred_books) for term in search_terms]
+    # Run all searches concurrently across preferred books and user vault
+    tasks = [search_qdrant(term, limit=8, preferred_books=preferred_books, user_id=user_id) for term in search_terms]
     results_list = await asyncio.gather(*tasks)
     
     for results in results_list:
@@ -2789,7 +3337,7 @@ async def multi_search_qdrant(search_terms: list, preferred_books: list = None) 
     # Cross-Textbook Safety Net: If preferred book returned < 5 chunks, also search across all textbooks in parallel!
     if len(all_results) < 5 and preferred_books:
         print(f"[CROSS-BOOK SAFETY NET] Preferred books returned only {len(all_results)} chunks. Searching across full medical library...")
-        fallback_tasks = [search_qdrant(term, limit=8, preferred_books=None) for term in search_terms[:3]]
+        fallback_tasks = [search_qdrant(term, limit=8, preferred_books=None, user_id=user_id) for term in search_terms[:3]]
         fallback_results_list = await asyncio.gather(*fallback_tasks)
         for results in fallback_results_list:
             for point in results:
@@ -3513,6 +4061,27 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     )
                     await send_whatsapp_cloud_msg(sender_phone, feedback_msg)
                     return
+                elif msg_lower in ["/documents", "/docs", "/uploads", "my documents", "my uploads", "documents", "uploads"]:
+                    custom_docs = fresh_doc.get("custom_documents", []) if 'fresh_doc' in locals() and fresh_doc else (user_doc.get("custom_documents", []) if user_doc else [])
+                    if not custom_docs and users_col is not None:
+                        ud = await users_col.find_one({"user_id": sender_phone})
+                        custom_docs = ud.get("custom_documents", []) if ud else []
+                    if not custom_docs:
+                        doc_list_msg = (
+                            "📂 *Your Personal Study Vault*\n\n"
+                            "You haven't uploaded any personal study documents yet.\n\n"
+                            "💡 *How to upload:*\n"
+                            "Tap the paperclip 📎 icon in WhatsApp -> select *Document* -> choose your lecture slides, notes, or PDF handouts!\n\n"
+                            "I will automatically verify and index them so you can ask questions directly from your own materials! 🩺📚"
+                        )
+                    else:
+                        lines = [f"📂 *Your Personal Study Vault ({len(custom_docs)} Document{'s' if len(custom_docs) > 1 else ''})*\n"]
+                        for i, d in enumerate(custom_docs[-8:], 1):
+                            lines.append(f"{i}. *{d.get('title', d.get('filename'))}*\n   📑 {d.get('page_count', '?')} pages ({d.get('chunk_count', '?')} chunks) • _{d.get('category', 'Medical')}_")
+                        lines.append("\n💡 *Tip:* Ask me any question about these materials anytime!")
+                        doc_list_msg = "\n".join(lines)
+                    await send_whatsapp_cloud_msg(sender_phone, doc_list_msg)
+                    return
                 elif msg_lower in ["/update name", "/updatename", "/update_name", "/name", "update name", "updatename"]:
                     await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_NAME"}})
                     await send_whatsapp_cloud_msg(sender_phone, "What would you like to change your name to?")
@@ -3801,7 +4370,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         # Launch vector search and micro-LLM normalizer simultaneously in parallel
         task_norm = normalize_medical_query(search_term, chat_history=recent_chat_history)
-        task_search = multi_search_qdrant(local_terms, preferred_books=active_books)
+        task_search = multi_search_qdrant(local_terms, preferred_books=active_books, user_id=sender_phone)
 
         normalized_data, search_res = await asyncio.gather(task_norm, task_search)
         dt_parallel = time.perf_counter() - t_parallel_start
@@ -3836,7 +4405,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             # Fallback path for ambiguous or 0-chunk queries
             if not search_res:
                 print(f"[SEARCH FALLBACK] 0 chunks with local terms. Re-querying with normalized terms: {medical_terms}")
-                search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books)
+                search_res = await multi_search_qdrant(medical_terms, preferred_books=active_books, user_id=sender_phone)
 
             eval_result = await evaluate_retrieval_adequacy(search_term, search_res, student_name=name)
             
@@ -3844,7 +4413,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 re_anchored = eval_result.get("re_anchored_queries", [])
                 if re_anchored:
                     print(f"[SELF-CORRECTING RETRIEVAL] Context judged inadequate for '{search_term}'. Re-querying full medical library with: {re_anchored}")
-                    second_pass_res = await multi_search_qdrant(re_anchored, preferred_books=None)
+                    second_pass_res = await multi_search_qdrant(re_anchored, preferred_books=None, user_id=sender_phone)
                     if second_pass_res:
                         # Merge and deduplicate with initial search results
                         seen_p_keys = {p.payload.get("text", "")[:120] for p in search_res}
@@ -3859,7 +4428,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Step 4: If still 0 chunks found even after fallback, emergency scan across full library
         if not search_res:
             print(f"[SEARCH FALLBACK] Re-querying full library across all books for: '{clean_topic}'")
-            search_res = await multi_search_qdrant(medical_terms, preferred_books=None)
+            search_res = await multi_search_qdrant(medical_terms, preferred_books=None, user_id=sender_phone)
 
         if not search_res or (eval_result.get("is_genuinely_absent", False) and not search_res):
             smart_resp = eval_result.get("smart_encouraging_response", "")
@@ -3882,6 +4451,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             p = point.payload
             page_str = p.get('page_number') or p.get('chunk_index', 'N/A')
             book_str = p.get('book_title', 'Textbook')
+            if p.get('is_user_doc'):
+                book_str = f"Your Uploaded Document: {book_str}"
             text_str = p.get('text', '')
             block = f"[Context {idx} | Book: {book_str}, Page/Chunk: {page_str}]\n{text_str}"
             context_blocks.append(block)
@@ -4250,9 +4821,23 @@ async def handle_whatsapp_webhook(request: Request):
                             print(f"⚠️ Voice note from {sender_phone} missing media_id")
                             task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read voice note. Please try recording again! 🎙️")
                             return Response(content=json.dumps({"status": "missing_media_id"}), media_type="application/json", background=task)
+                    elif msg_type == "document":
+                        doc_obj = msg.get("document", {})
+                        media_id = doc_obj.get("id")
+                        filename = doc_obj.get("filename", "medical_document.pdf")
+                        caption = (doc_obj.get("caption") or "").strip()
+                        mime_type = doc_obj.get("mime_type", "application/pdf")
+                        if media_id:
+                            print(f"📄 Received Document from {sender_phone} (Filename: {filename}, Media ID: {media_id}, Caption: '{caption}')")
+                            task = BackgroundTask(process_whatsapp_document, sender_phone, media_id, filename, caption, mime_type)
+                            return Response(content=json.dumps({"status": "processing_document"}), media_type="application/json", background=task)
+                        else:
+                            print(f"⚠️ Document from {sender_phone} missing media_id")
+                            task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read the uploaded document. Please try uploading again! 📄")
+                            return Response(content=json.dumps({"status": "missing_media_id"}), media_type="application/json", background=task)
                     else:
                         print(f"⚠️ Received unsupported message type '{msg_type}' from {sender_phone}")
-                        task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "I can read text and voice notes! Please type or record your medical question. 🤖🎙️📚")
+                        task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "I can read text, voice notes, and PDF medical documents! Please type, record, or upload your materials. 🤖🎙️📚")
                         return Response(content=json.dumps({"status": "unsupported_media"}), media_type="application/json", background=task)
 
         return Response(content=json.dumps({"status": "ignored"}), media_type="application/json")
