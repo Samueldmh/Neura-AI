@@ -438,39 +438,22 @@ class QueryRequest(BaseModel):
 # ==========================================
 # 2. SYSTEM PROMPTS & INTENT ROUTER
 # ==========================================
-SYSTEM_MEDICAL_PROMPT = """{user_context}You are Neura, an elite, articulate, and supportive senior medical colleague and study co-pilot designed for Nigerian MBBS medical students.
-Your goal is to explain clinical concepts, pathophysiological mechanisms, diagnostic criteria, and pharmacotherapies with maximum clarity, scientific precision, and mobile-first conciseness.
+# 2. SYSTEM PROMPTS & INTENT ROUTER
+# ==========================================
+SYSTEM_PROMPT = """You are a study companion helping a {class_level} medical student prepare for exams.
+Your job is to *teach* the concept, not repeat the textbook.
 
-CORE PEDAGOGICAL & BREVITY RULES:
-1. PROPORTIONAL DEPTH (MATCH THE QUESTION):
-   - DIRECT / SPOT / FACTUAL QUESTIONS (e.g. "What is the drug of choice for X?", "Normal range of Y?", "Which nerve innervates Z?"):
-     * Give the direct, authoritative answer in the very first sentence.
-     * Keep the entire response under 2 to 4 punchy, high-yield sentences.
-     * Do NOT output massive section headers, long introductions, or unnecessary multi-page chapters.
-   - COMPREHENSIVE / MECHANISM TOPICS (e.g. "Explain Tetralogy of Fallot", "Discuss the pathophysiology of DKA"):
-     * Use clean, logical section headings (`## *Pathophysiology*`, `## *Clinical Features*`, `## *Management*`).
-     * Keep each section tight and punchy (max 2-3 structured bullets per section). Never ramble or repeat facts.
+Rules:
+- Never copy sentences from the reference material verbatim — always explain in your own words
+- Start with a short, human reaction to the question before the explanation (not a template greeting — vary it)
+- Use analogies or clinical framing where it helps understanding
+- Keep it conversational: short paragraphs, plain language, like a sharp senior student explaining it to a junior
+- If the reference material is thin or doesn't fully answer it, say so honestly rather than padding
 
-2. SIMPLE, INTUITIVE & AUTHORITATIVE: Translate complex jargon into intuitive step-by-step logic while preserving 100% textbook accuracy. Use relatable real-world analogies where helpful (e.g. 'think of the glomerulus as a high-pressure sieve').
-
-3. INLINE CLARIFICATIONS: When an eponym, rare antibody, or complex syndrome appears, add a short parenthetical definition immediately after it.
-
-4. BOLD HIGHLIGHTS: Bold all key drug names, vital signs, diagnostic thresholds, and classic triad signs (*Drug Name*, *Diagnostic Sign*).
-
-5. CONTEXTUAL EXAM TIPS (NEVER FORCED):
-   - Include a `> 💡 *Senior's Exam Tip:* ...` ONLY when genuinely discussing an authentic, exam-tested clinical pitfall, board-exam buzzword, or high-yield medical association.
-   - NEVER invent or force an exam tip for general knowledge, simple queries, or non-clinical topics.
-
-6. ZERO TEXTBOOK META-TALK & ZERO SOURCE CITATIONS: Never say "according to textbooks" or "the text states". Deliver facts directly with senior clinical authority. Never output citation lists or footnote blocks.
-
-7. ZERO FABRICATED FIGURE CITATIONS: Never invent figure numbers (e.g., NEVER write "Figure 46-9", "Fig 12.8").
-
-8. NO PREAMBLES & NO FILLER: Jump DIRECTLY into the answer. Zero conversational filler, greetings, or announcements.
-
-9. NO RAW MARKDOWN TABLES: Present all comparisons or staging summaries as clean bulleted list cards.
-
-10. DOUBLE-LINE SPACING: Separate headings, paragraphs, and bullet points with blank lines (`\n\n`) for effortless reading on mobile screens.
+Reference material (for your own understanding — do not quote it directly):
+{retrieved_chunks}
 """
+SYSTEM_MEDICAL_PROMPT = SYSTEM_PROMPT
 
 SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based on the retrieved medical context, generate exactly 7 rigorous, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions (MCQs).
 
@@ -3777,36 +3760,21 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         formatted_context = "\n\n".join(context_blocks)
 
-        critical_inst = (
-            f"CRITICAL PEDAGOGICAL INSTRUCTION:\n"
-            f"1. STRICT TEXTBOOK GROUNDING: Answer using the factual medical mechanisms, clinical classifications, and details provided in the RETRIEVED MEDICAL KNOWLEDGE CONTEXT.\n"
-            f"2. PROPORTIONAL DEPTH: If the student asks a direct, spot, or factual question, give the direct answer in the first sentence and keep the explanation under 2-4 sentences with zero headers. If the student asks for an in-depth breakdown of a disease or mechanism, provide a structured breakdown with concise bullet points (max 2-3 per section).\n"
-            f"3. Zero textbook meta-talk, zero preambles, and zero fabricated figure citations."
-        )
+        # Prepare retrieved chunks and student class_level for SYSTEM_PROMPT
+        class_level = level if level and level != "Unknown Level" else "MBBS"
+        retrieved_chunks_str = formatted_context if formatted_context else "No specific reference material found for this query."
+
+        # Format SYSTEM_PROMPT per request
+        prompt_to_use = SYSTEM_PROMPT.replace("{class_level}", str(class_level)).replace("{retrieved_chunks}", retrieved_chunks_str)
 
         if is_tagged_reply and last_assistant_msg:
             tagged_snippet = last_assistant_msg[:400]
             user_prompt = (
-                f"THE USER EXPLICITLY TAGGED/QUOTED YOUR PREVIOUS WHATSAPP MESSAGE BELOW:\n\"\"\"{tagged_snippet}\"\"\"\n\n"
-                f"CLEAN MEDICAL TOPIC: {clean_topic}\n"
-                f"USER'S QUESTION/INSTRUCTION REGARDING THE TAGGED MESSAGE:\n{query_to_search}\n\n"
-                f"RETRIEVED MEDICAL KNOWLEDGE CONTEXT:\n{formatted_context}\n\n"
-                f"{critical_inst}"
+                f"THE STUDENT TAGGED YOUR PREVIOUS MESSAGE BELOW:\n\"\"\"{tagged_snippet}\"\"\"\n\n"
+                f"STUDENT QUESTION:\n{query_to_search}"
             )
         else:
-            user_prompt = (
-                f"CLEAN MEDICAL TOPIC: {clean_topic}\n"
-                f"STUDENT QUESTION:\n{query_to_search}\n\n"
-                f"RETRIEVED MEDICAL KNOWLEDGE CONTEXT:\n{formatted_context}\n\n"
-                f"{critical_inst}"
-            )
-        
-        # Build dynamic user context
-        books_str = ", ".join(preferred_books_list) if preferred_books_list else "None"
-        user_context_str = f"The student asking this question is {name}, a {level} medical student. Their preferred textbooks are: {books_str}. Tailor your explanation to their level.\n\n"
-
-        prompt_to_use = SYSTEM_MEDICAL_PROMPT
-        prompt_to_use = prompt_to_use.replace("{user_context}", user_context_str)
+            user_prompt = query_to_search
 
         # Chat memory
         chat_history = []
@@ -4206,14 +4174,9 @@ async def chat_endpoint(req: QueryRequest):
             context_blocks.append(block)
         
         formatted_context = "\n\n".join(context_blocks)
-        user_prompt = (
-            f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\n"
-            f"STUDENT QUESTION:\n{user_msg}\n\n"
-            f"CRITICAL INSTRUCTION: Jump straight into the answer starting directly with 📖 *IN-DEPTH EXPLANATION*. Do NOT start your response with 'Based on the retrieved context', 'According to', 'Certainly', 'Here is', 'I have attached', or any similar robotic preamble or conversational filler. Absolutely NEVER cite fabricated figure numbers (e.g. 'Figure X-Y'). Just provide the structured medical explanation directly."
-        )
-        
         # Build dynamic user context
         user_context_str = ""
+        level = "Unknown Level"
         if users_col is not None:
             user_doc = await users_col.find_one({"user_id": req.user_id})
             if user_doc:
@@ -4222,8 +4185,14 @@ async def chat_endpoint(req: QueryRequest):
                 books = user_doc.get("preferred_books", "Unknown")
                 user_context_str = f"The student asking this question is {name}, a {level} medical student. Their preferred textbooks are: {books}. Tailor your explanation to their level.\n\n"
 
-        prompt_to_use = SYSTEM_QUIZ_PROMPT if intent == "QUIZ" else SYSTEM_MEDICAL_PROMPT
-        prompt_to_use = prompt_to_use.replace("{user_context}", user_context_str)
+        class_level = level if level and level != "Unknown Level" else "MBBS"
+        retrieved_chunks_str = formatted_context if formatted_context else "No reference material retrieved."
+        if intent == "QUIZ":
+            prompt_to_use = SYSTEM_QUIZ_PROMPT.replace("{user_context}", user_context_str)
+            user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{user_msg}"
+        else:
+            prompt_to_use = SYSTEM_PROMPT.replace("{class_level}", str(class_level)).replace("{retrieved_chunks}", retrieved_chunks_str)
+            user_prompt = user_msg
         
         chat_history = []
         if chat_history_col is not None:
