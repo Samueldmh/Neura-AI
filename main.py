@@ -823,6 +823,151 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
         
     return full_text
 
+# ==========================================
+# 2.5 ROLLING CONVERSATION HISTORY & QUERY CONDENSER
+# ==========================================
+CONDENSE_PROMPT = """Given the chat history and a new message from the student, rewrite the new message as a fully standalone question that includes any context needed to understand it on its own.
+If the new message is already standalone (a new topic), return it unchanged.
+Do not answer the question — only rewrite it.
+
+Chat History:
+{history_text}
+
+New message: {question}
+
+Standalone question:"""
+
+async def call_groq_chat(prompt: str, model: str = "llama-3.1-8b-instant", temperature: float = 0.0, max_tokens: int = 120) -> str:
+    """Ultra-fast chat completion via Groq LPU API (<150ms TTFT)."""
+    groq_key = os.getenv("GROQ_API_KEY", "") or GROQ_API_KEY
+    if not groq_key:
+        return ""
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {groq_key.strip()}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    }
+    try:
+        async with httpx.AsyncClient(timeout=3.5) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data["choices"][0]["message"]["content"].strip()
+            else:
+                print(f"⚠️ Groq chat error ({resp.status_code}): {resp.text[:120]}")
+    except Exception as e:
+        print(f"⚠️ Groq chat exception: {e}")
+    return ""
+
+async def get_recent_history(phone_number: str, n: int = 8) -> list[dict]:
+    """Retrieve rolling recent question/answer turns for a student: [{'q': ..., 'a': ...}]"""
+    if chat_history_col is None:
+        return []
+    try:
+        user_hist = await chat_history_col.find_one({"user_id": phone_number})
+        if not user_hist or "messages" not in user_hist:
+            return []
+        msgs = user_hist["messages"]
+        turns = []
+        i = 0
+        while i < len(msgs):
+            m = msgs[i]
+            if isinstance(m, dict) and m.get("role") == "user":
+                q = m.get("content", "")
+                a = ""
+                if i + 1 < len(msgs) and isinstance(msgs[i+1], dict) and msgs[i+1].get("role") == "assistant":
+                    a = msgs[i+1].get("content", "")
+                    i += 2
+                else:
+                    i += 1
+                if q:
+                    turns.append({"q": q, "a": a})
+            else:
+                i += 1
+        return turns[-n:]
+    except Exception as e:
+        print(f"⚠️ Error retrieving recent history for {phone_number}: {e}")
+        return []
+
+async def save_turn(phone_number: str, question: str, answer: str, max_turns: int = 8):
+    """Save a question/answer turn and keep rolling history trimmed in MongoDB."""
+    if chat_history_col is None:
+        return
+    try:
+        new_msgs = [
+            {"role": "user", "content": question, "timestamp": time.time()},
+            {"role": "assistant", "content": answer, "timestamp": time.time()}
+        ]
+        await chat_history_col.update_one(
+            {"user_id": phone_number},
+            {
+                "$push": {
+                    "messages": {
+                        "$each": new_msgs,
+                        "$slice": -(max_turns * 2)
+                    }
+                }
+            },
+            upsert=True
+        )
+    except Exception as e:
+        print(f"⚠️ Error saving turn for {phone_number}: {e}")
+
+async def condense_question(history: list[dict], question: str) -> str:
+    """Rewrite follow-up queries into fully standalone questions using Groq (or OpenRouter fallback)."""
+    clean_q = question.strip()
+    if not history:
+        return clean_q
+
+    # Build history context (last 4 turns is optimal for high speed and sharp focus)
+    history_lines = []
+    for h in history[-4:]:
+        q_text = h.get("q", "").strip()
+        a_text = h.get("a", "").strip()[:220]
+        if q_text:
+            history_lines.append(f"Q: {q_text}\nA: {a_text}")
+
+    if not history_lines:
+        return clean_q
+
+    history_text = "\n\n".join(history_lines)
+    prompt = CONDENSE_PROMPT.format(history_text=history_text, question=clean_q)
+
+    # 1. Primary: Groq LPU (llama-3.1-8b-instant, ~100ms)
+    t0 = time.perf_counter()
+    rewritten = await call_groq_chat(prompt, model="llama-3.1-8b-instant", temperature=0.0, max_tokens=100)
+
+    # 2. Fallback: OpenRouter with Gemini 2.5 Flash Lite
+    if not rewritten:
+        try:
+            rewritten = await call_openrouter_llm(
+                system_prompt="You are an expert query condenser. Rewrite the user's message as a standalone question based on history. If already standalone, return it verbatim without preamble.",
+                user_prompt=prompt,
+                max_tokens=100,
+                model=FRONTDESK_MODEL,
+                temperature=0.0
+            )
+        except Exception as fallback_err:
+            print(f"⚠️ Fallback condenser error: {fallback_err}")
+
+    if rewritten:
+        clean_rewritten = re.sub(r'^(Standalone question|Rewritten question|Question):\s*', '', rewritten.strip(), flags=re.IGNORECASE)
+        clean_rewritten = clean_rewritten.strip('\'" \n`')
+        if len(clean_rewritten) >= 3:
+            dt = (time.perf_counter() - t0) * 1000
+            print(f"🔄 [CONDENSER {dt:.1f}ms] '{clean_q}' ➡️ '{clean_rewritten}'")
+            return clean_rewritten
+
+    return clean_q
+
 def convert_markdown_tables_to_whatsapp_cards(text: str) -> str:
     """Detects raw markdown tables and transforms them into clean, indented WhatsApp bullet cards."""
     lines = text.split('\n')
@@ -3443,12 +3588,12 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             await start_interactive_quiz(sender_phone, quiz_topic.title(), explanation_text=last_explanation)
             return
 
-        # Step 0: Fetch recent conversation history FIRST for 100% contextual awareness
+        # Step 0: Fetch rolling conversation history FIRST for 100% contextual awareness
+        history_turns = await get_recent_history(sender_phone, n=8)
         recent_chat_history = []
-        if chat_history_col is not None:
-            hist_doc = await chat_history_col.find_one({"user_id": sender_phone})
-            if hist_doc and "messages" in hist_doc:
-                recent_chat_history = hist_doc["messages"][-6:]
+        for t in history_turns[-3:]:
+            if t.get("q"): recent_chat_history.append({"role": "user", "content": t["q"]})
+            if t.get("a"): recent_chat_history.append({"role": "assistant", "content": t["a"]})
 
         query_to_search = user_msg
         t_intent_start = time.perf_counter()
@@ -3595,38 +3740,27 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             await send_whatsapp_cloud_msg(sender_phone, gibberish_msg)
             return
 
-        # Check if the user query is a tagged reply OR a conversational follow-up
-        is_followup = is_tagged_reply or check_is_followup_query(query_to_search)
-        
-        last_topic = None
+        # Step 1: Condense follow-up query into a standalone question using conversation history
         last_assistant_msg = None
-        if is_followup and chat_history_col is not None:
-            user_hist = await chat_history_col.find_one({"user_id": sender_phone})
-            if user_hist and "messages" in user_hist:
-                msgs = user_hist["messages"]
-                for msg_item in reversed(msgs):
-                    if msg_item.get("role") == "assistant" and not last_assistant_msg:
-                        last_assistant_msg = msg_item.get("content")
-                    if msg_item.get("role") == "user" and not last_topic:
-                        content = msg_item.get("content", "")
-                        if not check_is_followup_query(content) and not content.startswith("GENERATE_QUIZ"):
-                            last_topic = content
+        if history_turns:
+            last_turn = history_turns[-1]
+            last_assistant_msg = last_turn.get("a", "")
 
-        if is_followup:
-            if last_topic or last_assistant_msg:
-                search_term = last_topic if last_topic else query_to_search
-                print(f"[Follow-up Router] (Tagged={is_tagged_reply}) Resolved query '{query_to_search}' to topic: '{search_term}'")
-            else:
-                prompt_msg = (
-                    "What medical topic, clinical case, or concept would you like to learn more about?\n\n"
-                    "Type a specific subject or drug (e.g., *Prazosin*, *MEN1A*, *Antibiotics*) and I'll pull exact details from your textbooks!"
-                )
-                await send_whatsapp_cloud_msg(sender_phone, prompt_msg)
-                return
+        t_condense_start = time.perf_counter()
+        if is_tagged_reply and last_assistant_msg:
+            tagged_snippet = last_assistant_msg[:250]
+            tagged_input = f"[Student quoted previous message: '{tagged_snippet}'] {user_msg}"
+            standalone_question = await condense_question(history_turns, tagged_input)
         else:
-            search_term = query_to_search
+            standalone_question = await condense_question(history_turns, user_msg)
+        
+        search_term = standalone_question
+        query_to_search = standalone_question
+        dt_condense = (time.perf_counter() - t_condense_start) * 1000
+        print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Condenser finished in {dt_condense:.1f}ms: '{user_msg}' ➡️ '{standalone_question}'")
 
         # ⚡ Step 0: Instant In-Memory Cache Check (<1ms lookup for repeat high-yield questions)
+        is_followup = (standalone_question.strip().lower() != user_msg.strip().lower()) or is_tagged_reply
         if intent != "QUIZ" and not is_followup:
             cached_answer, cached_context = TOPIC_CACHE.get(search_term, preferred_books=preferred_books_list)
             if cached_answer:
@@ -3646,15 +3780,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     print(f"⚠️ Cache video send error: {vid_err}")
                 
                 if chat_history_col is not None:
-                    new_msgs = [
-                        {"role": "user", "content": query_to_search},
-                        {"role": "assistant", "content": cached_answer}
-                    ]
-                    await chat_history_col.update_one(
-                        {"user_id": sender_phone},
-                        {"$push": {"messages": {"$each": new_msgs}}},
-                        upsert=True
-                    )
+                    await save_turn(sender_phone, user_msg, cached_answer)
                 if users_col is not None:
                     await users_col.update_one(
                         {"user_id": sender_phone},
@@ -3778,12 +3904,11 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         else:
             user_prompt = query_to_search
 
-        # Chat memory
+        # Chat memory from rolling history
         chat_history = []
-        if chat_history_col is not None:
-            user_doc = await chat_history_col.find_one({"user_id": sender_phone})
-            if user_doc and "messages" in user_doc:
-                chat_history = user_doc["messages"][-6:]
+        for t in history_turns[-3:]:
+            if t.get("q"): chat_history.append({"role": "user", "content": t["q"]})
+            if t.get("a"): chat_history.append({"role": "assistant", "content": t["a"]})
 
         # Lock 2: Strict Medical Video Guardrail
         # A video is ONLY retrieved and attached if:
@@ -3837,15 +3962,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 print(f"⚠️ Error sending video CTA card: {vid_err}")
 
         if chat_history_col is not None:
-            new_msgs = [
-                {"role": "user", "content": query_to_search},
-                {"role": "assistant", "content": ai_answer}
-            ]
-            await chat_history_col.update_one(
-                {"user_id": sender_phone},
-                {"$push": {"messages": {"$each": new_msgs}}},
-                upsert=True
-            )
+            await save_turn(sender_phone, user_msg, ai_answer)
 
         # Topic & Query Tracking for Weekly Digest and Profile
         if users_col is not None:
@@ -4155,14 +4272,18 @@ async def chat_endpoint(req: QueryRequest):
                 "response": "Hello! 👋 I'm *NEURA AI*, your medical study assistant.\n\nI can answer medical questions directly from your textbooks (*Lippincott Pharmacology*, *Hoffbrand's Haematology*, etc.) with exact citations, or generate practice MCQs for your MBBS exams!\n\nWhat concept are we studying today?"
             }
         
-        # Step 1: Extract medical terms from the user's message
-        medical_terms = extract_medical_terms(user_msg)
+        # Retrieve history and condense query into standalone question
+        history_turns = await get_recent_history(req.user_id, n=8)
+        standalone_question = await condense_question(history_turns, user_msg)
         
-        # Step 2: Multi-search Qdrant with extracted terms + original query
+        # Step 1: Extract medical terms from the standalone question
+        medical_terms = extract_medical_terms(standalone_question)
+        
+        # Step 2: Multi-search Qdrant with extracted terms + standalone question
         if medical_terms:
             search_res = multi_search_qdrant(medical_terms)
         else:
-            search_res = search_qdrant(user_msg, limit=4)
+            search_res = search_qdrant(standalone_question, limit=4)
         
         if not search_res:
             return {
@@ -4191,29 +4312,20 @@ async def chat_endpoint(req: QueryRequest):
         retrieved_chunks_str = formatted_context if formatted_context else "No reference material retrieved."
         if intent == "QUIZ":
             prompt_to_use = SYSTEM_QUIZ_PROMPT.replace("{user_context}", user_context_str)
-            user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{user_msg}"
+            user_prompt = f"RETRIEVED TEXTBOOK CONTEXT:\n{formatted_context}\n\nSTUDENT QUESTION:\n{standalone_question}"
         else:
             prompt_to_use = SYSTEM_PROMPT.replace("{class_level}", str(class_level)).replace("{retrieved_chunks}", retrieved_chunks_str)
-            user_prompt = user_msg
+            user_prompt = standalone_question
         
         chat_history = []
-        if chat_history_col is not None:
-            user_doc = await chat_history_col.find_one({"user_id": req.user_id})
-            if user_doc and "messages" in user_doc:
-                chat_history = user_doc["messages"][-6:]
+        for t in history_turns[-3:]:
+            if t.get("q"): chat_history.append({"role": "user", "content": t["q"]})
+            if t.get("a"): chat_history.append({"role": "assistant", "content": t["a"]})
         
         ai_answer = await call_openrouter_llm(prompt_to_use, user_prompt, chat_history)
         
         if chat_history_col is not None:
-            new_msgs = [
-                {"role": "user", "content": user_msg},
-                {"role": "assistant", "content": ai_answer}
-            ]
-            await chat_history_col.update_one(
-                {"user_id": req.user_id},
-                {"$push": {"messages": {"$each": new_msgs}}},
-                upsert=True
-            )
+            await save_turn(req.user_id, user_msg, ai_answer)
         
         return {
             "intent": intent,
