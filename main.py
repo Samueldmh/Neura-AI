@@ -668,7 +668,8 @@ async def call_openrouter_llm(
     max_tokens: int = 2500,
     model: str = None,
     models: list = None,
-    provider_order: list = None
+    provider_order: list = None,
+    temperature: float = 0.65
 ) -> str:
     if not OPENROUTER_API_KEY:
         raise ValueError("OPENROUTER_API_KEY environment variable is not set on Render!")
@@ -694,7 +695,7 @@ async def call_openrouter_llm(
         "model": target_models[0],
         "models": target_models,
         "messages": messages,
-        "temperature": 0.2,
+        "temperature": temperature,
         "max_tokens": max_tokens,
         "reasoning": get_reasoning_config(user_prompt, is_micro=False),
         "provider": {
@@ -761,7 +762,7 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
     payload = {
         "model": DEFAULT_MODEL,
         "messages": messages,
-        "temperature": 0.2,
+        "temperature": 0.65,
         "max_tokens": 2500,
         "stream": True,
         "reasoning": get_reasoning_config(user_prompt, is_micro=False),
@@ -2484,7 +2485,7 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list, stu
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_payload_text}
         ],
-        "temperature": 0.2,
+        "temperature": 0.0,
         "max_tokens": 500,
         "reasoning": get_reasoning_config(user_msg, is_micro=True),
         "provider": {
