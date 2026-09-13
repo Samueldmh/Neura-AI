@@ -501,6 +501,41 @@ async def cleanup_legacy_textbook_titles():
     except Exception as e:
         print(f"⚠️ Error cleaning up legacy titles: {e}")
 
+async def register_whatsapp_chat_commands():
+    """
+    Registers native WhatsApp Chat Commands on Meta Graph API (conversational_automation edge).
+    Displays the native '(/)' menu button directly inside the WhatsApp chat UI.
+    """
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        return
+    url = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/conversational_automation"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
+        "Content-Type": "application/json"
+    }
+    commands = [
+        {"command_name": "menu", "command_description": "Open full commands & study tools list"},
+        {"command_name": "documents", "command_description": "View uploaded lecture slides, notes & handouts"},
+        {"command_name": "profile", "command_description": "View study streak, class/level & selected textbooks"},
+        {"command_name": "wallet", "command_description": "Check balance, total spent & queries remaining"},
+        {"command_name": "deposit", "command_description": "Top up your study wallet (via Paystack)"},
+        {"command_name": "quiz", "command_description": "Start an interactive MBBS clinical quiz"},
+        {"command_name": "reminders", "command_description": "Toggle daily study streak reminders on/off"},
+        {"command_name": "deletedoc", "command_description": "Remove a document from your study vault"},
+        {"command_name": "feedback", "command_description": "Share anonymous feedback on NEURA AI"},
+        {"command_name": "reset", "command_description": "Reset profile & chat history to start over"}
+    ]
+    payload = {"commands": commands}
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            if res.status_code == 200:
+                print(f"✅ [META CLOUD API] Synced {len(commands)} native WhatsApp chat commands")
+            else:
+                print(f"⚠️ [META CLOUD API] Failed to sync chat commands: {res.status_code} - {res.text}")
+    except Exception as e:
+        print(f"⚠️ [META CLOUD API] Error syncing chat commands: {e}")
+
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -536,6 +571,9 @@ async def startup_event():
     
     # Launch inactivity streak reminder worker in the background
     asyncio.create_task(start_inactivity_reminder_loop())
+
+    # Synchronize native WhatsApp chat commands with Meta Cloud API
+    asyncio.create_task(register_whatsapp_chat_commands())
 
 class LRUTopicCache:
     """High-speed in-memory 24-hour LRU cache for authoritative textbook explanations (~4KB per topic, max 1000 topics = ~4MB RAM)."""
@@ -3100,16 +3138,21 @@ async def process_whatsapp_document(
                         await send_whatsapp_cloud_msg(sender_phone, fail_msg)
                         return
 
-                    # Success Card
+                    # Success Card with 1-Tap Interactive Study Buttons
                     success_card = (
                         f"✅ *Added to Your Personal Study Vault!*\n\n"
                         f"📚 *Document:* *{clean_title}*\n"
                         f"📑 *Scope:* {len(pages_data)} {unit_label} ({chunk_count} study chunks)\n"
                         f"🩺 *Discipline:* {category}\n\n"
                         f"You can now ask questions about this document anytime!\n"
-                        f"💡 _Try: \"Summarize key clinical concepts in {clean_title}\"_"
+                        f"💡 _Tap a quick action below to start studying:_"
                     )
-                    await send_whatsapp_cloud_msg(sender_phone, success_card)
+                    doc_action_buttons = [
+                        {"id": f"Summarize key clinical concepts in {clean_title}", "title": "🔍 Summarize"},
+                        {"id": f"Quiz me on {clean_title}", "title": "❓ Quiz Me"},
+                        {"id": "/documents", "title": "📂 My Vault"}
+                    ]
+                    await send_whatsapp_interactive_button(sender_phone, success_card, doc_action_buttons)
 
                     try:
                         await log_user_chat_message(sender_phone, "user", f"[📄 Uploaded Document: {clean_title}] ({len(pages_data)} pages)", msg_type="document", metadata={"title": clean_title, "chunks": chunk_count, "category": category})
@@ -4791,8 +4834,14 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         # Check for profile and wallet commands first
         msg_lower = user_msg.strip().lower()
-        if (msg_lower.startswith("/") or msg_lower in ["topup_wallet", "start_deposit", "clearwallet", "deposit", "wallet", "balance", "clear wallet", "help", "menu", "commands", "reminders on", "reminders off"]):
-            if msg_lower in ["/", "/help", "help", "menu", "commands", "/menu", "/commands", "/start"]:
+        if (msg_lower.startswith("/") or msg_lower in [
+            "topup_wallet", "start_deposit", "clearwallet", "deposit", "wallet", "balance", 
+            "clear wallet", "help", "menu", "commands", "reminders on", "reminders off",
+            "reminders", "reminder", "docs", "documents", "my docs", "my documents", "uploads", "my uploads",
+            "profile", "my profile", "streak", "my streak", "deletedoc", "delete doc", "feedback",
+            "?", "m", "cmd"
+        ]):
+            if msg_lower in ["/", "/help", "help", "menu", "commands", "/menu", "/commands", "/start", "?", "m", "cmd"]:
                 await send_commands_menu(sender_phone)
                 return
 
@@ -4827,7 +4876,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         [{"id": "START_ONBOARDING", "title": "🚀 Start Setup"}]
                     )
                     return
-                elif msg_lower == "/profile":
+                elif msg_lower in ["/profile", "profile", "my profile", "streak", "my streak"]:
                     fresh_doc = await users_col.find_one({"user_id": sender_phone}) if users_col is not None else None
                     if fresh_doc:
                         preferred_books_list = list(fresh_doc.get("preferred_books_list", []))
@@ -4841,11 +4890,15 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
                     print(f"👤 [/profile for {sender_phone}] Loaded {len(preferred_books_list)} books from MongoDB: {preferred_books_list}")
                     books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None selected"
-                    await send_whatsapp_cloud_msg(
-                        sender_phone, 
-                        f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Study Streak: 🔥 {streak_count} Days\n• Reminders: {reminders_status}\n• Books:\n  - {books_str}\n\n"
-                        f"📝 *Feedback Survey:* https://forms.gle/dNr7SV5EUiqiFySx5"
+                    profile_card = (
+                        f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Study Streak: 🔥 {streak_count} Days\n• Reminders: {reminders_status}\n• Books:\n  - {books_str}"
                     )
+                    profile_buttons = [
+                        {"id": "/update books", "title": "📚 Textbooks"},
+                        {"id": "/reminders", "title": "🔔 Reminders"},
+                        {"id": "/wallet", "title": "💳 Wallet"}
+                    ]
+                    await send_whatsapp_interactive_button(sender_phone, profile_card, profile_buttons)
                     return
                 elif msg_lower in ["/reminders on", "/reminder on", "reminders on"]:
                     await users_col.update_one({"user_id": sender_phone}, {"$set": {"reminders_enabled": True}}, upsert=True)
@@ -4858,8 +4911,24 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     await users_col.update_one({"user_id": sender_phone}, {"$set": {"reminders_enabled": False}}, upsert=True)
                     await send_whatsapp_cloud_msg(
                         sender_phone,
-                        "🔕 *Study Streak Reminders Paused.*\n\nYou can re-enable them anytime by typing */reminders on*."
+                        "🔕 *Study Streak Reminders Paused.*\n\nYou can re-enable them anytime by tapping */reminders on*."
                     )
+                    return
+                elif msg_lower in ["/reminders", "/reminder", "reminders", "reminder"]:
+                    ud = await users_col.find_one({"user_id": sender_phone}) if users_col is not None else None
+                    current_status = ud.get("reminders_enabled", True) if ud else True
+                    status_str = "Enabled 🔔" if current_status else "Disabled 🔕"
+                    rem_body = (
+                        f"⏰ *Study Streak Reminders*\n\n"
+                        f"Current Status: *{status_str}*\n\n"
+                        "NEURA AI sends a personalized study nudge if you haven't studied for 8–12 hours to protect your daily streak.\n\n"
+                        "Tap an option below to update:"
+                    )
+                    rem_buttons = [
+                        {"id": "/reminders on", "title": "🔔 Turn ON"},
+                        {"id": "/reminders off", "title": "🔕 Turn OFF"}
+                    ]
+                    await send_whatsapp_interactive_button(sender_phone, rem_body, rem_buttons)
                     return
                 elif msg_lower == "/feedback":
                     feedback_msg = (
@@ -4882,38 +4951,60 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                             "Tap the paperclip 📎 icon in WhatsApp -> select *Document* -> choose your lecture slides, notes, or PDF handouts!\n\n"
                             "I will automatically verify and index them so you can ask questions directly from your own materials! 🩺📚"
                         )
+                        await send_whatsapp_interactive_button(
+                            sender_phone,
+                            doc_list_msg,
+                            [{"id": "/menu", "title": "📋 Main Menu"}]
+                        )
                     else:
                         lines = [f"📂 *Your Personal Study Vault ({len(custom_docs)}/15 Documents Used)*\n"]
                         for i, d in enumerate(custom_docs, 1):
                             lines.append(f"{i}. *{d.get('title', d.get('filename'))}*\n   📑 {d.get('page_count', '?')} pages ({d.get('chunk_count', '?')} chunks) • _{d.get('category', 'Medical')}_")
-                        lines.append("\n💡 *Tips:*\n• Ask me questions about any of these documents anytime!\n• To remove a document, type `/deletedoc [number]` (e.g. `/deletedoc 1` or `/deletedoc all`)")
+                        lines.append("\n💡 *Tips:*\n• Ask me questions about any of these documents anytime!\n• Tap *Delete a Doc* below to select and remove a file.")
                         doc_list_msg = "\n".join(lines)
-                    await send_whatsapp_cloud_msg(sender_phone, doc_list_msg)
-                    return
-                elif msg_lower.startswith("/deletedoc") or msg_lower.startswith("/delete doc") or msg_lower.startswith("/removedoc"):
-                    cmd_parts = user_msg.strip().split(maxsplit=1)
-                    if len(cmd_parts) < 2 or not cmd_parts[1].strip():
-                        await send_whatsapp_cloud_msg(
+                        await send_whatsapp_interactive_button(
                             sender_phone,
-                            "🗑️ *Delete a Document from Your Study Vault*\n\n"
-                            "Please specify the document number or title you want to remove.\n\n"
-                            "*Examples:*\n"
-                            "• `/deletedoc 1`\n"
-                            "• `/deletedoc Pharmacology`\n"
-                            "• `/deletedoc all` (to clear your entire vault)\n\n"
-                            "💡 Type `/documents` to view your indexed files and their numbers! 📂"
+                            doc_list_msg,
+                            [
+                                {"id": "/deletedoc", "title": "🗑️ Delete a Doc"},
+                                {"id": "/menu", "title": "📋 Main Menu"}
+                            ]
                         )
-                        return
+                    return
+                elif msg_lower.startswith("/deletedoc") or msg_lower.startswith("/delete doc") or msg_lower.startswith("/removedoc") or msg_lower == "deletedoc":
+                    cmd_parts = user_msg.strip().split(maxsplit=1)
+                    del_target = cmd_parts[1].strip() if len(cmd_parts) > 1 else ""
 
-                    del_target = cmd_parts[1].strip()
                     ud = await users_col.find_one({"user_id": sender_phone}) if users_col is not None else None
                     custom_docs = ud.get("custom_documents", []) if ud else []
 
                     if not custom_docs:
                         await send_whatsapp_cloud_msg(
                             sender_phone,
-                            "📂 *Personal Study Vault Empty*\n\n"
-                            "You don't have any uploaded documents in your vault right now."
+                            "📂 *Personal Study Vault Empty*\n\nYou don't have any uploaded documents in your vault right now."
+                        )
+                        return
+
+                    if not del_target:
+                        del_options = []
+                        for i, d in enumerate(custom_docs[:9], 1):
+                            d_title = d.get('title', d.get('filename'))
+                            del_options.append({
+                                "id": f"/deletedoc {i}",
+                                "title": f"🗑️ {d_title[:20]}",
+                                "description": f"Remove {d.get('page_count', '?')} pages ({d.get('category', 'General')})"
+                            })
+                        if len(custom_docs) > 1:
+                            del_options.append({
+                                "id": "/deletedoc all",
+                                "title": "⚠️ Clear All Docs",
+                                "description": f"Permanently remove all {len(custom_docs)} documents"
+                            })
+                        await send_whatsapp_interactive_list(
+                            sender_phone,
+                            "🗑️ *Select Document to Remove*\n\nTap the button below to pick which document to delete from your study vault:",
+                            "Select Document",
+                            del_options
                         )
                         return
 
