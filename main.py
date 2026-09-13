@@ -400,6 +400,18 @@ async def startup_event():
             field_schema=models.PayloadSchemaType.KEYWORD
         )
         print("✅ Created/verified Qdrant payload index for 'user_id'")
+        await qdrant.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name="is_user_doc",
+            field_schema=models.PayloadSchemaType.BOOL
+        )
+        print("✅ Created/verified Qdrant payload index for 'is_user_doc'")
+        await qdrant.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name="source_file",
+            field_schema=models.PayloadSchemaType.KEYWORD
+        )
+        print("✅ Created/verified Qdrant payload index for 'source_file'")
     except Exception as idx_err:
         print(f"ℹ️ Payload index info: {idx_err}")
         
@@ -1925,7 +1937,7 @@ def chunk_text_with_overlap(text: str, chunk_size: int = 850, overlap: int = 150
 def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool, str, list[tuple[int, str]], dict]:
     """
     Tier 1 Technical Gatekeeper: Extracts text page-by-page from PDF bytes using PyMuPDF (fitz)
-    with pypdf fallback. Enforces encryption checks, page limits, and filters 0-text scanned images.
+    with pypdf fallback. Enforces encryption checks, page limits, and page-by-page text density ratio checks.
     Returns (is_valid, err_code, pages_data, stats) where pages_data is [(page_num, text), ...]
     """
     if not pdf_bytes or len(pdf_bytes) < 100:
@@ -1949,23 +1961,39 @@ def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool,
             
             pages_data = []
             total_words = 0
+            empty_pages = 0
+            text_pages = 0
+            
             for idx in range(page_count):
                 page = doc[idx]
                 txt = page.get_text("text").strip()
-                if txt:
-                    words = len(txt.split())
-                    total_words += words
+                words = len(txt.split()) if txt else 0
+                total_words += words
+                if words >= 6:
+                    text_pages += 1
                     pages_data.append((idx + 1, txt))
+                else:
+                    empty_pages += 1
             doc.close()
             
-            if total_words < 12:
+            # Scanned Document / Non-Text Ratio Gate:
+            empty_ratio = empty_pages / page_count
+            avg_words = total_words / max(page_count, 1)
+            
+            # If 1 page: needs at least 15 words
+            if page_count == 1 and total_words < 15:
                 return False, "SCANNED_IMAGE", [], {
-                    "error": "Document contains scanned images or photos with no selectable digital text.",
-                    "total_words": total_words,
-                    "page_count": page_count
+                    "error": "Single-page document contains insufficient readable text.",
+                    "total_words": total_words, "page_count": 1, "empty_pages": 1, "empty_pct": 100.0
+                }
+            # If multi-page: reject if > 35% of pages are image-only OR avg words per page < 12
+            if page_count >= 2 and (empty_ratio > 0.35 or avg_words < 12.0):
+                return False, "SCANNED_IMAGE", [], {
+                    "error": f"Scanned or image-only document ({empty_pages}/{page_count} pages have no extractable text).",
+                    "total_words": total_words, "page_count": page_count, "empty_pages": empty_pages, "empty_pct": empty_ratio * 100
                 }
                 
-            return True, "OK", pages_data, {"page_count": page_count, "total_words": total_words}
+            return True, "OK", pages_data, {"page_count": page_count, "total_words": total_words, "empty_pages": empty_pages, "empty_pct": empty_ratio * 100}
         except Exception as fitz_err:
             print(f"⚠️ PyMuPDF extraction failed for {filename}, attempting pypdf fallback: {fitz_err}")
 
@@ -1983,21 +2011,34 @@ def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool,
             
             pages_data = []
             total_words = 0
+            empty_pages = 0
+            text_pages = 0
+            
             for idx, p in enumerate(reader.pages):
                 txt = (p.extract_text() or "").strip()
-                if txt:
-                    words = len(txt.split())
-                    total_words += words
+                words = len(txt.split()) if txt else 0
+                total_words += words
+                if words >= 6:
+                    text_pages += 1
                     pages_data.append((idx + 1, txt))
+                else:
+                    empty_pages += 1
             
-            if total_words < 12:
+            empty_ratio = empty_pages / page_count
+            avg_words = total_words / max(page_count, 1)
+            
+            if page_count == 1 and total_words < 15:
                 return False, "SCANNED_IMAGE", [], {
-                    "error": "Document contains scanned images or photos with no selectable digital text.",
-                    "total_words": total_words,
-                    "page_count": page_count
+                    "error": "Single-page document contains insufficient readable text.",
+                    "total_words": total_words, "page_count": 1, "empty_pages": 1, "empty_pct": 100.0
+                }
+            if page_count >= 2 and (empty_ratio > 0.35 or avg_words < 12.0):
+                return False, "SCANNED_IMAGE", [], {
+                    "error": f"Scanned or image-only document ({empty_pages}/{page_count} pages have no extractable text).",
+                    "total_words": total_words, "page_count": page_count, "empty_pages": empty_pages, "empty_pct": empty_ratio * 100
                 }
                 
-            return True, "OK", pages_data, {"page_count": page_count, "total_words": total_words}
+            return True, "OK", pages_data, {"page_count": page_count, "total_words": total_words, "empty_pages": empty_pages, "empty_pct": empty_ratio * 100}
         except Exception as pypdf_err:
             print(f"⚠️ pypdf fallback failed for {filename}: {pypdf_err}")
 
@@ -2131,12 +2172,31 @@ async def index_user_medical_document(
         if not all_chunks:
             return False, 0, "No extractable chunks found."
 
+        # Step 2: Content-Based Deduplication & Stale Chunk Cleanup
+        # Wipe previous points for this user + source_file to eliminate ghost chunks if re-uploaded
+        try:
+            await qdrant.delete(
+                collection_name=COLLECTION_NAME,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(key="user_id", match=models.MatchValue(value=str(sender_phone))),
+                            models.FieldCondition(key="source_file", match=models.MatchValue(value=filename))
+                        ]
+                    )
+                )
+            )
+            print(f"🧹 Cleaned up existing Qdrant points for {sender_phone} ({filename})")
+        except Exception as del_err:
+            print(f"ℹ️ Pre-upload point cleanup notice for {filename}: {del_err}")
+
         print(f"📑 Ingesting '{clean_title}' for {sender_phone}: {len(all_chunks)} chunks across {len(pages_data)} pages...")
         
-        # Step 2: Batch compute embeddings using embedding_pool
+        # Step 3: Batch compute embeddings using embedding_pool
         batch_size = 64
         total_chunks = len(all_chunks)
         points = []
+        clean_fn = re.sub(r'[^a-zA-Z0-9_]', '', os.path.splitext(filename)[0].lower())
         
         for batch_start in range(0, total_chunks, batch_size):
             batch_items = all_chunks[batch_start:batch_start + batch_size]
@@ -2150,8 +2210,9 @@ async def index_user_medical_document(
             
             for sub_idx, (item, emb) in enumerate(zip(batch_items, embeddings)):
                 chunk_idx = batch_start + sub_idx
-                # Deterministic UUID prevents duplicates on re-upload
-                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{sender_phone}_{clean_title}_{chunk_idx}"))
+                # Content-based hash ensures deterministic UUID regardless of LLM title variation!
+                chunk_content_hash = hashlib.sha256(item["text"].encode("utf-8")).hexdigest()[:12]
+                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{sender_phone}_{clean_fn}_{chunk_idx}_{chunk_content_hash}"))
                 
                 point = models.PointStruct(
                     id=point_id,
@@ -2170,7 +2231,7 @@ async def index_user_medical_document(
                 )
                 points.append(point)
 
-        # Step 3: Upsert points into Qdrant
+        # Step 4: Upsert points into Qdrant
         await qdrant.upsert(
             collection_name=COLLECTION_NAME,
             points=points
@@ -2193,11 +2254,15 @@ async def index_user_medical_document(
                     {"user_id": sender_phone},
                     {"$pull": {"custom_documents": {"filename": filename}}}
                 )
+                wat_today = datetime.now(timezone(timedelta(hours=1))).strftime("%Y-%m-%d")
                 await users_col.update_one(
                     {"user_id": sender_phone},
                     {
                         "$push": {"custom_documents": doc_record},
-                        "$inc": {"total_uploaded_docs": 1}
+                        "$inc": {
+                            "total_uploaded_docs": 1,
+                            f"daily_doc_uploads.{wat_today}": 1
+                        }
                     },
                     upsert=True
                 )
@@ -2246,6 +2311,41 @@ async def process_whatsapp_document(
         await send_whatsapp_cloud_msg(sender_phone, msg)
         return
 
+    # Check User Vault Quota & Daily Rate Limits before downloading
+    if users_col is not None:
+        try:
+            ud = await users_col.find_one({"user_id": sender_phone})
+            if ud:
+                custom_docs = ud.get("custom_documents", [])
+                existing_filenames = {d.get("filename") for d in custom_docs if isinstance(d, dict)}
+                
+                # Quota: 15 documents max per personal study vault
+                if filename not in existing_filenames and len(custom_docs) >= 15:
+                    msg = (
+                        "⚠️ *Personal Study Vault Full (15/15 Documents)*\n\n"
+                        f"Your personal study vault has reached the maximum capacity of *15 documents*.\n\n"
+                        f"To upload *{filename}*, please remove an older lecture slide or handout first using:\n\n"
+                        "👉 `/deletedoc [number or title]`\n\n"
+                        "💡 Type `/documents` to see all your uploaded documents and their numbers! 📂"
+                    )
+                    await send_whatsapp_cloud_msg(sender_phone, msg)
+                    return
+
+                # Daily rate limit: 10 uploads per day (WAT timezone: UTC+1)
+                wat_today = datetime.now(timezone(timedelta(hours=1))).strftime("%Y-%m-%d")
+                daily_uploads = ud.get("daily_doc_uploads", {}).get(wat_today, 0)
+                if daily_uploads >= 10:
+                    msg = (
+                        "⏳ *Daily Upload Limit Reached*\n\n"
+                        "To ensure fast processing and stability for all students, personal document uploads are limited to *10 per day*.\n\n"
+                        "Your daily quota will reset at midnight (WAT)!\n\n"
+                        "💡 You can continue asking questions from your current study vault and library textbooks anytime."
+                    )
+                    await send_whatsapp_cloud_msg(sender_phone, msg)
+                    return
+        except Exception as q_err:
+            print(f"⚠️ Error checking user upload quota: {q_err}")
+
     # Download from Meta CDN with 35s timeout
     pdf_bytes, detected_mime = await download_whatsapp_media(media_id, timeout=35.0)
     if not pdf_bytes:
@@ -2289,10 +2389,15 @@ async def process_whatsapp_document(
                 "💡 *Tip:* Upload individual chapters or lecture slide modules for optimal results!"
             )
         elif err_code == "SCANNED_IMAGE":
+            empty_p = stats.get("empty_pages", 0)
+            tot_p = stats.get("page_count", 0)
+            pct = stats.get("empty_pct", 0)
             msg = (
-                "📷 *Scanned Image / Non-Text PDF*\n\n"
-                f"*{filename}* appears to consist of scanned images or photos with no selectable digital text.\n\n"
-                "Neura AI indexes readable digital text. Please run an OCR tool on it or save your presentation slides with selectable text! 💡🔍"
+                "📷 *Scanned Image / Non-Text PDF Detected*\n\n"
+                f"*{filename}* contains scanned images with no readable digital text "
+                f"({empty_p} of {tot_p} pages, ~{pct:.0f}%, are image-only photos/slides).\n\n"
+                "Neura AI searches and quizzes you directly on selectable digital text. "
+                "Please run an OCR tool (e.g. Adobe Scan, CamScanner OCR, or Google Drive OCR) or export slides with selectable digital text! 💡🔍"
             )
         else:
             msg = (
@@ -3194,7 +3299,7 @@ def extract_book_keywords(preferred_books: list) -> list:
     return keywords
 
 async def search_user_documents(query_vector: list, user_id: str, limit: int = 6) -> list:
-    """Searches user's private uploaded documents (lecture slides, notes, handouts) in Qdrant."""
+    """Searches user's private uploaded documents (lecture slides, notes, handouts) in Qdrant with strict tenant isolation."""
     if not user_id:
         return []
     try:
@@ -3206,6 +3311,10 @@ async def search_user_documents(query_vector: list, user_id: str, limit: int = 6
                     models.FieldCondition(
                         key="user_id",
                         match=models.MatchValue(value=str(user_id))
+                    ),
+                    models.FieldCondition(
+                        key="is_user_doc",
+                        match=models.MatchValue(value=True)
                     )
                 ]
             ),
@@ -3229,6 +3338,12 @@ async def search_single_book(query_vector: list, book: str, limit: int = 4) -> l
                     models.FieldCondition(
                         key="book_title",
                         match=models.MatchValue(value=book)
+                    )
+                ],
+                must_not=[
+                    models.FieldCondition(
+                        key="is_user_doc",
+                        match=models.MatchValue(value=True)
                     )
                 ]
             ),
@@ -3261,6 +3376,12 @@ async def search_single_book(query_vector: list, book: str, limit: int = 4) -> l
                             key="book_title",
                             match=models.MatchText(text=book_kw)
                         )
+                    ],
+                    must_not=[
+                        models.FieldCondition(
+                            key="is_user_doc",
+                            match=models.MatchValue(value=True)
+                        )
                     ]
                 ),
                 limit=limit
@@ -3271,7 +3392,7 @@ async def search_single_book(query_vector: list, book: str, limit: int = 4) -> l
     return []
 
 async def search_qdrant(query_text: str, limit: int = 8, preferred_books: list = None, user_id: str = None) -> list:
-    """Search Qdrant in PARALLEL across all selected textbooks and user's private study vault."""
+    """Search Qdrant in PARALLEL across all selected textbooks and user's private study vault with 100% tenant isolation."""
     t_start = time.perf_counter()
     try:
         loop = asyncio.get_running_loop()
@@ -3284,9 +3405,19 @@ async def search_qdrant(query_text: str, limit: int = 8, preferred_books: list =
 
         if not preferred_books:
             t_qdrant_start = time.perf_counter()
+            # 🛡️ Strict Multi-Tenant Isolation: General curriculum searches MUST explicitly exclude all private student documents!
+            curriculum_filter = models.Filter(
+                must_not=[
+                    models.FieldCondition(
+                        key="is_user_doc",
+                        match=models.MatchValue(value=True)
+                    )
+                ]
+            )
             book_task = qdrant.query_points(
                 collection_name=COLLECTION_NAME,
                 query=query_vector,
+                query_filter=curriculum_filter,
                 limit=limit
             )
             if user_tasks:
@@ -3299,7 +3430,7 @@ async def search_qdrant(query_text: str, limit: int = 8, preferred_books: list =
                 all_pts = list(res.points or [])
             all_pts.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
             dt_total = time.perf_counter() - t_start
-            print(f"⏱️ [QDRANT TIMER] search_qdrant(all_books + user_docs, '{query_text[:30]}') finished in {dt_total:.3f}s (Embed: {dt_embed*1000:.1f}ms, Chunks: {len(all_pts)})")
+            print(f"⏱️ [QDRANT TIMER] search_qdrant(curriculum_books + user_vault, '{query_text[:30]}') finished in {dt_total:.3f}s (Embed: {dt_embed*1000:.1f}ms, Chunks: {len(all_pts)})")
             return all_pts
 
         # Query all selected textbooks concurrently in parallel alongside user documents!
@@ -3310,7 +3441,7 @@ async def search_qdrant(query_text: str, limit: int = 8, preferred_books: list =
         all_points = [p for sub in results_list for p in sub]
         all_points.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
         dt_total = time.perf_counter() - t_start
-        print(f"⏱️ [QDRANT TIMER] search_qdrant({len(preferred_books)} books + user_docs, '{query_text[:30]}') finished in {dt_total:.3f}s (Embed: {dt_embed*1000:.1f}ms, Chunks: {len(all_points)})")
+        print(f"⏱️ [QDRANT TIMER] search_qdrant({len(preferred_books)} books + user_vault, '{query_text[:30]}') finished in {dt_total:.3f}s (Embed: {dt_embed*1000:.1f}ms, Chunks: {len(all_points)})")
         return all_points
 
     except Exception as outer_e:
@@ -4062,10 +4193,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     await send_whatsapp_cloud_msg(sender_phone, feedback_msg)
                     return
                 elif msg_lower in ["/documents", "/docs", "/uploads", "my documents", "my uploads", "documents", "uploads"]:
-                    custom_docs = fresh_doc.get("custom_documents", []) if 'fresh_doc' in locals() and fresh_doc else (user_doc.get("custom_documents", []) if user_doc else [])
-                    if not custom_docs and users_col is not None:
-                        ud = await users_col.find_one({"user_id": sender_phone})
-                        custom_docs = ud.get("custom_documents", []) if ud else []
+                    ud = await users_col.find_one({"user_id": sender_phone}) if users_col is not None else None
+                    custom_docs = ud.get("custom_documents", []) if ud else []
                     if not custom_docs:
                         doc_list_msg = (
                             "📂 *Your Personal Study Vault*\n\n"
@@ -4075,12 +4204,134 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                             "I will automatically verify and index them so you can ask questions directly from your own materials! 🩺📚"
                         )
                     else:
-                        lines = [f"📂 *Your Personal Study Vault ({len(custom_docs)} Document{'s' if len(custom_docs) > 1 else ''})*\n"]
-                        for i, d in enumerate(custom_docs[-8:], 1):
+                        lines = [f"📂 *Your Personal Study Vault ({len(custom_docs)}/15 Documents Used)*\n"]
+                        for i, d in enumerate(custom_docs, 1):
                             lines.append(f"{i}. *{d.get('title', d.get('filename'))}*\n   📑 {d.get('page_count', '?')} pages ({d.get('chunk_count', '?')} chunks) • _{d.get('category', 'Medical')}_")
-                        lines.append("\n💡 *Tip:* Ask me any question about these materials anytime!")
+                        lines.append("\n💡 *Tips:*\n• Ask me questions about any of these documents anytime!\n• To remove a document, type `/deletedoc [number]` (e.g. `/deletedoc 1` or `/deletedoc all`)")
                         doc_list_msg = "\n".join(lines)
                     await send_whatsapp_cloud_msg(sender_phone, doc_list_msg)
+                    return
+                elif msg_lower.startswith("/deletedoc") or msg_lower.startswith("/delete doc") or msg_lower.startswith("/removedoc"):
+                    cmd_parts = user_msg.strip().split(maxsplit=1)
+                    if len(cmd_parts) < 2 or not cmd_parts[1].strip():
+                        await send_whatsapp_cloud_msg(
+                            sender_phone,
+                            "🗑️ *Delete a Document from Your Study Vault*\n\n"
+                            "Please specify the document number or title you want to remove.\n\n"
+                            "*Examples:*\n"
+                            "• `/deletedoc 1`\n"
+                            "• `/deletedoc Pharmacology`\n"
+                            "• `/deletedoc all` (to clear your entire vault)\n\n"
+                            "💡 Type `/documents` to view your indexed files and their numbers! 📂"
+                        )
+                        return
+
+                    del_target = cmd_parts[1].strip()
+                    ud = await users_col.find_one({"user_id": sender_phone}) if users_col is not None else None
+                    custom_docs = ud.get("custom_documents", []) if ud else []
+
+                    if not custom_docs:
+                        await send_whatsapp_cloud_msg(
+                            sender_phone,
+                            "📂 *Personal Study Vault Empty*\n\n"
+                            "You don't have any uploaded documents in your vault right now."
+                        )
+                        return
+
+                    if del_target.lower() == "all":
+                        try:
+                            await qdrant.delete(
+                                collection_name=COLLECTION_NAME,
+                                points_selector=models.FilterSelector(
+                                    filter=models.Filter(
+                                        must=[
+                                            models.FieldCondition(key="user_id", match=models.MatchValue(value=str(sender_phone))),
+                                            models.FieldCondition(key="is_user_doc", match=models.MatchValue(value=True))
+                                        ]
+                                    )
+                                )
+                            )
+                            await users_col.update_one(
+                                {"user_id": sender_phone},
+                                {"$set": {"custom_documents": []}}
+                            )
+                            await send_whatsapp_cloud_msg(
+                                sender_phone,
+                                f"🗑️ *All Documents Cleared*\n\n"
+                                f"Cleared all {len(custom_docs)} documents from your personal study vault.\n"
+                                f"Your study vault is now completely reset (0/15 documents used)."
+                            )
+                        except Exception as all_err:
+                            print(f"⚠️ Error clearing all docs: {all_err}")
+                            await send_whatsapp_cloud_msg(sender_phone, "⚠️ An error occurred while clearing your documents.")
+                        return
+
+                    target_doc = None
+                    if del_target.isdigit():
+                        idx = int(del_target) - 1
+                        if 0 <= idx < len(custom_docs):
+                            target_doc = custom_docs[idx]
+
+                    if not target_doc:
+                        query_clean = del_target.lower()
+                        for d in custom_docs:
+                            if d.get("filename", "").lower() == query_clean:
+                                target_doc = d
+                                break
+                        if not target_doc:
+                            for d in custom_docs:
+                                title_lower = d.get("title", "").lower()
+                                fn_lower = d.get("filename", "").lower()
+                                if query_clean in title_lower or query_clean in fn_lower:
+                                    target_doc = d
+                                    break
+
+                    if not target_doc:
+                        await send_whatsapp_cloud_msg(
+                            sender_phone,
+                            f"❓ *Document Not Found*\n\n"
+                            f"I couldn't find a document matching *\"{del_target}\"* in your study vault.\n\n"
+                            "Type `/documents` to view your current document list and numbers!"
+                        )
+                        return
+
+                    target_filename = target_doc.get("filename")
+                    target_title = target_doc.get("title") or target_filename
+
+                    # 1. Delete points in Qdrant
+                    try:
+                        await qdrant.delete(
+                            collection_name=COLLECTION_NAME,
+                            points_selector=models.FilterSelector(
+                                filter=models.Filter(
+                                    must=[
+                                        models.FieldCondition(key="user_id", match=models.MatchValue(value=str(sender_phone))),
+                                        models.FieldCondition(key="source_file", match=models.MatchValue(value=target_filename))
+                                    ]
+                                )
+                            )
+                        )
+                        print(f"🗑️ Deleted Qdrant points for user {sender_phone}, file '{target_filename}'")
+                    except Exception as q_del_err:
+                        print(f"⚠️ Error deleting Qdrant points during /deletedoc: {q_del_err}")
+
+                    # 2. Remove document from MongoDB users collection
+                    try:
+                        await users_col.update_one(
+                            {"user_id": sender_phone},
+                            {"$pull": {"custom_documents": {"filename": target_filename}}}
+                        )
+                    except Exception as m_del_err:
+                        print(f"⚠️ Error removing document from MongoDB during /deletedoc: {m_del_err}")
+
+                    rem_count = max(0, len(custom_docs) - 1)
+                    await send_whatsapp_cloud_msg(
+                        sender_phone,
+                        f"🗑️ *Document Deleted*\n\n"
+                        f"*{target_title}* has been removed from your study vault.\n\n"
+                        f"📊 *Vault Capacity:* {rem_count}/15 documents used.\n"
+                        f"💡 You can upload a new PDF anytime using the 📎 attachment button!"
+                    )
                     return
                 elif msg_lower in ["/update name", "/updatename", "/update_name", "/name", "update name", "updatename"]:
                     await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_NAME"}})
