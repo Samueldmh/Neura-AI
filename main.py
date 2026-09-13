@@ -4,6 +4,11 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 import gc
 import re
 import json
@@ -779,7 +784,8 @@ async def call_openrouter_llm(
             print(f"Retry error: {retry_err}")
 
     dt = time.perf_counter() - t_start
-    print(f"⏱️ [LLM TIMER] call_openrouter_llm completed in {dt:.3f}s (Model: {DEFAULT_MODEL}, Provider: {provider_used}, Tokens Generated: ~{len(content.split())*4/3:.0f})")
+    model_name = data.get("model", target_models[0])
+    print(f"⏱️ [LLM TIMER] call_openrouter_llm completed in {dt:.3f}s (Model: {model_name}, Provider: {provider_used}, Tokens Generated: ~{len(content.split())*4/3:.0f})")
     return (content or "").strip()
 
 async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str, sender_phone: str, chat_history: list = None) -> str:
@@ -893,7 +899,7 @@ async def call_groq_chat(prompt: str, model: str = "groq/compound-mini", tempera
         "Authorization": f"Bearer {groq_key.strip()}",
         "Content-Type": "application/json"
     }
-    candidate_models = [model, "groq/compound-mini", "llama-3.1-8b-instant", "qwen/qwen3.6-27b"]
+    candidate_models = [model, "groq/compound-mini", "llama-3.3-70b-versatile", "qwen/qwen3.6-27b"]
     seen = set()
     candidate_models = [m for m in candidate_models if not (m in seen or seen.add(m))]
 
@@ -988,7 +994,7 @@ def _smart_truncate(text: str, limit: int) -> str:
     return (cut[:idx] if idx > 0 else cut).strip() + "…"
 
 async def condense_question(history: list[dict], question: str, current_topic: str = "") -> str:
-    """Rewrite follow-up queries into fully standalone questions using Groq (or OpenRouter fallback)."""
+    """Rewrite follow-up queries into fully standalone questions using OpenRouter (Gemini 2.5 Flash Lite -> GPT-4o-mini) with Groq as last-resort fallback."""
     clean_q = question.strip()
     if not history and not current_topic:
         return clean_q
@@ -1008,23 +1014,27 @@ async def condense_question(history: list[dict], question: str, current_topic: s
     clean_topic = current_topic.strip() if current_topic and current_topic.lower() not in ["none", "high-yield clinical concepts"] else "None (infer from chat history if applicable)"
     prompt = CONDENSE_PROMPT.format(current_topic=clean_topic, history_text=history_text, question=clean_q)
 
-    # 1. Primary: Groq LPU API (~100ms)
+    # 1. Primary: OpenRouter multi-candidate array [FRONTDESK_MODEL, FALLBACK_MODEL]
     t0 = time.perf_counter()
-    rewritten = await call_groq_chat(prompt, model="groq/compound-mini", temperature=0.0, max_tokens=150)
+    rewritten = ""
+    try:
+        rewritten = await call_openrouter_llm(
+            system_prompt="You are an expert query condenser. Rewrite the user's message as a standalone question based on history and current topic. If already standalone, return it verbatim without preamble.",
+            user_prompt=prompt,
+            models=[FRONTDESK_MODEL, FALLBACK_MODEL],
+            temperature=0.0,
+            max_tokens=250,
+            reasoning={"effort": "none"}
+        )
+    except Exception as or_err:
+        print(f"⚠️ OpenRouter condenser error: {or_err}")
 
-    # 2. Fallback: OpenRouter with Gemini 2.5 Flash Lite
-    if not rewritten:
+    # 2. Distant last-resort fallback: Groq LPU API
+    if not rewritten or not rewritten.strip():
         try:
-            rewritten = await call_openrouter_llm(
-                system_prompt="You are an expert query condenser. Rewrite the user's message as a standalone question based on history and current topic. If already standalone, return it verbatim without preamble.",
-                user_prompt=prompt,
-                max_tokens=250,
-                model=FRONTDESK_MODEL,
-                temperature=0.0,
-                reasoning={"effort": "none"}
-            )
-        except Exception as fallback_err:
-            print(f"⚠️ Fallback condenser error: {fallback_err}")
+            rewritten = await call_groq_chat(prompt, model="groq/compound-mini", temperature=0.0, max_tokens=150)
+        except Exception as groq_err:
+            print(f"⚠️ Distant Groq fallback condenser error: {groq_err}")
 
     if rewritten:
         clean_rewritten = re.sub(r'^(Standalone question|Rewritten question|Question):\s*', '', rewritten.strip(), flags=re.IGNORECASE)
@@ -2383,15 +2393,26 @@ async def evaluate_document_is_medical(sample_text: str, filename: str) -> dict:
         "If is_medical is false, provide a polite, concise rejection_reason (e.g., 'This file appears to be a financial receipt or payment invoice rather than medical study notes.')."
     )
 
-    # 1. Ultra-fast evaluation via Groq (<150ms)
-    res_text = await call_groq_chat(prompt, model="llama-3.1-8b-instant", temperature=0.0, max_tokens=250)
-    
-    # 2. OpenRouter fallback if Groq was unavailable
+    # 1. Primary: OpenRouter multi-candidate array [FRONTDESK_MODEL, FALLBACK_MODEL]
+    res_text = ""
+    try:
+        res_text = await call_openrouter_llm(
+            system_prompt="You are an academic gatekeeper. Output ONLY JSON.",
+            user_prompt=prompt,
+            models=[FRONTDESK_MODEL, FALLBACK_MODEL],
+            temperature=0.0,
+            max_tokens=250,
+            reasoning={"effort": "none"}
+        )
+    except Exception as or_err:
+        print(f"⚠️ OpenRouter document gatekeeper error: {or_err}")
+
+    # 2. Distant last-resort fallback via Groq if OpenRouter was unavailable
     if not res_text or not res_text.strip():
         try:
-            res_text = await call_openrouter_llm("You are an academic gatekeeper. Output ONLY JSON.", prompt, max_tokens=250)
-        except Exception as e:
-            print(f"⚠️ OpenRouter fallback error in document gatekeeper: {e}")
+            res_text = await call_groq_chat(prompt, model="groq/compound-mini", temperature=0.0, max_tokens=250)
+        except Exception as groq_err:
+            print(f"⚠️ Distant Groq fallback document gatekeeper error: {groq_err}")
 
     if res_text:
         try:
@@ -4834,7 +4855,14 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 user_doc_hist = await chat_history_col.find_one({"user_id": sender_phone})
                 if user_doc_hist and "messages" in user_doc_hist:
                     chat_history = user_doc_hist["messages"][-6:]
-            platform_reply = await call_openrouter_llm(platform_system, user_msg, chat_history=chat_history, max_tokens=250, model=FRONTDESK_MODEL)
+            platform_reply = await call_openrouter_llm(
+                platform_system,
+                user_msg,
+                chat_history=chat_history,
+                max_tokens=250,
+                models=[FRONTDESK_MODEL, FALLBACK_MODEL],
+                reasoning={"effort": "none"}
+            )
             if not platform_reply:
                 platform_reply = f"Hey *{name}*! Anonymous beta feedback just means any feedback or bug reports you share are completely confidential and not linked to your personal profile or number—so feel free to be 100% honest! 😊"
             await send_whatsapp_cloud_msg(sender_phone, platform_reply)
