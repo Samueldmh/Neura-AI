@@ -319,8 +319,73 @@ async def update_user_study_streak(user_id: str) -> int:
         print(f"Error updating study streak: {e}")
         return 1
 
+# Concurrency Limiter for Automated Streak Nudges: bounds parallel LLM generations and WhatsApp sends to 10
+STREAK_NUDGE_SEMAPHORE = asyncio.Semaphore(10)
+
+STREAK_MSG_PROMPT = """You are writing a short, warm WhatsApp daily study nudge for a medical student on NEURA AI.
+
+Student name: {name}
+Current streak: {streak_count} day(s) {streak_note}
+Recently studied: {recent_topics}
+
+Write ONE short WhatsApp message (2-4 sentences, *bold* for emphasis, 1-2 emoji, no headers) that:
+- Sounds different from a typical daily reminder — vary the opening, tone, and structure each time
+- {topic_instruction}
+- Ends with a natural question inviting them to continue or pick a topic
+- Reads like an encouraging senior student, not an app notification
+
+Output ONLY the message text.
+"""
+
+async def generate_streak_message(name: str, streak_count: int, recent_topics: list[str]) -> str:
+    topic_instruction = (
+        f"Naturally reference that they've recently covered {', '.join(recent_topics[:3])} and ask if they'd like to build on one of those or start something new"
+        if recent_topics else
+        "Invite them to pick any topic to kick off today's session"
+    )
+    prompt = STREAK_MSG_PROMPT.format(
+        name=name,
+        streak_count=streak_count,
+        streak_note="(starting fresh!)" if streak_count == 0 else f"→ grows to {streak_count + 1} today",
+        recent_topics=", ".join(recent_topics[:3]) if recent_topics else "nothing yet",
+        topic_instruction=topic_instruction,
+    )
+    try:
+        result = await call_openrouter_llm(
+            system_prompt="You are a warm, encouraging medical study companion writing short WhatsApp nudges.",
+            user_prompt=prompt,
+            max_tokens=150,
+            models=[FRONTDESK_MODEL, FALLBACK_MODEL],
+            temperature=0.9,
+            reasoning={"effort": "none"},
+        )
+        if result and len(result.strip()) > 10:
+            return result.strip().strip('"').strip("'")
+    except Exception as e:
+        print(f"⚠️ Streak message generation failed, using static fallback: {e}")
+
+    # Fallback — exactly your current hardcoded message, never leave a student with nothing
+    if streak_count > 1:
+        return (
+            f"🔥 *{streak_count}-DAY STUDY STREAK AT RISK!* 🧊\n\n"
+            f"Hey *{name}*, don't let your study streak freeze today! Complete a quick 2-minute review or MCQ drill to keep your momentum alive for MBBS exams.\n\n"
+            f"Ready to conquer your next clinical topic?"
+        )
+    elif streak_count == 1:
+        return (
+            f"🔥 *KEEP YOUR 1-DAY STREAK ALIVE!* ⚡\n\n"
+            f"Hey *{name}*, consistency is what turns good students into top clinicians! "
+            f"Review 1 concept today to grow your streak to *2 Days*.\n\n"
+            f"What medical topic are we breaking down right now?"
+        )
+    return (
+        f"🔥 *START YOUR STUDY STREAK TODAY!* 🩺\n\n"
+        f"Hey *{name}*, time for your quick daily study check-in! Ask a question or complete a practice quiz to kickstart your Daily Streak.\n\n"
+        f"What medical topic from your textbooks should we tackle?"
+    )
+
 async def check_and_send_inactivity_reminders(force_ignore_quiet_hours: bool = False, simulated_hour: int = None):
-    """Background worker to send Duolingo-style study streak reminders to users inactive for 8-12 hours between 6am and 11pm WAT."""
+    """Background worker to send personalized study streak reminders to users inactive for 8-12 hours between 6am and 11pm WAT."""
     if users_col is None:
         return
         
@@ -346,50 +411,61 @@ async def check_and_send_inactivity_reminders(force_ignore_quiet_hours: bool = F
             "reminders_enabled": {"$ne": False}
         })
         
+        users_to_remind = []
         async for user in cursor:
+            users_to_remind.append(user)
+
+        if not users_to_remind:
+            return
+
+        print(f"📬 [STREAK NUDGE] Dispatching personalized streak nudges to {len(users_to_remind)} eligible students (Concurrency: 10)...")
+
+        async def _remind_user(user: dict):
             phone = user.get("user_id")
             if not phone:
-                continue
+                return
                 
             name = user.get("name", "Student")
             streak = user.get("study_streak_days", 0)
-            last_study = user.get("last_study_date", "")
-            last_topic = user.get("last_medical_topic", "High-Yield Clinical Concepts")
             
-            # Formulate streak nudge message
-            if streak > 1 and last_study != today_str:
-                streak_msg = (
-                    f"🔥 *{streak}-DAY STUDY STREAK AT RISK!* 🧊\n\n"
-                    f"Hey *{name}*, don't let your study streak freeze today! Complete a quick 2-minute review or MCQ drill to keep your momentum alive for MBBS exams.\n\n"
-                    f"Ready to conquer your next clinical topic?"
+            # Extract clean unique recent topics (most recent first)
+            recent_topics = []
+            recent_data = user.get("recent_topics", [])
+            if isinstance(recent_data, list):
+                for item in reversed(recent_data):
+                    if isinstance(item, dict) and item.get("topic"):
+                        t = item["topic"].strip()
+                        if t and t not in recent_topics:
+                            recent_topics.append(t)
+                    elif isinstance(item, str) and item.strip() and item.strip() not in recent_topics:
+                        recent_topics.append(item.strip())
+
+            # Backwards compatibility fallback if recent_topics array is not populated yet
+            if not recent_topics:
+                last_t = user.get("last_medical_topic")
+                if last_t and isinstance(last_t, str) and last_t.strip():
+                    recent_topics.append(last_t.strip())
+
+            # Bounded concurrency: maximum 10 concurrent OpenRouter LLM calls and WhatsApp API deliveries
+            async with STREAK_NUDGE_SEMAPHORE:
+                streak_msg = await generate_streak_message(name, streak, recent_topics)
+                
+                # Send reminder message directly; auto fallback to Meta template if outside 24h window
+                delivered = await send_whatsapp_cloud_msg(phone, streak_msg)
+                if not delivered:
+                    print(f"[NUDGE] Direct reminder unconfirmed for {phone} (>24h inactive). Delivering via neura_announcement template...")
+                    await send_whatsapp_template_msg(phone, "neura_announcement", [name, streak_msg])
+                
+                # Mark reminder sent date to ensure strict 1-per-day cap
+                await users_col.update_one(
+                    {"user_id": phone},
+                    {"$set": {"last_reminder_sent_date": today_str}}
                 )
-            elif streak == 1 and last_study != today_str:
-                streak_msg = (
-                    f"🔥 *KEEP YOUR 1-DAY STREAK ALIVE!* ⚡\n\n"
-                    f"Hey *{name}*, consistency is what turns good students into top clinicians! Review 1 concept today to grow your streak to *2 Days*.\n\n"
-                    f"What medical topic are we breaking down right now?"
-                )
-            else:
-                streak_msg = (
-                    f"🔥 *START YOUR STUDY STREAK TODAY!* 🩺\n\n"
-                    f"Hey *{name}*, time for your quick daily study check-in! Ask a question or complete a practice quiz to kickstart your Daily Streak.\n\n"
-                    f"What medical topic from your textbooks should we tackle?"
-                )
-            
-            topic_snippet = last_topic[:100] if last_topic else "High-Yield Clinical Concepts"
-            
-            # Send reminder message directly; auto fallback to Meta template if outside 24h window
-            delivered = await send_whatsapp_cloud_msg(phone, streak_msg)
-            if not delivered:
-                print(f"[NUDGE] Direct reminder unconfirmed for {phone} (>24h inactive). Delivering via neura_announcement template...")
-                await send_whatsapp_template_msg(phone, "neura_announcement", [name, streak_msg])
-            
-            # Mark reminder sent date to ensure strict 1-per-day cap
-            await users_col.update_one(
-                {"user_id": phone},
-                {"$set": {"last_reminder_sent_date": today_str}}
-            )
-            print(f"[NUDGE] Sent streak reminder to {phone} (Streak: {streak} days)")
+                print(f"[NUDGE] Sent personalized streak reminder to {phone} (Streak: {streak}d | Topics: {recent_topics[:2]})")
+
+        tasks = [_remind_user(u) for u in users_to_remind]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        print(f"✅ [STREAK NUDGE BATCH COMPLETE] Finished delivering reminders for {len(users_to_remind)} students.")
             
     except Exception as e:
         print(f"Error in inactivity reminder worker: {e}")
@@ -5218,6 +5294,12 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                                 "last_medical_topic": clean_topic,
                                 "last_context_text": cached_context or cached_answer[:2000],
                                 "last_assistant_answer": cached_answer
+                            },
+                            "$push": {
+                                "recent_topics": {
+                                    "$each": [{"topic": clean_topic, "date": datetime.utcnow().isoformat()}],
+                                    "$slice": -10
+                                }
                             }
                         }
                     )
@@ -5410,6 +5492,12 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                             "last_medical_topic": clean_topic,
                             "last_context_text": formatted_context,
                             "last_assistant_answer": ai_answer
+                        },
+                        "$push": {
+                            "recent_topics": {
+                                "$each": [{"topic": clean_topic, "date": datetime.utcnow().isoformat()}],
+                                "$slice": -10
+                            }
                         }
                     }
                 )
