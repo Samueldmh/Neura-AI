@@ -289,7 +289,7 @@ async def ingest(request: dict) -> dict:
 
     # ── MongoDB helpers ───────────────────────────────────────────────────────
     async def mongo_set_upload(status: str, **kw):
-        if not users_col:
+        if users_col is None:
             return
         try:
             await users_col.update_one(
@@ -301,7 +301,7 @@ async def ingest(request: dict) -> dict:
             print(f"[MONGO set] {e}")
 
     async def mongo_clear_upload():
-        if not users_col:
+        if users_col is None:
             return
         try:
             await users_col.update_one(
@@ -555,7 +555,7 @@ async def ingest(request: dict) -> dict:
         if len(chunks) <= STAGE1:
             # Single-stage (small documents — ≤20 chunks)
             n = await embed_upsert(chunks, 0, sender_phone, filename, title, category)
-            if users_col:
+            if users_col is not None:
                 try:
                     rec = {"filename": filename, "title": title, "category": category,
                            "page_count": len(pages), "chunk_count": n,
@@ -575,7 +575,7 @@ async def ingest(request: dict) -> dict:
             s1     = chunks[:STAGE1]
             n1     = await embed_upsert(s1, 0, sender_phone, filename, title, category)
             mx     = max(c["page_number"] for c in s1)
-            if users_col:
+            if users_col is not None:
                 try:
                     rec = {"filename": filename, "title": title, "category": category,
                            "page_count": len(pages), "chunk_count": n1, "total_chunks": len(chunks),
@@ -599,7 +599,7 @@ async def ingest(request: dict) -> dict:
 
             # Stage 2: remaining chunks
             n = n1 + await embed_upsert(chunks[STAGE1:], STAGE1, sender_phone, filename, title, category)
-            if users_col:
+            if users_col is not None:
                 try:
                     await users_col.update_one(
                         {"user_id": sender_phone, "custom_documents.filename": filename},
@@ -637,5 +637,5 @@ async def ingest(request: dict) -> dict:
         return {"ok": False, "error": str(exc)}
     finally:
         await mongo_clear_upload()
-        if mongo_cl:
+        if mongo_cl is not None:
             mongo_cl.close()
