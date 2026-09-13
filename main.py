@@ -2283,35 +2283,36 @@ def extract_document_pages_from_bytes(file_bytes: bytes, filename: str, mime_typ
     """
     Unified multi-format document parser for NEURA AI.
     Routes intelligently to:
+    - Legacy 97-2003 binary formats (.doc, .ppt) checked FIRST to provide immediate conversion guidance.
     - Microsoft PowerPoint (.pptx)
     - Microsoft Word (.docx)
     - PDF (.pdf)
-    - Flags legacy 97-2003 binary formats (.doc, .ppt) with a clear export prompt.
     """
     fn_lower = filename.lower()
+    LEGACY_MIMES = ("application/msword", "application/vnd.ms-powerpoint")
     
-    # PowerPoint (.pptx)
-    if fn_lower.endswith(".pptx") or "presentation" in mime_type or "powerpoint" in mime_type:
-        return extract_pptx_pages_from_bytes(file_bytes, filename)
-    
-    # Word (.docx)
-    if fn_lower.endswith(".docx") or "wordprocessing" in mime_type or "officedocument.word" in mime_type:
-        return extract_docx_pages_from_bytes(file_bytes, filename)
-    
-    # Legacy binary formats (.doc, .ppt)
-    if fn_lower.endswith(".doc") or fn_lower.endswith(".ppt") or mime_type in ["application/msword", "application/vnd.ms-powerpoint"]:
-        # Attempt modern openxml parser in case the file is simply renamed
-        if fn_lower.endswith(".ppt"):
+    # 1. Check legacy binary formats FIRST — before modern-format substring checks!
+    if fn_lower.endswith((".doc", ".ppt")) or mime_type in LEGACY_MIMES:
+        # Attempt modern openxml parser in case the file is simply renamed .docx/.pptx
+        if fn_lower.endswith(".ppt") or mime_type == "application/vnd.ms-powerpoint":
             res = extract_pptx_pages_from_bytes(file_bytes, filename)
             if res[0]: return res
-        if fn_lower.endswith(".doc"):
+        if fn_lower.endswith(".doc") or mime_type == "application/msword":
             res = extract_docx_pages_from_bytes(file_bytes, filename)
             if res[0]: return res
         return False, "LEGACY_BINARY", [], {
             "error": "Legacy 97–2003 binary format. Please open in Word/PowerPoint and save as .docx or .pptx (or export to PDF)!"
         }
 
-    # Default: PDF (.pdf)
+    # 2. Modern PowerPoint (.pptx) - dropped 'powerpoint' substring so legacy MIME isn't caught
+    if fn_lower.endswith(".pptx") or "presentation" in mime_type:
+        return extract_pptx_pages_from_bytes(file_bytes, filename)
+    
+    # 3. Modern Word (.docx)
+    if fn_lower.endswith(".docx") or "wordprocessing" in mime_type or "officedocument.word" in mime_type:
+        return extract_docx_pages_from_bytes(file_bytes, filename)
+
+    # 4. Default: PDF (.pdf)
     return extract_pdf_pages_from_bytes(file_bytes, filename)
 
 async def evaluate_document_is_medical(sample_text: str, filename: str) -> dict:
@@ -2565,7 +2566,16 @@ async def process_whatsapp_document(
     # Safeguard: ensure filename is never an empty or static shared constant
     if not filename or filename in ["document.pdf", "medical_document.pdf"]:
         safe_media_tag = media_id if media_id else str(int(time.time()))
-        ext = ".pptx" if ("presentation" in mime_type or "powerpoint" in mime_type) else (".docx" if ("word" in mime_type or "officedocument" in mime_type) else ".pdf")
+        if mime_type == "application/vnd.ms-powerpoint":
+            ext = ".ppt"
+        elif mime_type == "application/msword":
+            ext = ".doc"
+        elif "presentation" in mime_type or "powerpoint" in mime_type:
+            ext = ".pptx"
+        elif "word" in mime_type or "officedocument" in mime_type:
+            ext = ".docx"
+        else:
+            ext = ".pdf"
         filename = f"document_{safe_media_tag}{ext}"
 
     print(f"\n📄 [DOCUMENT INGESTION START] User: {sender_phone} | File: '{filename}' | Media ID: {media_id} | Caption: '{caption}' | MIME: '{mime_type}'")
@@ -5392,9 +5402,13 @@ async def handle_whatsapp_webhook(request: Request):
                         # Avoid shared static fallback so two untitled uploads by the same student never collide in Qdrant/MongoDB
                         safe_media_tag = media_id if media_id else str(int(time.time()))
                         if not raw_filename:
-                            if "presentation" in mime_type or "powerpoint" in mime_type:
+                            if mime_type == "application/vnd.ms-powerpoint":
+                                ext = ".ppt"
+                            elif mime_type == "application/msword":
+                                ext = ".doc"
+                            elif "presentation" in mime_type or "powerpoint" in mime_type:
                                 ext = ".pptx"
-                            elif "word" in mime_type or "officedocument" in mime_type or "msword" in mime_type:
+                            elif "word" in mime_type or "officedocument" in mime_type:
                                 ext = ".docx"
                             else:
                                 ext = ".pdf"
