@@ -70,6 +70,10 @@ FLUTTERWAVE_SECRET_KEY = os.getenv("FLUTTERWAVE_SECRET_KEY", "")
 FLUTTERWAVE_SECRET_HASH = os.getenv("FLUTTERWAVE_SECRET_HASH", "neura_flw_hash_2026")
 BASE_URL = os.getenv("BASE_URL", "https://neura-ai-qtux.onrender.com")
 
+# Modal.com Serverless Ingestion Worker — set this to the deployed URL after `modal deploy modal_worker.py`
+# Leave blank ("") to keep using the local in-process ingestion pipeline (current behaviour).
+MODAL_ENDPOINT = os.getenv("MODAL_ENDPOINT", "")
+
 # Official Meta WhatsApp Cloud API credentials
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAM3F01f3nYBSKwpMPZAU2Nhgdvr7b4481UQ2sCTosr3Hu6UIL3U5BTBiN8I5932PfnEx6GzDWiUfwMYiFok4eZCaMrLPNhhMvnAQ27fVsxxqpxIvES3SYhSi6speeab3FaBq8anZCoPVXS2f9LXA7b7ZA2kWrZBRA8zmBv03cBe2yTR3OWAAhgEh0lEk3ULqfAZDZD")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "1150180661520951")
@@ -2961,7 +2965,38 @@ async def process_whatsapp_document(
             )
             await send_whatsapp_cloud_msg(sender_phone, queue_ack_msg)
 
+            # ── Modal Serverless Dispatch ──────────────────────────────────────────
+            # If MODAL_ENDPOINT is configured, hand off ALL heavy work to Modal.
+            # The Modal container handles: download → extract → gatekeeper → embed
+            # → Qdrant upsert → WhatsApp success card.
+            # main.py returns in ~15ms; Modal runs the pipeline in its own container.
+            if MODAL_ENDPOINT:
+                try:
+                    payload = {
+                        "sender_phone": sender_phone,
+                        "media_id":     media_id,
+                        "filename":     filename,
+                        "caption":      caption or "",
+                        "mime_type":    mime_type,
+                    }
+                    print(f"🚀 [MODAL DISPATCH] Firing to Modal for {sender_phone} / '{filename}'")
+                    # Fire-and-forget: do NOT await the result — Modal handles completion
+                    asyncio.create_task(
+                        shared_http_client.post(
+                            MODAL_ENDPOINT,
+                            json=payload,
+                            timeout=httpx.Timeout(15.0)  # only wait for the ACK from Modal's load balancer
+                        )
+                    )
+                except Exception as modal_err:
+                    print(f"⚠️ Modal dispatch error (falling back to local pipeline): {modal_err}")
+                else:
+                    # Modal took over — we're done here.
+                    # active_upload will be cleared by the Modal container's finally block.
+                    return
+
             try:
+                # ── LOCAL FALLBACK PIPELINE (used when MODAL_ENDPOINT is not set) ──────
                 # Step 1: Guarded Download & Extraction (prevents memory spikes during raw bytes handling)
                 doc_bytes = None
                 try:
