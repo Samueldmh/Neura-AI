@@ -36,12 +36,13 @@ app = modal.App("neura-ai-ingestion")
 ingestion_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
+        "fastapi[standard]",       # Required by @modal.fastapi_endpoint
         "pymupdf",                 # Fast PDF text extraction (fitz)
         "pypdf",                   # Lightweight PDF fallback
         "python-docx",             # .docx Word document parsing
         "python-pptx",             # .pptx PowerPoint parsing
         "fastembed==0.3.6",        # BAAI/bge-small-en-v1.5 ONNX embeddings (CPU)
-        "qdrant-client[fastembed]", # Vector database client
+        "qdrant-client",           # Vector database client
         "motor",                   # Async MongoDB driver
         "httpx",                   # Async HTTP (Meta CDN + WhatsApp API + LLMs)
         "python-dotenv",           # Optional: load .env in local testing
@@ -61,7 +62,7 @@ neura_secrets = modal.Secret.from_name("neura-secrets")
     timeout=300,   # 5 min hard limit (large textbooks ~2 min)
     max_containers=50,  # Safety cap: at most 50 parallel containers (DB protection)
 )
-@modal.web_endpoint(method="POST", label="neura-ingest")
+@modal.fastapi_endpoint(method="POST", label="neura-ingest")
 async def ingest(request: dict) -> dict:
     """
     Called by main.py (Render) as fire-and-forget when a WhatsApp document arrives.
