@@ -506,6 +506,7 @@ Rules:
 - Keep it conversational: short paragraphs, plain language, like a sharp senior student explaining it to a junior
 - If the reference material is thin or doesn't fully answer it, say so honestly rather than padding
 - Never use phrases like "based on the context," "according to the provided material," or "the document states." Speak as if you already know this, informed by the textbook.
+- STRICT MEDICAL SCOPE: You are exclusively an MBBS medical study companion. If a student asks about a subject completely outside human medicine, biology, healthcare, or clinical training (e.g. economics, macroeconomics, finance, computer coding, politics, sports, general pop culture), DO NOT attempt to answer it or invent medical analogies for it. Politely and warmly decline, and redirect the student to a clinical condition, pharmacology, anatomy, or pathology topic.
 
 Reference material (for your own understanding — do not quote it directly):
 {retrieved_chunks}
@@ -637,6 +638,17 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
         if any(w in last_assistant_msg for w in ["feedback", "beta", "wallet", "deposit", "command", "anonymous", "profile", "streak"]):
             return "PLATFORM_META"
 
+    # 2.6 Blatant Off-Topic Fast-Path (<0.01ms) - non-medical academic, economic, financial, coding, pop culture topics
+    off_topic_patterns = [
+        r"\b(macroeconomic(s)?|microeconomic(s)?|economics?|inflation|monetary\s*policy|gross\s*domestic\s*product|\bgdp\b|balance\s*of\s*trade|exchange\s*rate)\b",
+        r"\b(cryptocurrency|crypto|bitcoin|btc|ethereum|eth|forex|stock\s*market|investing|finance|financial\s*market|mutual\s*funds?|capitalism|socialism)\b",
+        r"\b(python|javascript|typescript|c\+\+|html|css|sql|coding|programming|write\s*(a\s*)?code|debug\s*code|leetcode|algorithm\s*in\s*python)\b",
+        r"\b(premier\s*league|champions\s*league|ballon\s*d'?or|messi|ronaldo|manchester\s*united|arsenal|chelsea|real\s*madrid|barcelona|\bnba\b|world\s*cup|football\s*match|soccer)\b",
+        r"\b(write\s*a\s*(love\s*)?letter|dating\s*advice|horoscope|astrology|zodiac\s*sign|tarot)\b"
+    ]
+    if any(re.search(pat, msg_clean) for pat in off_topic_patterns) and not any(ind in msg_clean for ind in KNOWN_MED_INDICATORS):
+        return "OFF_TOPIC"
+
     # 3. Deterministic Gibberish & Noise Filter (y is treated as vowel)
     clean_alpha = re.sub(r'[^a-zA-Z]', '', msg_clean)
     has_long_consonants = bool(re.search(r'[bcdfghjklmnpqrstvwxz]{5,}', msg_clean))
@@ -671,11 +683,12 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
                 "- PLATFORM_META: Questions about the NEURA AI platform itself, its features, commands (/wallet, /deposit, /feedback, /profile), anonymous beta testing, privacy, data confidentiality, pricing, token balance, how the bot works, or who created it.\n"
                 "  * CRITICAL CONTEXT RULE: If the assistant just mentioned 'beta feedback', 'wallet', 'streak', or commands and the student asks 'what do you mean by that?', 'why?', or asks for clarification, classify as PLATFORM_META!\n"
                 "- GREETING: Simple greetings, hello, foreign greetings (e.g. 'bonjour', 'kedu', 'bawo').\n"
-                "- CONVERSATIONAL: Casual banter, presence checks ('are you there', 'u there', 'are you still there', 'you awake'), emotional venting ('I am so tired', 'ward rounds were tough', 'med school is hard'), personal chatter.\n"
+                "- CONVERSATIONAL: Casual banter, presence checks ('are you there', 'u there', 'are you still there', 'you awake'), emotional venting ('I am so tired', 'ward rounds were tough', 'med school is hard'), personal study check-ins, or motivation.\n"
                 "- GRATITUDE: Thank you, thanks, nice one, well done, praise, appreciation.\n"
                 "- ACKNOWLEDGMENT: Short confirmations (ok, cool, noted, got it, understood, alright).\n"
                 "- GIBBERISH: Random keyboard mash, nonsense characters (e.g. 'asdfgh', '12345', '????'), meaningless noise.\n"
                 "- QUIZ: Explicit requests for MCQs, practice questions, quizzes, tests.\n"
+                "- OFF_TOPIC: Questions, discussions, or requests completely outside human medicine, biology, healthcare, clinical training, or MBBS exams (e.g. economics, macroeconomics, international trade, finance, banking, cryptocurrency, computer programming/coding, software, mathematics, physics, history, politics, sports, music, pop culture, movies, creative writing/fiction, non-medical homework).\n"
                 "- MEDICAL: Genuine clinical or medical curriculum study questions (disease pathophysiology, pharmacology, anatomy, biochemistry, clinical management, symptoms, mechanisms, or contextual follow-up questions to an ongoing medical topic).\n\n"
                 "Output ONLY the category name in uppercase with no punctuation."
             )
@@ -702,7 +715,7 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
             if resp.status_code == 200:
                 choice_msg = resp.json().get("choices", [{}])[0].get("message", {})
                 cat = (choice_msg.get("content") or "").strip().upper()
-                for valid in ["PLATFORM_META", "GREETING", "CONVERSATIONAL", "GRATITUDE", "ACKNOWLEDGMENT", "GIBBERISH", "QUIZ", "MEDICAL"]:
+                for valid in ["PLATFORM_META", "GREETING", "OFF_TOPIC", "CONVERSATIONAL", "GRATITUDE", "ACKNOWLEDGMENT", "GIBBERISH", "QUIZ", "MEDICAL"]:
                     if valid in cat:
                         return valid
             else:
@@ -711,6 +724,8 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
             print(f"LLM Intent Classifier fallback error: {e}")
 
     # Default fallback: Only classify as MEDICAL if genuine clinical indicators or medical query patterns are present
+    if any(re.search(pat, msg_clean) for pat in off_topic_patterns):
+        return "OFF_TOPIC"
     terms = extract_medical_terms(message)
     is_not_conversational = not any(w in msg_clean for w in ["who made", "who created", "samuel", "joke", "weather", "who are you", "what can you do", "introduce yourself"])
     if any(ind in msg_clean for ind in KNOWN_MED_INDICATORS) or (terms and is_not_conversational and len(msg_clean.split()) >= 2):
@@ -4917,6 +4932,26 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 )
             return
 
+        if intent == "OFF_TOPIC":
+            off_topic_msg = (
+                f"Haha, as interesting as that is, *{name}*! 💡 But my brain is engineered 100% for medicine, surgery, pharmacology, pathology, anatomy, and helping you crush your MBBS exams! 🩺📚\n\n"
+                "Drop any disease condition, drug mechanism, anatomical structure, or clinical case, and let's conquer it together! 🚀"
+            )
+            await send_whatsapp_cloud_msg(sender_phone, off_topic_msg)
+            
+            # Save to chat history
+            if chat_history_col is not None:
+                new_msgs = [
+                    {"role": "user", "content": user_msg},
+                    {"role": "assistant", "content": off_topic_msg}
+                ]
+                await chat_history_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$push": {"messages": {"$each": new_msgs}}},
+                    upsert=True
+                )
+            return
+
         if intent == "CONVERSATIONAL":
             conv_system = (
                 f"You are Neura, a brilliant, warm, and empathetic senior medical colleague (like a trusted senior resident or sharp study buddy) chatting with {name}, a {level} MBBS medical student on WhatsApp.\n"
@@ -4926,6 +4961,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 "- If the student is checking in ('are you there', 'u there', emojis like 🥺), respond with genuine warmth and reassurance (e.g. 'Always right here with you! 😊 Taking a breather, or are we diving into something new?').\n"
                 "- If the student is exhausted, stressed, or venting about ward rounds / med school, validate their feelings with real empathy and encouragement (e.g. 'Ward rounds can be brutal, Doc. Grab some water and take a quick break—you've got this!').\n"
                 "- If they ask general study advice ('how do I study pharm', 'tips for 300L'), give practical, high-yield guidance in a peer-to-peer tone.\n"
+                "- STRICT ACADEMIC & NON-MEDICAL SCOPE: Under NO circumstances entertain, teach, or discuss off-topic non-medical academic fields (e.g. economics, finance, crypto, coding, sports, politics, non-medical homework). If the student asks to talk about an off-topic subject, warmly and playfully decline in 1-2 sentences (e.g. 'Haha, as interesting as economics is, Doc, I'm strictly your medical wingman! What medical topic are we reviewing today? 🩺').\n"
                 "- Keep responses concise (1 to 3 short, natural WhatsApp sentences max). Use conversational contractions ('I'm', 'let's', 'you're').\n"
                 "- STRICT PROHIBITION: Under NO circumstances output a medical textbook lecture, headers, bulleted lists, '📖 [TOPIC]' titles, or video links here. Output pure natural conversational WhatsApp chat."
             )
