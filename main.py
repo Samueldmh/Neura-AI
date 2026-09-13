@@ -34,6 +34,16 @@ try:
 except ImportError:
     pypdf = None
 
+try:
+    import docx
+except ImportError:
+    docx = None
+
+try:
+    import pptx
+except ImportError:
+    pptx = None
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 from qdrant_client import AsyncQdrantClient
@@ -2044,6 +2054,266 @@ def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool,
 
     return False, "CORRUPTED", [], {"error": "Unable to extract text from this PDF."}
 
+def extract_pptx_pages_from_bytes(pptx_bytes: bytes, filename: str) -> tuple[bool, str, list[tuple[int, str]], dict]:
+    """
+    Tier 1 Technical Gatekeeper (PowerPoint): Extracts text slide-by-slide from PPTX presentation bytes.
+    Maps each slide 1-to-1 to a page number (Slide 1 = Page 1, Slide 2 = Page 2).
+    Captures slide titles, body shapes, tables, and lecturer speaker notes.
+    Includes pure-Python zipfile + XML fallback if python-pptx is unavailable.
+    """
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    try:
+        pages_data = []
+        total_words = 0
+        empty_pages = 0
+
+        # Method 1: python-pptx
+        if pptx is not None:
+            try:
+                prs = pptx.Presentation(io.BytesIO(pptx_bytes))
+                slide_count = len(prs.slides)
+                if slide_count == 0:
+                    return False, "EMPTY_DOCUMENT", [], {"error": "Presentation contains 0 slides."}
+                if slide_count > 200:
+                    return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 200).", "page_count": slide_count}
+
+                for s_idx, slide in enumerate(prs.slides, 1):
+                    slide_texts = []
+                    for shape in slide.shapes:
+                        if shape.has_text_frame:
+                            for paragraph in shape.text_frame.paragraphs:
+                                p_text = "".join(run.text for run in paragraph.runs if run.text).strip()
+                                if p_text:
+                                    slide_texts.append(p_text)
+                        elif shape.has_table:
+                            for row in shape.table.rows:
+                                row_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                                if row_cells:
+                                    slide_texts.append(" | ".join(row_cells))
+
+                    if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                        notes_txt = slide.notes_slide.notes_text_frame.text.strip()
+                        if notes_txt:
+                            slide_texts.append(f"[Speaker Notes: {notes_txt}]")
+
+                    combined_text = "\n".join(slide_texts).strip()
+                    word_count = len(combined_text.split())
+                    total_words += word_count
+                    if word_count < 6:
+                        empty_pages += 1
+                    pages_data.append((s_idx, combined_text))
+
+            except Exception as pptx_err:
+                print(f"⚠️ python-pptx parser error on {filename} ({pptx_err}), attempting XML fallback...")
+                pages_data = []
+
+        # Method 2: Pure-Python zipfile + XML fallback
+        if not pages_data:
+            with zipfile.ZipFile(io.BytesIO(pptx_bytes)) as zf:
+                slide_files = [f for f in zf.namelist() if f.startswith("ppt/slides/slide") and f.endswith(".xml")]
+                if not slide_files:
+                    return False, "EMPTY_DOCUMENT", [], {"error": "No slide XMLs found in PPTX archive."}
+                
+                slide_files.sort(key=lambda x: int(re.search(r'\d+', os.path.basename(x)).group()) if re.search(r'\d+', os.path.basename(x)) else 0)
+                slide_count = len(slide_files)
+                if slide_count > 200:
+                    return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 200).", "page_count": slide_count}
+
+                total_words = 0
+                empty_pages = 0
+                for s_idx, sfile in enumerate(slide_files, 1):
+                    xml_content = zf.read(sfile)
+                    root = ET.fromstring(xml_content)
+                    texts = [elem.text for elem in root.iter() if elem.text and elem.tag.endswith('}t')]
+                    combined_text = " ".join(" ".join(texts).split())
+                    word_count = len(combined_text.split())
+                    total_words += word_count
+                    if word_count < 6:
+                        empty_pages += 1
+                    pages_data.append((s_idx, combined_text))
+
+        slide_count = len(pages_data)
+        empty_ratio = (empty_pages / slide_count) if slide_count > 0 else 1.0
+        avg_words = (total_words / slide_count) if slide_count > 0 else 0.0
+
+        stats = {
+            "page_count": slide_count,
+            "total_words": total_words,
+            "empty_pages": empty_pages,
+            "empty_pct": round(empty_ratio * 100, 1),
+            "doc_type": "presentation"
+        }
+
+        # Check for image-only slides with no selectable text
+        if total_words == 0 or empty_ratio > 0.45 or (slide_count > 3 and avg_words < 8.0):
+            stats["error"] = f"Image-only slides ({empty_pages}/{slide_count} slides have no selectable text)."
+            return False, "SCANNED_IMAGE", [], stats
+
+        return True, "OK", pages_data, stats
+
+    except Exception as e:
+        print(f"❌ Error extracting text from PPTX {filename}: {e}")
+        return False, "CORRUPTED", [], {"error": str(e)}
+
+def extract_docx_pages_from_bytes(docx_bytes: bytes, filename: str) -> tuple[bool, str, list[tuple[int, str]], dict]:
+    """
+    Tier 1 Technical Gatekeeper (Word): Extracts structured text from DOCX documents.
+    Groups content into logical study sections / virtual pages (~450 words or section headings)
+    so students can cite exact pages/sections in their personal study vault.
+    Includes pure-Python zipfile + XML fallback if python-docx is unavailable.
+    """
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    try:
+        pages_data = []
+        total_words = 0
+
+        # Method 1: python-docx
+        if docx is not None:
+            try:
+                doc = docx.Document(io.BytesIO(docx_bytes))
+                current_page = 1
+                current_page_text = []
+                current_word_count = 0
+
+                units = []
+                for p in doc.paragraphs:
+                    txt = p.text.strip()
+                    if txt:
+                        is_heading = p.style.name.startswith("Heading") if p.style else False
+                        units.append((txt, is_heading, "paragraph"))
+
+                for table in doc.tables:
+                    for row in table.rows:
+                        row_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                        if row_cells:
+                            units.append((" | ".join(row_cells), False, "table"))
+
+                if not units:
+                    return False, "EMPTY_DOCUMENT", [], {"error": "Word document has no readable text."}
+
+                for txt, is_heading, u_type in units:
+                    w_count = len(txt.split())
+                    if (current_word_count > 450) or (is_heading and current_word_count > 150):
+                        if current_page_text:
+                            p_str = "\n\n".join(current_page_text).strip()
+                            pages_data.append((current_page, p_str))
+                            total_words += current_word_count
+                            current_page += 1
+                            current_page_text = []
+                            current_word_count = 0
+
+                    current_page_text.append(txt)
+                    current_word_count += w_count
+
+                if current_page_text:
+                    p_str = "\n\n".join(current_page_text).strip()
+                    pages_data.append((current_page, p_str))
+                    total_words += current_word_count
+
+            except Exception as docx_err:
+                print(f"⚠️ python-docx parser error on {filename} ({docx_err}), attempting XML fallback...")
+                pages_data = []
+
+        # Method 2: Pure-Python zipfile + XML fallback
+        if not pages_data:
+            with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
+                if "word/document.xml" not in zf.namelist():
+                    return False, "EMPTY_DOCUMENT", [], {"error": "word/document.xml missing in docx archive."}
+                xml_content = zf.read("word/document.xml")
+                root = ET.fromstring(xml_content)
+                paragraphs = []
+                for p_elem in root.iter():
+                    if p_elem.tag.endswith('}p'):
+                        texts = [elem.text for elem in p_elem.iter() if elem.text and elem.tag.endswith('}t')]
+                        if texts:
+                            p_text = "".join(texts).strip()
+                            if p_text:
+                                paragraphs.append(p_text)
+
+                if not paragraphs:
+                    return False, "EMPTY_DOCUMENT", [], {"error": "No readable text found in Word document."}
+
+                current_page = 1
+                current_page_text = []
+                current_word_count = 0
+                total_words = 0
+                for p_text in paragraphs:
+                    w_count = len(p_text.split())
+                    if current_word_count > 450:
+                        p_str = "\n\n".join(current_page_text).strip()
+                        pages_data.append((current_page, p_str))
+                        total_words += current_word_count
+                        current_page += 1
+                        current_page_text = []
+                        current_word_count = 0
+                    current_page_text.append(p_text)
+                    current_word_count += w_count
+
+                if current_page_text:
+                    p_str = "\n\n".join(current_page_text).strip()
+                    pages_data.append((current_page, p_str))
+                    total_words += current_word_count
+
+        page_count = len(pages_data)
+        stats = {
+            "page_count": page_count,
+            "total_words": total_words,
+            "empty_pages": 0,
+            "empty_pct": 0.0,
+            "doc_type": "word"
+        }
+
+        if page_count > 200:
+            return False, "TOO_MANY_PAGES", [], {"error": f"Word document exceeds 200 virtual pages ({page_count} pages).", "page_count": page_count}
+
+        if total_words < 15:
+            return False, "SCANNED_IMAGE", [], {"error": "Document contains almost no readable text."}
+
+        return True, "OK", pages_data, stats
+
+    except Exception as e:
+        print(f"❌ Error extracting text from Word document {filename}: {e}")
+        return False, "CORRUPTED", [], {"error": str(e)}
+
+def extract_document_pages_from_bytes(file_bytes: bytes, filename: str, mime_type: str = "") -> tuple[bool, str, list[tuple[int, str]], dict]:
+    """
+    Unified multi-format document parser for NEURA AI.
+    Routes intelligently to:
+    - Microsoft PowerPoint (.pptx)
+    - Microsoft Word (.docx)
+    - PDF (.pdf)
+    - Flags legacy 97-2003 binary formats (.doc, .ppt) with a clear export prompt.
+    """
+    fn_lower = filename.lower()
+    
+    # PowerPoint (.pptx)
+    if fn_lower.endswith(".pptx") or "presentation" in mime_type or "powerpoint" in mime_type:
+        return extract_pptx_pages_from_bytes(file_bytes, filename)
+    
+    # Word (.docx)
+    if fn_lower.endswith(".docx") or "wordprocessing" in mime_type or "officedocument.word" in mime_type:
+        return extract_docx_pages_from_bytes(file_bytes, filename)
+    
+    # Legacy binary formats (.doc, .ppt)
+    if fn_lower.endswith(".doc") or fn_lower.endswith(".ppt") or mime_type in ["application/msword", "application/vnd.ms-powerpoint"]:
+        # Attempt modern openxml parser in case the file is simply renamed
+        if fn_lower.endswith(".ppt"):
+            res = extract_pptx_pages_from_bytes(file_bytes, filename)
+            if res[0]: return res
+        if fn_lower.endswith(".doc"):
+            res = extract_docx_pages_from_bytes(file_bytes, filename)
+            if res[0]: return res
+        return False, "LEGACY_BINARY", [], {
+            "error": "Legacy 97–2003 binary format. Please open in Word/PowerPoint and save as .docx or .pptx (or export to PDF)!"
+        }
+
+    # Default: PDF (.pdf)
+    return extract_pdf_pages_from_bytes(file_bytes, filename)
+
 async def evaluate_document_is_medical(sample_text: str, filename: str) -> dict:
     """
     Tier 2 AI Gatekeeper: Evaluates whether the extracted text is authentic medical/health study material.
@@ -2295,9 +2565,10 @@ async def process_whatsapp_document(
     # Safeguard: ensure filename is never an empty or static shared constant
     if not filename or filename in ["document.pdf", "medical_document.pdf"]:
         safe_media_tag = media_id if media_id else str(int(time.time()))
-        filename = f"document_{safe_media_tag}.pdf"
+        ext = ".pptx" if ("presentation" in mime_type or "powerpoint" in mime_type) else (".docx" if ("word" in mime_type or "officedocument" in mime_type) else ".pdf")
+        filename = f"document_{safe_media_tag}{ext}"
 
-    print(f"\n📄 [DOCUMENT INGESTION START] User: {sender_phone} | File: '{filename}' | Media ID: {media_id} | Caption: '{caption}'")
+    print(f"\n📄 [DOCUMENT INGESTION START] User: {sender_phone} | File: '{filename}' | Media ID: {media_id} | Caption: '{caption}' | MIME: '{mime_type}'")
     
     # Send typing indicator
     try:
@@ -2305,13 +2576,26 @@ async def process_whatsapp_document(
     except Exception:
         pass
         
-    # Tier 1a: Check MIME type & extension
+    # Tier 1a: Check MIME type & extension (PDF, Word, PowerPoint)
     fname_lower = filename.lower()
-    if mime_type != "application/pdf" and not fname_lower.endswith(".pdf"):
+    SUPPORTED_EXTS = (".pdf", ".docx", ".doc", ".pptx", ".ppt")
+    is_supported_ext = any(fname_lower.endswith(e) for e in SUPPORTED_EXTS)
+    is_supported_mime = (
+        mime_type == "application/pdf" or
+        "word" in mime_type or
+        "officedocument" in mime_type or
+        "presentation" in mime_type or
+        "powerpoint" in mime_type or
+        "msword" in mime_type
+    )
+    if not is_supported_ext and not is_supported_mime:
         msg = (
-            "📄 *PDF Documents Only*\n\n"
-            f"I received *{filename}*, but Neura AI currently only reads *.pdf* files.\n\n"
-            "Please export or convert your lecture slides, notes, or handouts to PDF and upload again! 🩺📚"
+            "📄 *Supported Document Formats*\n\n"
+            f"I received *{filename}*, but Neura AI currently reads:\n"
+            "• 📑 *PDF Documents* (`.pdf`)\n"
+            "• 📝 *Word Documents* (`.docx`)\n"
+            "• 📊 *PowerPoint Slides* (`.pptx`)\n\n"
+            "Please export or send your lecture materials in one of these formats! 🩺📚"
         )
         await send_whatsapp_cloud_msg(sender_phone, msg)
         return
@@ -2352,18 +2636,18 @@ async def process_whatsapp_document(
             print(f"⚠️ Error checking user upload quota: {q_err}")
 
     # Download from Meta CDN with 35s timeout
-    pdf_bytes, detected_mime = await download_whatsapp_media(media_id, timeout=35.0)
-    if not pdf_bytes:
+    doc_bytes, detected_mime = await download_whatsapp_media(media_id, timeout=35.0)
+    if not doc_bytes:
         msg = (
             "⚠️ *Download Failed*\n\n"
             "I couldn't download your document from WhatsApp. This usually happens if the upload was interrupted.\n\n"
-            "Please try sending the PDF again! 📄"
+            "Please try sending the file again! 📄"
         )
         await send_whatsapp_cloud_msg(sender_phone, msg)
         return
 
     # Tier 1b: File size sanity check (28MB limit)
-    file_size_mb = len(pdf_bytes) / (1024 * 1024)
+    file_size_mb = len(doc_bytes) / (1024 * 1024)
     if file_size_mb > 28.0:
         msg = (
             "⚠️ *File Size Limit Exceeded*\n\n"
@@ -2371,44 +2655,65 @@ async def process_whatsapp_document(
             "💡 *Tip:* Try splitting large slide decks into individual topics or lecture modules!"
         )
         await send_whatsapp_cloud_msg(sender_phone, msg)
-        del pdf_bytes
+        del doc_bytes
         gc.collect()
         return
 
-    # Tier 1c: Text Extraction & Technical Integrity
-    is_valid, err_code, pages_data, stats = extract_pdf_pages_from_bytes(pdf_bytes, filename)
-    del pdf_bytes
+    # Determine unit label (slides vs pages)
+    is_presentation = fname_lower.endswith(".pptx") or fname_lower.endswith(".ppt") or "presentation" in mime_type or "powerpoint" in mime_type
+    is_word = fname_lower.endswith(".docx") or fname_lower.endswith(".doc") or "word" in mime_type or "officedocument" in mime_type
+    unit_label = "slides" if is_presentation else "pages"
+    doc_icon = "📊" if is_presentation else ("📝" if is_word else "📑")
+
+    # Tier 1c: Multi-Format Text Extraction & Technical Integrity
+    is_valid, err_code, pages_data, stats = extract_document_pages_from_bytes(doc_bytes, filename, mime_type)
+    del doc_bytes
     gc.collect()
     
     if not is_valid:
-        if err_code == "ENCRYPTED":
+        if err_code == "LEGACY_BINARY":
             msg = (
-                "🔒 *Password-Protected PDF*\n\n"
+                "💾 *Legacy Office Format Detected*\n\n"
+                f"*{filename}* appears to be in an older 97–2003 binary format (`.doc` or `.ppt`).\n\n"
+                "Please open it and save/export as modern *.docx*, *.pptx*, or *.pdf* so I can index all clinical terms, tables, and notes into your study vault! 🩺📚"
+            )
+        elif err_code == "ENCRYPTED":
+            msg = (
+                "🔒 *Password-Protected Document*\n\n"
                 f"*{filename}* is encrypted with a password.\n\n"
                 "Please remove the password protection and re-upload so I can index it into your study vault! 🔑"
             )
         elif err_code == "TOO_MANY_PAGES":
             msg = (
-                "📑 *Document Too Large*\n\n"
-                f"*{filename}* has *{stats.get('page_count')} pages*. Personal study uploads are currently limited to *200 pages* per file.\n\n"
-                "💡 *Tip:* Upload individual chapters or lecture slide modules for optimal results!"
+                f"📑 *Document Too Large*\n\n"
+                f"*{filename}* has *{stats.get('page_count')} {unit_label}*. Personal study uploads are currently limited to *200 {unit_label}* per file.\n\n"
+                f"💡 *Tip:* Upload individual lecture modules or chapters for optimal results!"
             )
         elif err_code == "SCANNED_IMAGE":
             empty_p = stats.get("empty_pages", 0)
             tot_p = stats.get("page_count", 0)
             pct = stats.get("empty_pct", 0)
-            msg = (
-                "📷 *Scanned Image / Non-Text PDF Detected*\n\n"
-                f"*{filename}* contains scanned images with no readable digital text "
-                f"({empty_p} of {tot_p} pages, ~{pct:.0f}%, are image-only photos/slides).\n\n"
-                "Neura AI searches and quizzes you directly on selectable digital text. "
-                "Please run an OCR tool (e.g. Adobe Scan, CamScanner OCR, or Google Drive OCR) or export slides with selectable digital text! 💡🔍"
-            )
+            if is_presentation:
+                msg = (
+                    "📷 *Image-Only Slides Detected*\n\n"
+                    f"*{filename}* contains image photos with no selectable digital text "
+                    f"({empty_p} of {tot_p} slides, ~{pct:.0f}%, have no readable text).\n\n"
+                    "Neura AI searches and quizzes you directly on selectable digital text. "
+                    "Please export slides with selectable digital text or notes! 💡🔍"
+                )
+            else:
+                msg = (
+                    "📷 *Scanned Image / Non-Text Document Detected*\n\n"
+                    f"*{filename}* contains scanned images with no readable digital text "
+                    f"({empty_p} of {tot_p} pages, ~{pct:.0f}%, are image-only photos/scans).\n\n"
+                    "Neura AI searches and quizzes you directly on selectable digital text. "
+                    "Please run an OCR tool (e.g. Adobe Scan, CamScanner OCR, or Google Drive OCR) or export slides with selectable digital text! 💡🔍"
+                )
         else:
             msg = (
-                "⚠️ *Unable to Read PDF*\n\n"
+                "⚠️ *Unable to Read Document*\n\n"
                 f"I encountered an issue reading *{filename}*. The file may be empty or corrupted.\n\n"
-                "Please check the PDF file and try uploading again!"
+                "Please check the file and try uploading again!"
             )
         await send_whatsapp_cloud_msg(sender_phone, msg)
         return
@@ -2417,7 +2722,8 @@ async def process_whatsapp_document(
     sample_snippets = []
     for idx, (p_num, p_text) in enumerate(pages_data):
         if idx < 3 or idx == len(pages_data) // 2:
-            sample_snippets.append(f"--- Page {p_num} ---\n{p_text[:600]}")
+            unit_prefix = "Slide" if is_presentation else "Page"
+            sample_snippets.append(f"--- {unit_prefix} {p_num} ---\n{p_text[:600]}")
     sample_text = "\n".join(sample_snippets)
     
     # Tier 2: AI Medical Relevance Gatekeeper
@@ -2443,8 +2749,8 @@ async def process_whatsapp_document(
     category = gatekeeper_res.get("category", "General Medicine")
     
     progress_msg = (
-        f"📄 *Medical Document Verified: {clean_title}*\n\n"
-        f"Indexing {len(pages_data)} pages into your personal study vault... ⏳"
+        f"{doc_icon} *Medical Document Verified: {clean_title}*\n\n"
+        f"Indexing {len(pages_data)} {unit_label} into your personal study vault... ⏳"
     )
     await send_whatsapp_cloud_msg(sender_phone, progress_msg)
 
@@ -2469,7 +2775,7 @@ async def process_whatsapp_document(
     success_card = (
         f"✅ *Added to Your Personal Study Vault!*\n\n"
         f"📚 *Document:* *{clean_title}*\n"
-        f"📑 *Scope:* {len(pages_data)} pages ({chunk_count} study chunks)\n"
+        f"📑 *Scope:* {len(pages_data)} {unit_label} ({chunk_count} study chunks)\n"
         f"🩺 *Discipline:* {category}\n\n"
         f"You can now ask questions about this document anytime!\n"
         f"💡 _Try: \"Summarize key clinical concepts in {clean_title}\"_"
@@ -5081,11 +5387,20 @@ async def handle_whatsapp_webhook(request: Request):
                         doc_obj = msg.get("document", {})
                         media_id = doc_obj.get("id")
                         raw_filename = (doc_obj.get("filename") or "").strip()
+                        mime_type = doc_obj.get("mime_type", "application/pdf")
+                        caption = (doc_obj.get("caption") or "").strip()
                         # Avoid shared static fallback so two untitled uploads by the same student never collide in Qdrant/MongoDB
                         safe_media_tag = media_id if media_id else str(int(time.time()))
-                        filename = raw_filename if raw_filename else f"document_{safe_media_tag}.pdf"
-                        caption = (doc_obj.get("caption") or "").strip()
-                        mime_type = doc_obj.get("mime_type", "application/pdf")
+                        if not raw_filename:
+                            if "presentation" in mime_type or "powerpoint" in mime_type:
+                                ext = ".pptx"
+                            elif "word" in mime_type or "officedocument" in mime_type or "msword" in mime_type:
+                                ext = ".docx"
+                            else:
+                                ext = ".pdf"
+                            filename = f"document_{safe_media_tag}{ext}"
+                        else:
+                            filename = raw_filename
                         if media_id:
                             print(f"📄 Received Document from {sender_phone} (Filename: {filename}, Media ID: {media_id}, Caption: '{caption}')")
                             task = BackgroundTask(process_whatsapp_document, sender_phone, media_id, filename, caption, mime_type)
