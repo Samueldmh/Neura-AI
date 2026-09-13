@@ -754,6 +754,7 @@ async def call_openrouter_llm(
     try:
         response = await shared_http_client.post(url, headers=headers, json=payload)
     except Exception as http_err:
+        print(f"⚠️ [HTTP_CLIENT_FALLBACK] shared_http_client failed: {http_err}")
         async with httpx.AsyncClient(timeout=30.0) as fallback_client:
             response = await fallback_client.post(url, headers=headers, json=payload)
             
