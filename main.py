@@ -2940,6 +2940,8 @@ async def process_whatsapp_document(
                 except Exception as q_err:
                     print(f"⚠️ Error checking user upload quota: {q_err}")
 
+            dispatch_id = uuid.uuid4().hex[:12]
+
             # Mark active_upload as queued in MongoDB before entering semaphore
             if users_col is not None:
                 try:
@@ -2949,6 +2951,7 @@ async def process_whatsapp_document(
                             "active_upload": {
                                 "filename": filename,
                                 "status": "queued",
+                                "dispatch_id": dispatch_id,
                                 "started_at": datetime.utcnow().isoformat()
                             }
                         }},
@@ -2978,8 +2981,9 @@ async def process_whatsapp_document(
                         "filename":     filename,
                         "caption":      caption or "",
                         "mime_type":    mime_type,
+                        "dispatch_id":  dispatch_id,
                     }
-                    print(f"🚀 [MODAL DISPATCH] Firing to Modal for {sender_phone} / '{filename}'")
+                    print(f"🚀 [MODAL DISPATCH] Firing to Modal for {sender_phone} / '{filename}' (dispatch_id={dispatch_id})")
                     resp = await shared_http_client.post(
                         MODAL_ENDPOINT,
                         json=payload,
@@ -2995,6 +2999,19 @@ async def process_whatsapp_document(
                         print(f"⚠️ Modal dispatch returned HTTP {resp.status_code}, falling back to local pipeline")
                 except Exception as modal_err:
                     print(f"⚠️ Modal dispatch error (falling back to local pipeline): {modal_err}")
+
+                # 🛡️ Fencing token: Invalidate Modal's dispatch_id so if a slow container finishes late,
+                # it sees its lease was revoked and aborts without overwriting Qdrant or duplicate messaging.
+                local_dispatch_id = uuid.uuid4().hex[:12]
+                if users_col is not None:
+                    try:
+                        await users_col.update_one(
+                            {"user_id": sender_phone},
+                            {"$set": {"active_upload.dispatch_id": local_dispatch_id, "active_upload.lane": "local_fallback"}}
+                        )
+                        print(f"🛡️ [FENCING] Superseded Modal dispatch {dispatch_id} with local lease {local_dispatch_id}")
+                    except Exception as fe:
+                        print(f"⚠️ Error updating local fencing token: {fe}")
                 # Falls through to the local fallback pipeline below
 
             try:
