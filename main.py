@@ -710,7 +710,8 @@ async def call_openrouter_llm(
     model: str = None,
     models: list = None,
     provider_order: list = None,
-    temperature: float = 0.65
+    temperature: float = 0.65,
+    reasoning: dict = None
 ) -> str:
     if not OPENROUTER_API_KEY:
         raise ValueError("OPENROUTER_API_KEY environment variable is not set on Render!")
@@ -738,7 +739,7 @@ async def call_openrouter_llm(
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "reasoning": get_reasoning_config(user_prompt, is_micro=False),
+        "reasoning": reasoning if reasoning is not None else get_reasoning_config(user_prompt, is_micro=False),
         "provider": {
             "order": provider_order or DEFAULT_PROVIDER_ORDER,
             "allow_fallbacks": True
@@ -882,7 +883,7 @@ New message: {question}
 
 Standalone question:"""
 
-async def call_groq_chat(prompt: str, model: str = "llama-3.1-8b-instant", temperature: float = 0.0, max_tokens: int = 120) -> str:
+async def call_groq_chat(prompt: str, model: str = "groq/compound-mini", temperature: float = 0.0, max_tokens: int = 150) -> str:
     """Ultra-fast chat completion via Groq LPU API (<150ms TTFT)."""
     groq_key = os.getenv("GROQ_API_KEY", "") or GROQ_API_KEY
     if not groq_key:
@@ -892,24 +893,32 @@ async def call_groq_chat(prompt: str, model: str = "llama-3.1-8b-instant", tempe
         "Authorization": f"Bearer {groq_key.strip()}",
         "Content-Type": "application/json"
     }
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": temperature,
-        "max_tokens": max_tokens
-    }
-    try:
-        async with httpx.AsyncClient(timeout=3.5) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data["choices"][0]["message"]["content"].strip()
-            else:
-                print(f"⚠️ Groq chat error ({resp.status_code}): {resp.text[:120]}")
-    except Exception as e:
-        print(f"⚠️ Groq chat exception: {e}")
+    candidate_models = [model, "groq/compound-mini", "llama-3.1-8b-instant", "qwen/qwen3.6-27b"]
+    seen = set()
+    candidate_models = [m for m in candidate_models if not (m in seen or seen.add(m))]
+
+    for candidate in candidate_models:
+        payload = {
+            "model": candidate,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
+        try:
+            async with httpx.AsyncClient(timeout=3.5) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"].strip()
+                    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                    if content:
+                        return content
+                else:
+                    print(f"⚠️ Groq chat error with {candidate} ({resp.status_code}): {resp.text[:120]}")
+        except Exception as e:
+            print(f"⚠️ Groq chat exception with {candidate}: {e}")
     return ""
 
 async def get_recent_history(phone_number: str, n: int = 8) -> list[dict]:
@@ -999,9 +1008,9 @@ async def condense_question(history: list[dict], question: str, current_topic: s
     clean_topic = current_topic.strip() if current_topic and current_topic.lower() not in ["none", "high-yield clinical concepts"] else "None (infer from chat history if applicable)"
     prompt = CONDENSE_PROMPT.format(current_topic=clean_topic, history_text=history_text, question=clean_q)
 
-    # 1. Primary: Groq LPU (llama-3.1-8b-instant, ~100ms)
+    # 1. Primary: Groq LPU API (~100ms)
     t0 = time.perf_counter()
-    rewritten = await call_groq_chat(prompt, model="llama-3.1-8b-instant", temperature=0.0, max_tokens=100)
+    rewritten = await call_groq_chat(prompt, model="groq/compound-mini", temperature=0.0, max_tokens=150)
 
     # 2. Fallback: OpenRouter with Gemini 2.5 Flash Lite
     if not rewritten:
@@ -1009,9 +1018,10 @@ async def condense_question(history: list[dict], question: str, current_topic: s
             rewritten = await call_openrouter_llm(
                 system_prompt="You are an expert query condenser. Rewrite the user's message as a standalone question based on history and current topic. If already standalone, return it verbatim without preamble.",
                 user_prompt=prompt,
-                max_tokens=100,
+                max_tokens=250,
                 model=FRONTDESK_MODEL,
-                temperature=0.0
+                temperature=0.0,
+                reasoning={"effort": "none"}
             )
         except Exception as fallback_err:
             print(f"⚠️ Fallback condenser error: {fallback_err}")
