@@ -867,14 +867,16 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
 # ==========================================
 # 2.5 ROLLING CONVERSATION HISTORY & QUERY CONDENSER
 # ==========================================
-CONDENSE_PROMPT = """Given the chat history, the current medical topic under discussion, and a new message from the student, rewrite the new message as a fully standalone question that includes any context needed to understand it on its own.
-If the new message is already standalone (a new topic or deliberate topic jump), return it unchanged.
+CONDENSE_PROMPT = """Given the chat history, the topic of the previous turn, and a new message from the student, rewrite the new message as a fully standalone question that includes any context needed to understand it on its own.
 Do not answer the question — only rewrite it.
 
-Current topic under discussion: {current_topic}
+Topic of the previous turn (use ONLY if the new message doesn't clearly introduce a different topic): {current_topic}
 
 Chat History:
 {history_text}
+
+CRITICAL RULE FOR TOPIC JUMPS:
+If the new message is already standalone or introduces a new, distinct medical subject (e.g. a different disease, drug, organ, or concept), return it unchanged. NEVER force, blend, or merge the previous topic into a new, unrelated question!
 
 New message: {question}
 
