@@ -533,6 +533,16 @@ JSON Schema format:
 ]
 """
 
+KNOWN_MED_INDICATORS = [
+    "syndrome", "disease", "treatment", "pathology", "pharmacology", "anatomy", "physiology", 
+    "symptoms", "diagnosis", "mechanism", "pathophysiology", "infection", "bacteria", "virus", 
+    "artery", "nerve", "muscle", "bone", "cell", "receptor", "drug", "inhibitor", "agonist", 
+    "antagonist", "furosemide", "prazosin", "malaria", "pneumonia", "diabetes", "hypertension", 
+    "anemia", "carcinoid", "hypersensitivity", "dose", "dosage", "clinical", "patient", "presentation",
+    "sign", "management", "investigation", "surgery", "surgical", "complication", "ecg", "ekg",
+    "cardiac", "renal"
+]
+
 async def classify_intent(message: str, chat_history: list = None) -> str:
     msg_clean = message.strip().lower()
     
@@ -558,7 +568,7 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
     if msg_no_punc in ["neura", "neura ai", "hey neura", "hi neura", "hello neura", "neura dear"]:
         return "CONVERSATIONAL"
 
-    # 2.2 Presence Check-ins, Emotional Venting & Casual Banter Fast-Path
+    # 2.2 Presence Check-ins, Emotional Venting & Casual Banter Fast-Path (Guarded against compound medical queries)
     conversational_fast_patterns = [
         r"\b(are\s*(you|u)\s*(still\s*)?(there|here|awake|listening|around|alive|online|present))\b",
         r"\b(u\s*(still\s*)?(there|here|awake|listening|around|alive|online))\b",
@@ -578,7 +588,7 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
         r"\b(i\s*failed|i('m|\s*am)\s*scared\s*of\s*(exams?|profs?))\b",
         r"\b(how\s*(should|can|do)\s*i\s*study|study\s*tips?|how\s*to\s*pass)\b"
     ]
-    if any(re.search(pat, msg_clean) for pat in conversational_fast_patterns):
+    if any(re.search(pat, msg_clean) for pat in conversational_fast_patterns) and not any(ind in msg_clean for ind in KNOWN_MED_INDICATORS):
         return "CONVERSATIONAL"
 
     greeting_patterns = [
@@ -596,7 +606,7 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
     platform_fast_patterns = [
         r"\b(beta\s*feedback|anonymous|feedback|survey|privacy|confidential|wallet|deposit|how\s*to\s*use|commands?|features?)\b"
     ]
-    if any(re.search(pat, msg_clean) for pat in platform_fast_patterns) and not any(ind in msg_clean for ind in ["syndrome", "disease", "treatment", "pathology", "pharmacology", "anatomy", "physiology", "symptoms", "diagnosis", "mechanism", "pathophysiology", "drug"]):
+    if any(re.search(pat, msg_clean) for pat in platform_fast_patterns) and not any(ind in msg_clean for ind in KNOWN_MED_INDICATORS):
         return "PLATFORM_META"
 
     # 2.5 Contextual Follow-Up Fast-Path: Check previous assistant message for platform topic
@@ -684,17 +694,9 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
             print(f"LLM Intent Classifier fallback error: {e}")
 
     # Default fallback: Only classify as MEDICAL if genuine clinical indicators or medical query patterns are present
-    known_med_indicators = [
-        "syndrome", "disease", "treatment", "pathology", "pharmacology", "anatomy", "physiology", 
-        "symptoms", "diagnosis", "mechanism", "pathophysiology", "infection", "bacteria", "virus", 
-        "artery", "nerve", "muscle", "bone", "cell", "receptor", "drug", "inhibitor", "agonist", 
-        "antagonist", "furosemide", "prazosin", "malaria", "pneumonia", "diabetes", "hypertension", 
-        "anemia", "carcinoid", "hypersensitivity", "dose", "dosage", "clinical", "patient", "presentation",
-        "sign", "management", "investigation", "surgery", "surgical", "complication"
-    ]
     terms = extract_medical_terms(message)
     is_not_conversational = not any(w in msg_clean for w in ["who made", "who created", "samuel", "joke", "weather", "who are you", "what can you do", "introduce yourself"])
-    if any(ind in msg_clean for ind in known_med_indicators) or (terms and is_not_conversational and len(msg_clean.split()) >= 2):
+    if any(ind in msg_clean for ind in KNOWN_MED_INDICATORS) or (terms and is_not_conversational and len(msg_clean.split()) >= 2):
         return "MEDICAL"
     if len(msg_clean.split()) <= 2:
         return "GIBBERISH"
