@@ -122,7 +122,7 @@ import time
 embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", threads=1)
 qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=40))
-embedding_pool = ThreadPoolExecutor(max_workers=2)
+embedding_pool = ThreadPoolExecutor(max_workers=4)
 
 # User-level sequential locks to prevent race conditions on simultaneous actions from the same user
 _user_locks: dict[str, asyncio.Lock] = {}
@@ -131,6 +131,14 @@ def get_user_lock(user_id: str) -> asyncio.Lock:
     if user_id not in _user_locks:
         _user_locks[user_id] = asyncio.Lock()
     return _user_locks[user_id]
+
+# User-level sequential locks for document uploads (isolated from chat messages so questions are never blocked)
+_user_doc_locks: dict[str, asyncio.Lock] = {}
+
+def get_user_doc_lock(user_id: str) -> asyncio.Lock:
+    if user_id not in _user_doc_locks:
+        _user_doc_locks[user_id] = asyncio.Lock()
+    return _user_doc_locks[user_id]
 
 # Global Document Ingestion Semaphore: Bounds active concurrent heavy document operations
 # (Meta CDN download, PyMuPDF parsing, and vector ingestion) to max 3 concurrent tasks to prevent OOM
@@ -2492,21 +2500,75 @@ async def evaluate_document_is_medical(sample_text: str, filename: str) -> dict:
             "rejection_reason": "Could not verify authentic medical, clinical, or health-sciences study content in this document."
         }
 
+async def _embed_and_upsert_chunk_slice(
+    chunk_items: list[dict],
+    start_chunk_idx: int,
+    sender_phone: str,
+    filename: str,
+    clean_title: str,
+    category: str
+) -> int:
+    """Helper to batch embed and upsert a slice of document chunks into Qdrant."""
+    loop = asyncio.get_running_loop()
+    clean_fn = re.sub(r'[^a-zA-Z0-9_]', '', os.path.splitext(filename)[0].lower()) or "doc"
+    batch_size = 64
+    points = []
+    
+    for batch_start in range(0, len(chunk_items), batch_size):
+        batch_slice = chunk_items[batch_start:batch_start + batch_size]
+        batch_texts = [item["text"] for item in batch_slice]
+        
+        # Embed synchronously inside ThreadPoolExecutor to keep event loop responsive
+        embeddings = await loop.run_in_executor(
+            embedding_pool,
+            lambda b=batch_texts: list(embedder.embed(b))
+        )
+        
+        for sub_idx, (item, emb) in enumerate(zip(batch_slice, embeddings)):
+            chunk_idx = start_chunk_idx + batch_start + sub_idx
+            chunk_content_hash = hashlib.sha256(item["text"].encode("utf-8")).hexdigest()[:12]
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{sender_phone}_{clean_fn}_{chunk_idx}_{chunk_content_hash}"))
+            
+            point = models.PointStruct(
+                id=point_id,
+                vector=emb.tolist(),
+                payload={
+                    "text": item["text"],
+                    "book_title": clean_title,
+                    "source_file": filename,
+                    "user_id": str(sender_phone),
+                    "is_user_doc": True,
+                    "category": category,
+                    "page_number": item["page_number"],
+                    "chunk_index": chunk_idx,
+                    "uploaded_at": datetime.utcnow().isoformat()
+                }
+            )
+            points.append(point)
+            
+    if points:
+        await qdrant.upsert(
+            collection_name=COLLECTION_NAME,
+            points=points
+        )
+    return len(points)
+
 async def index_user_medical_document(
     sender_phone: str,
     filename: str,
     pages_data: list[tuple[int, str]],
     category: str,
-    clean_title: str
+    clean_title: str,
+    unit_label: str = "pages"
 ) -> tuple[bool, int, str]:
     """
     Tier 3 Ingestion: Chunks pages, generates embeddings, and upserts into Qdrant collection
     tagged with user_id=sender_phone and is_user_doc=True.
+    Supports Progressive 2-Stage Ingestion: if chunks > 20, stage 1 indexes first 20 chunks
+    and sends an early search notice, then stage 2 indexes remaining chunks in the background.
     Returns (success, chunk_count, error_msg).
     """
     try:
-        loop = asyncio.get_running_loop()
-        
         # Step 1: Chunk pages with page metadata
         all_chunks = []
         for page_num, page_text in pages_data:
@@ -2541,85 +2603,114 @@ async def index_user_medical_document(
 
         print(f"📑 Ingesting '{clean_title}' for {sender_phone}: {len(all_chunks)} chunks across {len(pages_data)} pages...")
         
-        # Step 3: Batch compute embeddings using embedding_pool
-        batch_size = 64
-        total_chunks = len(all_chunks)
-        points = []
-        clean_fn = re.sub(r'[^a-zA-Z0-9_]', '', os.path.splitext(filename)[0].lower())
-        
-        for batch_start in range(0, total_chunks, batch_size):
-            batch_items = all_chunks[batch_start:batch_start + batch_size]
-            batch_texts = [item["text"] for item in batch_items]
+        # Step 3: Progressive 2-Stage Ingestion vs Single-Stage Ingestion
+        STAGE1_THRESHOLD = 20
+        wat_today = datetime.now(timezone(timedelta(hours=1))).strftime("%Y-%m-%d")
+
+        if len(all_chunks) <= STAGE1_THRESHOLD:
+            # Single stage for smaller documents
+            await _embed_and_upsert_chunk_slice(all_chunks, 0, sender_phone, filename, clean_title, category)
+            print(f"✅ Successfully upserted {len(all_chunks)} points into Qdrant for {sender_phone} ({clean_title})")
             
-            # Embed synchronously inside ThreadPoolExecutor to keep event loop responsive
-            embeddings = await loop.run_in_executor(
-                embedding_pool,
-                lambda b=batch_texts: list(embedder.embed(b))
-            )
-            
-            for sub_idx, (item, emb) in enumerate(zip(batch_items, embeddings)):
-                chunk_idx = batch_start + sub_idx
-                # Content-based hash ensures deterministic UUID regardless of LLM title variation!
-                chunk_content_hash = hashlib.sha256(item["text"].encode("utf-8")).hexdigest()[:12]
-                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{sender_phone}_{clean_fn}_{chunk_idx}_{chunk_content_hash}"))
-                
-                point = models.PointStruct(
-                    id=point_id,
-                    vector=emb.tolist(),
-                    payload={
-                        "text": item["text"],
-                        "book_title": clean_title,
-                        "source_file": filename,
-                        "user_id": str(sender_phone),
-                        "is_user_doc": True,
+            if users_col is not None:
+                try:
+                    doc_record = {
+                        "filename": filename,
+                        "title": clean_title,
                         "category": category,
-                        "page_number": item["page_number"],
-                        "chunk_index": chunk_idx,
+                        "page_count": len(pages_data),
+                        "chunk_count": len(all_chunks),
+                        "is_partially_indexed": False,
                         "uploaded_at": datetime.utcnow().isoformat()
                     }
-                )
-                points.append(point)
+                    await users_col.update_one(
+                        {"user_id": sender_phone},
+                        {"$pull": {"custom_documents": {"filename": filename}}}
+                    )
+                    await users_col.update_one(
+                        {"user_id": sender_phone},
+                        {
+                            "$push": {"custom_documents": doc_record},
+                            "$inc": {
+                                "total_uploaded_docs": 1,
+                                f"daily_doc_uploads.{wat_today}": 1
+                            }
+                        },
+                        upsert=True
+                    )
+                except Exception as mongo_err:
+                    print(f"⚠️ Error recording uploaded doc in MongoDB: {mongo_err}")
+                    
+            return True, len(all_chunks), ""
+        else:
+            # Stage 1: Embed and upsert first 20 chunks immediately for instant searchability
+            stage1_chunks = all_chunks[:STAGE1_THRESHOLD]
+            print(f"⚡ [STAGE 1] Ingesting first {len(stage1_chunks)} chunks for {sender_phone} ({clean_title})...")
+            await _embed_and_upsert_chunk_slice(stage1_chunks, 0, sender_phone, filename, clean_title, category)
+            print(f"✅ [STAGE 1 COMPLETE] {len(stage1_chunks)} chunks searchable in Qdrant for {sender_phone} ({clean_title})")
 
-        # Step 4: Upsert points into Qdrant
-        await qdrant.upsert(
-            collection_name=COLLECTION_NAME,
-            points=points
-        )
-        print(f"✅ Successfully upserted {len(points)} points into Qdrant for {sender_phone} ({clean_title})")
-        
-        # Step 4: Record document metadata in MongoDB users collection
-        if users_col is not None:
+            if users_col is not None:
+                try:
+                    doc_record = {
+                        "filename": filename,
+                        "title": clean_title,
+                        "category": category,
+                        "page_count": len(pages_data),
+                        "chunk_count": len(stage1_chunks),
+                        "total_chunks": len(all_chunks),
+                        "is_partially_indexed": True,
+                        "uploaded_at": datetime.utcnow().isoformat()
+                    }
+                    await users_col.update_one(
+                        {"user_id": sender_phone},
+                        {"$pull": {"custom_documents": {"filename": filename}}}
+                    )
+                    await users_col.update_one(
+                        {"user_id": sender_phone},
+                        {
+                            "$push": {"custom_documents": doc_record},
+                            "$inc": {
+                                "total_uploaded_docs": 1,
+                                f"daily_doc_uploads.{wat_today}": 1
+                            }
+                        },
+                        upsert=True
+                    )
+                except Exception as mongo_err:
+                    print(f"⚠️ Error recording partial uploaded doc in MongoDB: {mongo_err}")
+
+            # Send Early Search WhatsApp notice
+            stage1_max_page = max(c["page_number"] for c in stage1_chunks)
+            early_msg = (
+                f"⚡ *Early Search Active: {clean_title}*\n\n"
+                f"The first {len(stage1_chunks)} study chunks (~{unit_label} 1–{stage1_max_page}) are indexed and searchable right now! 🔍\n\n"
+                f"I'm quietly indexing the remaining {len(all_chunks) - len(stage1_chunks)} chunks in the background... ⏳"
+            )
             try:
-                doc_record = {
-                    "filename": filename,
-                    "title": clean_title,
-                    "category": category,
-                    "page_count": len(pages_data),
-                    "chunk_count": len(all_chunks),
-                    "uploaded_at": datetime.utcnow().isoformat()
-                }
-                # Remove prior entry with same filename if re-uploaded, then push updated record
-                await users_col.update_one(
-                    {"user_id": sender_phone},
-                    {"$pull": {"custom_documents": {"filename": filename}}}
-                )
-                wat_today = datetime.now(timezone(timedelta(hours=1))).strftime("%Y-%m-%d")
-                await users_col.update_one(
-                    {"user_id": sender_phone},
-                    {
-                        "$push": {"custom_documents": doc_record},
-                        "$inc": {
-                            "total_uploaded_docs": 1,
-                            f"daily_doc_uploads.{wat_today}": 1
-                        }
-                    },
-                    upsert=True
-                )
-            except Exception as mongo_err:
-                print(f"⚠️ Error recording uploaded doc in MongoDB: {mongo_err}")
-                
-        return True, len(all_chunks), ""
-        
+                await send_whatsapp_cloud_msg(sender_phone, early_msg)
+            except Exception as e:
+                print(f"⚠️ Error sending early search notice: {e}")
+
+            # Stage 2: Embed and upsert remaining chunks in background
+            stage2_chunks = all_chunks[STAGE1_THRESHOLD:]
+            print(f"📑 [STAGE 2] Ingesting remaining {len(stage2_chunks)} chunks for {sender_phone} ({clean_title})...")
+            await _embed_and_upsert_chunk_slice(stage2_chunks, STAGE1_THRESHOLD, sender_phone, filename, clean_title, category)
+            print(f"✅ [STAGE 2 COMPLETE] All {len(all_chunks)} chunks indexed in Qdrant for {sender_phone} ({clean_title})")
+
+            if users_col is not None:
+                try:
+                    await users_col.update_one(
+                        {"user_id": sender_phone, "custom_documents.filename": filename},
+                        {"$set": {
+                            "custom_documents.$.is_partially_indexed": False,
+                            "custom_documents.$.chunk_count": len(all_chunks)
+                        }}
+                    )
+                except Exception as mongo_err:
+                    print(f"⚠️ Error updating final chunk count in MongoDB: {mongo_err}")
+
+            return True, len(all_chunks), ""
+            
     except Exception as e:
         print(f"❌ Error indexing user document {filename}: {e}")
         traceback.print_exc()
@@ -2689,8 +2780,8 @@ async def process_whatsapp_document(
         return
 
     try:
-        user_lock = get_user_lock(sender_phone)
-        async with user_lock:
+        user_doc_lock = get_user_doc_lock(sender_phone)
+        async with user_doc_lock:
             # Check User Vault Quota & Daily Rate Limits before downloading
             if users_col is not None:
                 try:
@@ -2726,178 +2817,222 @@ async def process_whatsapp_document(
                 except Exception as q_err:
                     print(f"⚠️ Error checking user upload quota: {q_err}")
 
-            # Global Concurrency Limiter: Bounds active concurrent downloads, parsing, and vector ingestion to max 3
-            print(f"⏳ [DOCUMENT QUEUE] User {sender_phone} waiting for document ingestion slot for '{filename}'...")
-            async with DOC_INGESTION_SEMAPHORE:
-                print(f"🚀 [DOCUMENT INGESTION SLOT ACQUIRED] Processing '{filename}' for {sender_phone}...")
-                doc_bytes = None
+            # Mark active_upload as queued in MongoDB before entering semaphore
+            if users_col is not None:
                 try:
-                    # Download from Meta CDN with 35s timeout
-                    doc_bytes, detected_mime = await download_whatsapp_media(media_id, timeout=35.0)
-                    if not doc_bytes:
-                        msg = (
-                            "⚠️ *Download Failed*\n\n"
-                            "I couldn't download your document from WhatsApp. This usually happens if the upload was interrupted.\n\n"
-                            "Please try sending the file again! 📄"
-                        )
-                        await send_whatsapp_cloud_msg(sender_phone, msg)
-                        return
-
-                    # Tier 1b: File size sanity check (28MB limit)
-                    file_size_mb = len(doc_bytes) / (1024 * 1024)
-                    if file_size_mb > 28.0:
-                        msg = (
-                            "⚠️ *File Size Limit Exceeded*\n\n"
-                            f"Your document is *{file_size_mb:.1f} MB*. To ensure fast search and memory stability on WhatsApp, uploads must be under *28 MB*.\n\n"
-                            "💡 *Tip:* Try splitting large slide decks into individual topics or lecture modules!"
-                        )
-                        await send_whatsapp_cloud_msg(sender_phone, msg)
-                        return
-
-                    # Determine unit label (slides vs pages)
-                    is_presentation = fname_lower.endswith(".pptx") or fname_lower.endswith(".ppt") or "presentation" in mime_type or "powerpoint" in mime_type
-                    is_word = fname_lower.endswith(".docx") or fname_lower.endswith(".doc") or "word" in mime_type or "officedocument" in mime_type
-                    unit_label = "slides" if is_presentation else "pages"
-                    doc_icon = "📊" if is_presentation else ("📝" if is_word else "📑")
-
-                    # Tier 1c: Multi-Format Text Extraction (offloaded to threadpool to avoid freezing asyncio event loop)
-                    loop = asyncio.get_running_loop()
-                    is_valid, err_code, pages_data, stats = await loop.run_in_executor(
-                        None,
-                        extract_document_pages_from_bytes,
-                        doc_bytes,
-                        filename,
-                        mime_type
+                    await users_col.update_one(
+                        {"user_id": sender_phone},
+                        {"$set": {
+                            "active_upload": {
+                                "filename": filename,
+                                "status": "queued",
+                                "started_at": datetime.utcnow().isoformat()
+                            }
+                        }},
+                        upsert=True
                     )
-                finally:
-                    if doc_bytes is not None:
-                        del doc_bytes
-                    gc.collect()
+                except Exception as e:
+                    print(f"⚠️ Error setting active_upload queue flag: {e}")
 
-                if not is_valid:
-                    if err_code == "LEGACY_BINARY":
-                        msg = (
-                            "💾 *Legacy Office Format Detected*\n\n"
-                            f"*{filename}* appears to be in an older 97–2003 binary format (`.doc` or `.ppt`).\n\n"
-                            "Please open it and save/export as modern *.docx*, *.pptx*, or *.pdf* so I can index all clinical terms, tables, and notes into your study vault! 🩺📚"
-                        )
-                    elif err_code == "ENCRYPTED":
-                        msg = (
-                            "🔒 *Password-Protected Document*\n\n"
-                            f"*{filename}* is encrypted with a password.\n\n"
-                            "Please remove the password protection and re-upload so I can index it into your study vault! 🔑"
-                        )
-                    elif err_code == "TOO_MANY_PAGES":
-                        msg = (
-                            f"📑 *Document Too Large*\n\n"
-                            f"*{filename}* has *{stats.get('page_count')} {unit_label}*. Personal study uploads are currently limited to *200 {unit_label}* per file.\n\n"
-                            f"💡 *Tip:* Upload individual lecture modules or chapters for optimal results!"
-                        )
-                    elif err_code == "SCANNED_IMAGE":
-                        empty_p = stats.get("empty_pages", 0)
-                        tot_p = stats.get("page_count", 0)
-                        pct = stats.get("empty_pct", 0)
-                        if is_presentation:
-                            msg = (
-                                "📷 *Image-Only Slides Detected*\n\n"
-                                f"*{filename}* contains image photos with no selectable digital text "
-                                f"({empty_p} of {tot_p} slides, ~{pct:.0f}%, have no readable text).\n\n"
-                                "Neura AI searches and quizzes you directly on selectable digital text. "
-                                "Please export slides with selectable digital text or notes! 💡🔍"
+            # Send immediate queue acknowledgment to student
+            queue_ack_msg = (
+                f"📥 *Received: {filename}*\n\n"
+                "Your document is in the queue for indexing into your personal study vault! ⏳\n\n"
+                "You can keep studying or asking questions in the meantime — I'll notify you as soon as it's ready."
+            )
+            await send_whatsapp_cloud_msg(sender_phone, queue_ack_msg)
+
+            try:
+                # Global Concurrency Limiter: Bounds active concurrent downloads, parsing, and vector ingestion to max 3
+                print(f"⏳ [DOCUMENT QUEUE] User {sender_phone} waiting for document ingestion slot for '{filename}'...")
+                async with DOC_INGESTION_SEMAPHORE:
+                    print(f"🚀 [DOCUMENT INGESTION SLOT ACQUIRED] Processing '{filename}' for {sender_phone}...")
+                    if users_col is not None:
+                        try:
+                            await users_col.update_one(
+                                {"user_id": sender_phone},
+                                {"$set": {"active_upload.status": "processing"}}
                             )
+                        except Exception:
+                            pass
+
+                    doc_bytes = None
+                    try:
+                        # Download from Meta CDN with 35s timeout
+                        doc_bytes, detected_mime = await download_whatsapp_media(media_id, timeout=35.0)
+                        if not doc_bytes:
+                            msg = (
+                                "⚠️ *Download Failed*\n\n"
+                                "I couldn't download your document from WhatsApp. This usually happens if the upload was interrupted.\n\n"
+                                "Please try sending the file again! 📄"
+                            )
+                            await send_whatsapp_cloud_msg(sender_phone, msg)
+                            return
+
+                        # Tier 1b: File size sanity check (28MB limit)
+                        file_size_mb = len(doc_bytes) / (1024 * 1024)
+                        if file_size_mb > 28.0:
+                            msg = (
+                                "⚠️ *File Size Limit Exceeded*\n\n"
+                                f"Your document is *{file_size_mb:.1f} MB*. To ensure fast search and memory stability on WhatsApp, uploads must be under *28 MB*.\n\n"
+                                "💡 *Tip:* Try splitting large slide decks into individual topics or lecture modules!"
+                            )
+                            await send_whatsapp_cloud_msg(sender_phone, msg)
+                            return
+
+                        # Determine unit label (slides vs pages)
+                        is_presentation = fname_lower.endswith(".pptx") or fname_lower.endswith(".ppt") or "presentation" in mime_type or "powerpoint" in mime_type
+                        is_word = fname_lower.endswith(".docx") or fname_lower.endswith(".doc") or "word" in mime_type or "officedocument" in mime_type
+                        unit_label = "slides" if is_presentation else "pages"
+                        doc_icon = "📊" if is_presentation else ("📝" if is_word else "📑")
+
+                        # Tier 1c: Multi-Format Text Extraction (offloaded to threadpool to avoid freezing asyncio event loop)
+                        loop = asyncio.get_running_loop()
+                        is_valid, err_code, pages_data, stats = await loop.run_in_executor(
+                            None,
+                            extract_document_pages_from_bytes,
+                            doc_bytes,
+                            filename,
+                            mime_type
+                        )
+                    finally:
+                        if doc_bytes is not None:
+                            del doc_bytes
+                        gc.collect()
+
+                    if not is_valid:
+                        if err_code == "LEGACY_BINARY":
+                            msg = (
+                                "💾 *Legacy Office Format Detected*\n\n"
+                                f"*{filename}* appears to be in an older 97–2003 binary format (`.doc` or `.ppt`).\n\n"
+                                "Please open it and save/export as modern *.docx*, *.pptx*, or *.pdf* so I can index all clinical terms, tables, and notes into your study vault! 🩺📚"
+                            )
+                        elif err_code == "ENCRYPTED":
+                            msg = (
+                                "🔒 *Password-Protected Document*\n\n"
+                                f"*{filename}* is encrypted with a password.\n\n"
+                                "Please remove the password protection and re-upload so I can index it into your study vault! 🔑"
+                            )
+                        elif err_code == "TOO_MANY_PAGES":
+                            msg = (
+                                f"📑 *Document Too Large*\n\n"
+                                f"*{filename}* has *{stats.get('page_count')} {unit_label}*. Personal study uploads are currently limited to *200 {unit_label}* per file.\n\n"
+                                f"💡 *Tip:* Upload individual lecture modules or chapters for optimal results!"
+                            )
+                        elif err_code == "SCANNED_IMAGE":
+                            empty_p = stats.get("empty_pages", 0)
+                            tot_p = stats.get("page_count", 0)
+                            pct = stats.get("empty_pct", 0)
+                            if is_presentation:
+                                msg = (
+                                    "📷 *Image-Only Slides Detected*\n\n"
+                                    f"*{filename}* contains image photos with no selectable digital text "
+                                    f"({empty_p} of {tot_p} slides, ~{pct:.0f}%, have no readable text).\n\n"
+                                    "Neura AI searches and quizzes you directly on selectable digital text. "
+                                    "Please export slides with selectable digital text or notes! 💡🔍"
+                                )
+                            else:
+                                msg = (
+                                    "📷 *Scanned Image / Non-Text Document Detected*\n\n"
+                                    f"*{filename}* contains scanned images with no readable digital text "
+                                    f"({empty_p} of {tot_p} pages, ~{pct:.0f}%, are image-only photos/scans).\n\n"
+                                    "Neura AI searches and quizzes you directly on selectable digital text. "
+                                    "Please run an OCR tool (e.g. Adobe Scan, CamScanner OCR, or Google Drive OCR) or export slides with selectable digital text! 💡🔍"
+                                )
                         else:
                             msg = (
-                                "📷 *Scanned Image / Non-Text Document Detected*\n\n"
-                                f"*{filename}* contains scanned images with no readable digital text "
-                                f"({empty_p} of {tot_p} pages, ~{pct:.0f}%, are image-only photos/scans).\n\n"
-                                "Neura AI searches and quizzes you directly on selectable digital text. "
-                                "Please run an OCR tool (e.g. Adobe Scan, CamScanner OCR, or Google Drive OCR) or export slides with selectable digital text! 💡🔍"
+                                "⚠️ *Unable to Read Document*\n\n"
+                                f"I encountered an issue reading *{filename}*. The file may be empty or corrupted.\n\n"
+                                "Please check the file and try uploading again!"
                             )
-                    else:
+                        await send_whatsapp_cloud_msg(sender_phone, msg)
+                        return
+
+                    # Build sample text for Tier 2 Medical Gatekeeper
+                    sample_snippets = []
+                    for idx, (p_num, p_text) in enumerate(pages_data):
+                        if idx < 3 or idx == len(pages_data) // 2:
+                            unit_prefix = "Slide" if is_presentation else "Page"
+                            sample_snippets.append(f"--- {unit_prefix} {p_num} ---\n{p_text[:600]}")
+                    sample_text = "\n".join(sample_snippets)
+                    
+                    # Tier 2: AI Medical Relevance Gatekeeper
+                    gatekeeper_res = await evaluate_document_is_medical(sample_text, filename)
+                    print(f"🩺 [GATEKEEPER RESULT] File: '{filename}' | Medical: {gatekeeper_res.get('is_medical')} | Category: '{gatekeeper_res.get('category')}'")
+
+                    if not gatekeeper_res.get("is_medical", True):
+                        rejection_reason = gatekeeper_res.get("rejection_reason") or "This document does not appear to contain medical study content."
                         msg = (
-                            "⚠️ *Unable to Read Document*\n\n"
-                            f"I encountered an issue reading *{filename}*. The file may be empty or corrupted.\n\n"
-                            "Please check the file and try uploading again!"
+                            f"📋 *Document Not Indexed: {filename}*\n\n"
+                            f"{rejection_reason}\n\n"
+                            "To keep your personal study vault focused and accurate for your MBBS exams, *NEURA AI* only indexes medical lecture slides, textbook chapters, and clinical handouts! 🩺📚"
                         )
-                    await send_whatsapp_cloud_msg(sender_phone, msg)
-                    return
+                        await send_whatsapp_cloud_msg(sender_phone, msg)
+                        try:
+                            await log_user_chat_message(sender_phone, "user", f"[📄 Uploaded Non-Medical Document: {filename}]", msg_type="document", metadata={"rejected": True, "reason": rejection_reason})
+                        except Exception:
+                            pass
+                        return
 
-                # Build sample text for Tier 2 Medical Gatekeeper
-                sample_snippets = []
-                for idx, (p_num, p_text) in enumerate(pages_data):
-                    if idx < 3 or idx == len(pages_data) // 2:
-                        unit_prefix = "Slide" if is_presentation else "Page"
-                        sample_snippets.append(f"--- {unit_prefix} {p_num} ---\n{p_text[:600]}")
-                sample_text = "\n".join(sample_snippets)
-                
-                # Tier 2: AI Medical Relevance Gatekeeper
-                gatekeeper_res = await evaluate_document_is_medical(sample_text, filename)
-                print(f"🩺 [GATEKEEPER RESULT] File: '{filename}' | Medical: {gatekeeper_res.get('is_medical')} | Category: '{gatekeeper_res.get('category')}'")
-
-                if not gatekeeper_res.get("is_medical", True):
-                    rejection_reason = gatekeeper_res.get("rejection_reason") or "This document does not appear to contain medical study content."
-                    msg = (
-                        f"📋 *Document Not Indexed: {filename}*\n\n"
-                        f"{rejection_reason}\n\n"
-                        "To keep your personal study vault focused and accurate for your MBBS exams, *NEURA AI* only indexes medical lecture slides, textbook chapters, and clinical handouts! 🩺📚"
+                    # Tier 3: Indexing into Qdrant & MongoDB
+                    clean_title = gatekeeper_res.get("title") or os.path.splitext(filename)[0].replace("_", " ").title()
+                    category = gatekeeper_res.get("category", "General Medicine")
+                    
+                    progress_msg = (
+                        f"{doc_icon} *Medical Document Verified: {clean_title}*\n\n"
+                        f"Indexing {len(pages_data)} {unit_label} into your personal study vault... ⏳"
                     )
-                    await send_whatsapp_cloud_msg(sender_phone, msg)
+                    await send_whatsapp_cloud_msg(sender_phone, progress_msg)
+
+                    success, chunk_count, err_msg = await index_user_medical_document(
+                        sender_phone=sender_phone,
+                        filename=filename,
+                        pages_data=pages_data,
+                        category=category,
+                        clean_title=clean_title,
+                        unit_label=unit_label
+                    )
+
+                    if not success:
+                        fail_msg = (
+                            f"⚠️ *Indexing Error*\n\n"
+                            f"I ran into an issue saving *{clean_title}* into your study vault: {err_msg}.\n\n"
+                            "Please try uploading the file again!"
+                        )
+                        await send_whatsapp_cloud_msg(sender_phone, fail_msg)
+                        return
+
+                    # Success Card
+                    success_card = (
+                        f"✅ *Added to Your Personal Study Vault!*\n\n"
+                        f"📚 *Document:* *{clean_title}*\n"
+                        f"📑 *Scope:* {len(pages_data)} {unit_label} ({chunk_count} study chunks)\n"
+                        f"🩺 *Discipline:* {category}\n\n"
+                        f"You can now ask questions about this document anytime!\n"
+                        f"💡 _Try: \"Summarize key clinical concepts in {clean_title}\"_"
+                    )
+                    await send_whatsapp_cloud_msg(sender_phone, success_card)
+
                     try:
-                        await log_user_chat_message(sender_phone, "user", f"[📄 Uploaded Non-Medical Document: {filename}]", msg_type="document", metadata={"rejected": True, "reason": rejection_reason})
+                        await log_user_chat_message(sender_phone, "user", f"[📄 Uploaded Document: {clean_title}] ({len(pages_data)} pages)", msg_type="document", metadata={"title": clean_title, "chunks": chunk_count, "category": category})
                     except Exception:
                         pass
-                    return
 
-                # Tier 3: Indexing into Qdrant & MongoDB
-                clean_title = gatekeeper_res.get("title") or os.path.splitext(filename)[0].replace("_", " ").title()
-                category = gatekeeper_res.get("category", "General Medicine")
-                
-                progress_msg = (
-                    f"{doc_icon} *Medical Document Verified: {clean_title}*\n\n"
-                    f"Indexing {len(pages_data)} {unit_label} into your personal study vault... ⏳"
-                )
-                await send_whatsapp_cloud_msg(sender_phone, progress_msg)
-
-                success, chunk_count, err_msg = await index_user_medical_document(
-                    sender_phone=sender_phone,
-                    filename=filename,
-                    pages_data=pages_data,
-                    category=category,
-                    clean_title=clean_title
-                )
-
-                if not success:
-                    fail_msg = (
-                        f"⚠️ *Indexing Error*\n\n"
-                        f"I ran into an issue saving *{clean_title}* into your study vault: {err_msg}.\n\n"
-                        "Please try uploading the file again!"
-                    )
-                    await send_whatsapp_cloud_msg(sender_phone, fail_msg)
-                    return
-
-                # Success Card
-                success_card = (
-                    f"✅ *Added to Your Personal Study Vault!*\n\n"
-                    f"📚 *Document:* *{clean_title}*\n"
-                    f"📑 *Scope:* {len(pages_data)} {unit_label} ({chunk_count} study chunks)\n"
-                    f"🩺 *Discipline:* {category}\n\n"
-                    f"You can now ask questions about this document anytime!\n"
-                    f"💡 _Try: \"Summarize key clinical concepts in {clean_title}\"_"
-                )
-                await send_whatsapp_cloud_msg(sender_phone, success_card)
-
-                try:
-                    await log_user_chat_message(sender_phone, "user", f"[📄 Uploaded Document: {clean_title}] ({len(pages_data)} pages)", msg_type="document", metadata={"title": clean_title, "chunks": chunk_count, "category": category})
-                except Exception:
-                    pass
-
-            # Semaphore released here!
+            finally:
+                # Always clear active_upload so the user is never left in a stuck in-flight state
+                if users_col is not None:
+                    try:
+                        await users_col.update_one(
+                            {"user_id": sender_phone},
+                            {"$unset": {"active_upload": ""}}
+                        )
+                    except Exception as unset_err:
+                        print(f"⚠️ Error clearing active_upload for {sender_phone}: {unset_err}")
 
             # If the student attached a caption/question with the document, answer it immediately!
-            # (Executed inside user_lock so it completes before any next message from this user, avoiding deadlock)
             if caption and len(caption.strip()) > 1:
                 print(f"💬 [DOCUMENT CAPTION QUESTION] Processing user caption: '{caption}'")
-                await _process_whatsapp_message_internal(sender_phone, caption.strip(), is_tagged_reply=False)
+                await process_whatsapp_message(sender_phone, caption.strip(), is_tagged_reply=False)
 
     except Exception as e:
         print(f"❌ [CRITICAL DOCUMENT ERROR] Failed processing document {filename} for {sender_phone}: {e}")
@@ -4525,6 +4660,26 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         streak = await update_user_study_streak(sender_phone)
         print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] User profile loaded: '{name}' ({level}), Streak: {streak}d")
 
+        # Check if user has an active document upload mid-flight (< 5 minutes old)
+        active_upload = user_doc.get("active_upload") if user_doc else None
+        in_flight_note = ""
+        if active_upload and isinstance(active_upload, dict):
+            started_at_str = active_upload.get("started_at")
+            is_recent = True
+            if started_at_str:
+                try:
+                    started_dt = datetime.fromisoformat(started_at_str)
+                    if (datetime.utcnow() - started_dt).total_seconds() > 300:
+                        is_recent = False
+                except Exception:
+                    is_recent = True
+            if is_recent:
+                upload_fn = active_upload.get("filename", "your document")
+                in_flight_note = (
+                    f"\n\n📄 _*Note:* I'm still indexing *{upload_fn}* in the background! "
+                    "If your question is from this new file, give me a moment and ask again once you receive the completion card! ⏳_"
+                )
+
         # Handle Start Study Session button from reminder
         if user_msg == "START_STUDY_SESSION":
             study_prompt = (
@@ -5042,7 +5197,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 print(f"[CACHE HIT ⚡] Returning instant cached explanation for '{clean_topic}'")
                 
                 streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
-                final_answer = cached_answer + streak_footer
+                final_answer = cached_answer + in_flight_note + streak_footer
                 await send_whatsapp_cloud_msg(sender_phone, final_answer)
                 
                 # Fetch and deliver HD Video CTA Card
@@ -5094,6 +5249,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             conv_reply = await call_openrouter_llm(conv_system, user_msg, max_tokens=200)
             if not conv_reply:
                 conv_reply = f"I'm right here with you, *{name}*! 😊 What medical topic or case study are we breaking down today?"
+            if in_flight_note:
+                conv_reply += in_flight_note
             await send_whatsapp_cloud_msg(sender_phone, conv_reply)
             return
 
@@ -5143,6 +5300,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     f"While your current textbooks focus on core clinical subjects rather than this specific topic, I'm ready to dive into any disease pathophysiology, pharmacology mechanism, or anatomy concept whenever you are!\n\n"
                     f"What medical topic or case study shall we explore next?"
                 )
+            if in_flight_note:
+                smart_resp += in_flight_note
             await send_whatsapp_cloud_msg(sender_phone, smart_resp)
             return
 
@@ -5224,7 +5383,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
 
         streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
-        final_answer = ai_answer + streak_footer
+        final_answer = ai_answer + in_flight_note + streak_footer
         t_wa_start = time.perf_counter()
         await send_whatsapp_cloud_msg(sender_phone, final_answer)
         dt_total = time.perf_counter() - req_t0
