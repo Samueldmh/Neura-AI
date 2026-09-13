@@ -2294,7 +2294,7 @@ async def process_whatsapp_document(
     """
     # Safeguard: ensure filename is never an empty or static shared constant
     if not filename or filename in ["document.pdf", "medical_document.pdf"]:
-        safe_media_tag = (media_id or "")[:12] if media_id else str(int(time.time()))
+        safe_media_tag = media_id if media_id else str(int(time.time()))
         filename = f"document_{safe_media_tag}.pdf"
 
     print(f"\n📄 [DOCUMENT INGESTION START] User: {sender_phone} | File: '{filename}' | Media ID: {media_id} | Caption: '{caption}'")
@@ -5082,7 +5082,7 @@ async def handle_whatsapp_webhook(request: Request):
                         media_id = doc_obj.get("id")
                         raw_filename = (doc_obj.get("filename") or "").strip()
                         # Avoid shared static fallback so two untitled uploads by the same student never collide in Qdrant/MongoDB
-                        safe_media_tag = (media_id or "")[:12] if media_id else str(int(time.time()))
+                        safe_media_tag = media_id if media_id else str(int(time.time()))
                         filename = raw_filename if raw_filename else f"document_{safe_media_tag}.pdf"
                         caption = (doc_obj.get("caption") or "").strip()
                         mime_type = doc_obj.get("mime_type", "application/pdf")
