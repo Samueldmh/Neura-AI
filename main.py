@@ -3105,10 +3105,12 @@ async def process_whatsapp_document(
                     except Exception as unset_err:
                         print(f"⚠️ Error clearing active_upload for {sender_phone}: {unset_err}")
 
-            # If the student attached a caption/question with the document, answer it immediately!
-            if caption and len(caption.strip()) > 1:
-                print(f"💬 [DOCUMENT CAPTION QUESTION] Processing user caption: '{caption}'")
-                await process_whatsapp_message(sender_phone, caption.strip(), is_tagged_reply=False)
+        # user_doc_lock is released here! Subsequent uploads from this user can proceed without waiting on caption Q&A.
+
+        # If the student attached a caption/question with the document, answer it immediately!
+        if caption and len(caption.strip()) > 1:
+            print(f"💬 [DOCUMENT CAPTION QUESTION] Processing user caption: '{caption}'")
+            await process_whatsapp_message(sender_phone, caption.strip(), is_tagged_reply=False)
 
     except Exception as e:
         print(f"❌ [CRITICAL DOCUMENT ERROR] Failed processing document {filename} for {sender_phone}: {e}")
