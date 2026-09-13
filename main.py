@@ -124,6 +124,18 @@ qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=40))
 embedding_pool = ThreadPoolExecutor(max_workers=2)
 
+# User-level sequential locks to prevent race conditions on simultaneous actions from the same user
+_user_locks: dict[str, asyncio.Lock] = {}
+
+def get_user_lock(user_id: str) -> asyncio.Lock:
+    if user_id not in _user_locks:
+        _user_locks[user_id] = asyncio.Lock()
+    return _user_locks[user_id]
+
+# Global Document Ingestion Semaphore: Bounds active concurrent heavy document operations
+# (Meta CDN download, PyMuPDF parsing, and vector ingestion) to max 3 concurrent tasks to prevent OOM
+DOC_INGESTION_SEMAPHORE = asyncio.Semaphore(3)
+
 # Lightweight in-memory query vector cache (<1MB RAM for 500 common curriculum topics)
 QUERY_VECTOR_CACHE = OrderedDict()
 MAX_VECTOR_CACHE = 500
@@ -2661,197 +2673,229 @@ async def process_whatsapp_document(
         await send_whatsapp_cloud_msg(sender_phone, msg)
         return
 
-    # Check User Vault Quota & Daily Rate Limits before downloading
-    if users_col is not None:
-        try:
-            ud = await users_col.find_one({"user_id": sender_phone})
-            if ud:
-                custom_docs = ud.get("custom_documents", [])
-                existing_filenames = {d.get("filename") for d in custom_docs if isinstance(d, dict)}
+    try:
+        user_lock = get_user_lock(sender_phone)
+        async with user_lock:
+            # Check User Vault Quota & Daily Rate Limits before downloading
+            if users_col is not None:
+                try:
+                    ud = await users_col.find_one({"user_id": sender_phone})
+                    if ud:
+                        custom_docs = ud.get("custom_documents", [])
+                        existing_filenames = {d.get("filename") for d in custom_docs if isinstance(d, dict)}
+                        
+                        # Quota: 15 documents max per personal study vault
+                        if filename not in existing_filenames and len(custom_docs) >= 15:
+                            msg = (
+                                "⚠️ *Personal Study Vault Full (15/15 Documents)*\n\n"
+                                f"Your personal study vault has reached the maximum capacity of *15 documents*.\n\n"
+                                f"To upload *{filename}*, please remove an older lecture slide or handout first using:\n\n"
+                                "👉 `/deletedoc [number or title]`\n\n"
+                                "💡 Type `/documents` to see all your uploaded documents and their numbers! 📂"
+                            )
+                            await send_whatsapp_cloud_msg(sender_phone, msg)
+                            return
+
+                        # Daily rate limit: 10 uploads per day (WAT timezone: UTC+1)
+                        wat_today = datetime.now(timezone(timedelta(hours=1))).strftime("%Y-%m-%d")
+                        daily_uploads = ud.get("daily_doc_uploads", {}).get(wat_today, 0)
+                        if daily_uploads >= 10:
+                            msg = (
+                                "⏳ *Daily Upload Limit Reached*\n\n"
+                                "To ensure fast processing and stability for all students, personal document uploads are limited to *10 per day*.\n\n"
+                                "Your daily quota will reset at midnight (WAT)!\n\n"
+                                "💡 You can continue asking questions from your current study vault and library textbooks anytime."
+                            )
+                            await send_whatsapp_cloud_msg(sender_phone, msg)
+                            return
+                except Exception as q_err:
+                    print(f"⚠️ Error checking user upload quota: {q_err}")
+
+            # Global Concurrency Limiter: Bounds active concurrent downloads, parsing, and vector ingestion to max 3
+            print(f"⏳ [DOCUMENT QUEUE] User {sender_phone} waiting for document ingestion slot for '{filename}'...")
+            async with DOC_INGESTION_SEMAPHORE:
+                print(f"🚀 [DOCUMENT INGESTION SLOT ACQUIRED] Processing '{filename}' for {sender_phone}...")
+                doc_bytes = None
+                try:
+                    # Download from Meta CDN with 35s timeout
+                    doc_bytes, detected_mime = await download_whatsapp_media(media_id, timeout=35.0)
+                    if not doc_bytes:
+                        msg = (
+                            "⚠️ *Download Failed*\n\n"
+                            "I couldn't download your document from WhatsApp. This usually happens if the upload was interrupted.\n\n"
+                            "Please try sending the file again! 📄"
+                        )
+                        await send_whatsapp_cloud_msg(sender_phone, msg)
+                        return
+
+                    # Tier 1b: File size sanity check (28MB limit)
+                    file_size_mb = len(doc_bytes) / (1024 * 1024)
+                    if file_size_mb > 28.0:
+                        msg = (
+                            "⚠️ *File Size Limit Exceeded*\n\n"
+                            f"Your document is *{file_size_mb:.1f} MB*. To ensure fast search and memory stability on WhatsApp, uploads must be under *28 MB*.\n\n"
+                            "💡 *Tip:* Try splitting large slide decks into individual topics or lecture modules!"
+                        )
+                        await send_whatsapp_cloud_msg(sender_phone, msg)
+                        return
+
+                    # Determine unit label (slides vs pages)
+                    is_presentation = fname_lower.endswith(".pptx") or fname_lower.endswith(".ppt") or "presentation" in mime_type or "powerpoint" in mime_type
+                    is_word = fname_lower.endswith(".docx") or fname_lower.endswith(".doc") or "word" in mime_type or "officedocument" in mime_type
+                    unit_label = "slides" if is_presentation else "pages"
+                    doc_icon = "📊" if is_presentation else ("📝" if is_word else "📑")
+
+                    # Tier 1c: Multi-Format Text Extraction (offloaded to threadpool to avoid freezing asyncio event loop)
+                    loop = asyncio.get_running_loop()
+                    is_valid, err_code, pages_data, stats = await loop.run_in_executor(
+                        None,
+                        extract_document_pages_from_bytes,
+                        doc_bytes,
+                        filename,
+                        mime_type
+                    )
+                finally:
+                    if doc_bytes is not None:
+                        del doc_bytes
+                    gc.collect()
+
+                if not is_valid:
+                    if err_code == "LEGACY_BINARY":
+                        msg = (
+                            "💾 *Legacy Office Format Detected*\n\n"
+                            f"*{filename}* appears to be in an older 97–2003 binary format (`.doc` or `.ppt`).\n\n"
+                            "Please open it and save/export as modern *.docx*, *.pptx*, or *.pdf* so I can index all clinical terms, tables, and notes into your study vault! 🩺📚"
+                        )
+                    elif err_code == "ENCRYPTED":
+                        msg = (
+                            "🔒 *Password-Protected Document*\n\n"
+                            f"*{filename}* is encrypted with a password.\n\n"
+                            "Please remove the password protection and re-upload so I can index it into your study vault! 🔑"
+                        )
+                    elif err_code == "TOO_MANY_PAGES":
+                        msg = (
+                            f"📑 *Document Too Large*\n\n"
+                            f"*{filename}* has *{stats.get('page_count')} {unit_label}*. Personal study uploads are currently limited to *200 {unit_label}* per file.\n\n"
+                            f"💡 *Tip:* Upload individual lecture modules or chapters for optimal results!"
+                        )
+                    elif err_code == "SCANNED_IMAGE":
+                        empty_p = stats.get("empty_pages", 0)
+                        tot_p = stats.get("page_count", 0)
+                        pct = stats.get("empty_pct", 0)
+                        if is_presentation:
+                            msg = (
+                                "📷 *Image-Only Slides Detected*\n\n"
+                                f"*{filename}* contains image photos with no selectable digital text "
+                                f"({empty_p} of {tot_p} slides, ~{pct:.0f}%, have no readable text).\n\n"
+                                "Neura AI searches and quizzes you directly on selectable digital text. "
+                                "Please export slides with selectable digital text or notes! 💡🔍"
+                            )
+                        else:
+                            msg = (
+                                "📷 *Scanned Image / Non-Text Document Detected*\n\n"
+                                f"*{filename}* contains scanned images with no readable digital text "
+                                f"({empty_p} of {tot_p} pages, ~{pct:.0f}%, are image-only photos/scans).\n\n"
+                                "Neura AI searches and quizzes you directly on selectable digital text. "
+                                "Please run an OCR tool (e.g. Adobe Scan, CamScanner OCR, or Google Drive OCR) or export slides with selectable digital text! 💡🔍"
+                            )
+                    else:
+                        msg = (
+                            "⚠️ *Unable to Read Document*\n\n"
+                            f"I encountered an issue reading *{filename}*. The file may be empty or corrupted.\n\n"
+                            "Please check the file and try uploading again!"
+                        )
+                    await send_whatsapp_cloud_msg(sender_phone, msg)
+                    return
+
+                # Build sample text for Tier 2 Medical Gatekeeper
+                sample_snippets = []
+                for idx, (p_num, p_text) in enumerate(pages_data):
+                    if idx < 3 or idx == len(pages_data) // 2:
+                        unit_prefix = "Slide" if is_presentation else "Page"
+                        sample_snippets.append(f"--- {unit_prefix} {p_num} ---\n{p_text[:600]}")
+                sample_text = "\n".join(sample_snippets)
                 
-                # Quota: 15 documents max per personal study vault
-                if filename not in existing_filenames and len(custom_docs) >= 15:
+                # Tier 2: AI Medical Relevance Gatekeeper
+                gatekeeper_res = await evaluate_document_is_medical(sample_text, filename)
+                print(f"🩺 [GATEKEEPER RESULT] File: '{filename}' | Medical: {gatekeeper_res.get('is_medical')} | Category: '{gatekeeper_res.get('category')}'")
+
+                if not gatekeeper_res.get("is_medical", True):
+                    rejection_reason = gatekeeper_res.get("rejection_reason") or "This document does not appear to contain medical study content."
                     msg = (
-                        "⚠️ *Personal Study Vault Full (15/15 Documents)*\n\n"
-                        f"Your personal study vault has reached the maximum capacity of *15 documents*.\n\n"
-                        f"To upload *{filename}*, please remove an older lecture slide or handout first using:\n\n"
-                        "👉 `/deletedoc [number or title]`\n\n"
-                        "💡 Type `/documents` to see all your uploaded documents and their numbers! 📂"
+                        f"📋 *Document Not Indexed: {filename}*\n\n"
+                        f"{rejection_reason}\n\n"
+                        "To keep your personal study vault focused and accurate for your MBBS exams, *NEURA AI* only indexes medical lecture slides, textbook chapters, and clinical handouts! 🩺📚"
                     )
                     await send_whatsapp_cloud_msg(sender_phone, msg)
+                    try:
+                        await log_user_chat_message(sender_phone, "user", f"[📄 Uploaded Non-Medical Document: {filename}]", msg_type="document", metadata={"rejected": True, "reason": rejection_reason})
+                    except Exception:
+                        pass
                     return
 
-                # Daily rate limit: 10 uploads per day (WAT timezone: UTC+1)
-                wat_today = datetime.now(timezone(timedelta(hours=1))).strftime("%Y-%m-%d")
-                daily_uploads = ud.get("daily_doc_uploads", {}).get(wat_today, 0)
-                if daily_uploads >= 10:
-                    msg = (
-                        "⏳ *Daily Upload Limit Reached*\n\n"
-                        "To ensure fast processing and stability for all students, personal document uploads are limited to *10 per day*.\n\n"
-                        "Your daily quota will reset at midnight (WAT)!\n\n"
-                        "💡 You can continue asking questions from your current study vault and library textbooks anytime."
+                # Tier 3: Indexing into Qdrant & MongoDB
+                clean_title = gatekeeper_res.get("title") or os.path.splitext(filename)[0].replace("_", " ").title()
+                category = gatekeeper_res.get("category", "General Medicine")
+                
+                progress_msg = (
+                    f"{doc_icon} *Medical Document Verified: {clean_title}*\n\n"
+                    f"Indexing {len(pages_data)} {unit_label} into your personal study vault... ⏳"
+                )
+                await send_whatsapp_cloud_msg(sender_phone, progress_msg)
+
+                success, chunk_count, err_msg = await index_user_medical_document(
+                    sender_phone=sender_phone,
+                    filename=filename,
+                    pages_data=pages_data,
+                    category=category,
+                    clean_title=clean_title
+                )
+
+                if not success:
+                    fail_msg = (
+                        f"⚠️ *Indexing Error*\n\n"
+                        f"I ran into an issue saving *{clean_title}* into your study vault: {err_msg}.\n\n"
+                        "Please try uploading the file again!"
                     )
-                    await send_whatsapp_cloud_msg(sender_phone, msg)
+                    await send_whatsapp_cloud_msg(sender_phone, fail_msg)
                     return
-        except Exception as q_err:
-            print(f"⚠️ Error checking user upload quota: {q_err}")
 
-    # Download from Meta CDN with 35s timeout
-    doc_bytes, detected_mime = await download_whatsapp_media(media_id, timeout=35.0)
-    if not doc_bytes:
-        msg = (
-            "⚠️ *Download Failed*\n\n"
-            "I couldn't download your document from WhatsApp. This usually happens if the upload was interrupted.\n\n"
-            "Please try sending the file again! 📄"
-        )
-        await send_whatsapp_cloud_msg(sender_phone, msg)
-        return
-
-    # Tier 1b: File size sanity check (28MB limit)
-    file_size_mb = len(doc_bytes) / (1024 * 1024)
-    if file_size_mb > 28.0:
-        msg = (
-            "⚠️ *File Size Limit Exceeded*\n\n"
-            f"Your document is *{file_size_mb:.1f} MB*. To ensure fast search and memory stability on WhatsApp, uploads must be under *28 MB*.\n\n"
-            "💡 *Tip:* Try splitting large slide decks into individual topics or lecture modules!"
-        )
-        await send_whatsapp_cloud_msg(sender_phone, msg)
-        del doc_bytes
-        gc.collect()
-        return
-
-    # Determine unit label (slides vs pages)
-    is_presentation = fname_lower.endswith(".pptx") or fname_lower.endswith(".ppt") or "presentation" in mime_type or "powerpoint" in mime_type
-    is_word = fname_lower.endswith(".docx") or fname_lower.endswith(".doc") or "word" in mime_type or "officedocument" in mime_type
-    unit_label = "slides" if is_presentation else "pages"
-    doc_icon = "📊" if is_presentation else ("📝" if is_word else "📑")
-
-    # Tier 1c: Multi-Format Text Extraction & Technical Integrity
-    is_valid, err_code, pages_data, stats = extract_document_pages_from_bytes(doc_bytes, filename, mime_type)
-    del doc_bytes
-    gc.collect()
-    
-    if not is_valid:
-        if err_code == "LEGACY_BINARY":
-            msg = (
-                "💾 *Legacy Office Format Detected*\n\n"
-                f"*{filename}* appears to be in an older 97–2003 binary format (`.doc` or `.ppt`).\n\n"
-                "Please open it and save/export as modern *.docx*, *.pptx*, or *.pdf* so I can index all clinical terms, tables, and notes into your study vault! 🩺📚"
-            )
-        elif err_code == "ENCRYPTED":
-            msg = (
-                "🔒 *Password-Protected Document*\n\n"
-                f"*{filename}* is encrypted with a password.\n\n"
-                "Please remove the password protection and re-upload so I can index it into your study vault! 🔑"
-            )
-        elif err_code == "TOO_MANY_PAGES":
-            msg = (
-                f"📑 *Document Too Large*\n\n"
-                f"*{filename}* has *{stats.get('page_count')} {unit_label}*. Personal study uploads are currently limited to *200 {unit_label}* per file.\n\n"
-                f"💡 *Tip:* Upload individual lecture modules or chapters for optimal results!"
-            )
-        elif err_code == "SCANNED_IMAGE":
-            empty_p = stats.get("empty_pages", 0)
-            tot_p = stats.get("page_count", 0)
-            pct = stats.get("empty_pct", 0)
-            if is_presentation:
-                msg = (
-                    "📷 *Image-Only Slides Detected*\n\n"
-                    f"*{filename}* contains image photos with no selectable digital text "
-                    f"({empty_p} of {tot_p} slides, ~{pct:.0f}%, have no readable text).\n\n"
-                    "Neura AI searches and quizzes you directly on selectable digital text. "
-                    "Please export slides with selectable digital text or notes! 💡🔍"
+                # Success Card
+                success_card = (
+                    f"✅ *Added to Your Personal Study Vault!*\n\n"
+                    f"📚 *Document:* *{clean_title}*\n"
+                    f"📑 *Scope:* {len(pages_data)} {unit_label} ({chunk_count} study chunks)\n"
+                    f"🩺 *Discipline:* {category}\n\n"
+                    f"You can now ask questions about this document anytime!\n"
+                    f"💡 _Try: \"Summarize key clinical concepts in {clean_title}\"_"
                 )
-            else:
-                msg = (
-                    "📷 *Scanned Image / Non-Text Document Detected*\n\n"
-                    f"*{filename}* contains scanned images with no readable digital text "
-                    f"({empty_p} of {tot_p} pages, ~{pct:.0f}%, are image-only photos/scans).\n\n"
-                    "Neura AI searches and quizzes you directly on selectable digital text. "
-                    "Please run an OCR tool (e.g. Adobe Scan, CamScanner OCR, or Google Drive OCR) or export slides with selectable digital text! 💡🔍"
-                )
-        else:
-            msg = (
-                "⚠️ *Unable to Read Document*\n\n"
-                f"I encountered an issue reading *{filename}*. The file may be empty or corrupted.\n\n"
-                "Please check the file and try uploading again!"
-            )
-        await send_whatsapp_cloud_msg(sender_phone, msg)
-        return
+                await send_whatsapp_cloud_msg(sender_phone, success_card)
 
-    # Build sample text for Tier 2 Medical Gatekeeper
-    sample_snippets = []
-    for idx, (p_num, p_text) in enumerate(pages_data):
-        if idx < 3 or idx == len(pages_data) // 2:
-            unit_prefix = "Slide" if is_presentation else "Page"
-            sample_snippets.append(f"--- {unit_prefix} {p_num} ---\n{p_text[:600]}")
-    sample_text = "\n".join(sample_snippets)
-    
-    # Tier 2: AI Medical Relevance Gatekeeper
-    gatekeeper_res = await evaluate_document_is_medical(sample_text, filename)
-    print(f"🩺 [GATEKEEPER RESULT] File: '{filename}' | Medical: {gatekeeper_res.get('is_medical')} | Category: '{gatekeeper_res.get('category')}'")
+                try:
+                    await log_user_chat_message(sender_phone, "user", f"[📄 Uploaded Document: {clean_title}] ({len(pages_data)} pages)", msg_type="document", metadata={"title": clean_title, "chunks": chunk_count, "category": category})
+                except Exception:
+                    pass
 
-    if not gatekeeper_res.get("is_medical", True):
-        rejection_reason = gatekeeper_res.get("rejection_reason") or "This document does not appear to contain medical study content."
-        msg = (
-            f"📋 *Document Not Indexed: {filename}*\n\n"
-            f"{rejection_reason}\n\n"
-            "To keep your personal study vault focused and accurate for your MBBS exams, *NEURA AI* only indexes medical lecture slides, textbook chapters, and clinical handouts! 🩺📚"
-        )
-        await send_whatsapp_cloud_msg(sender_phone, msg)
+            # Semaphore released here!
+
+            # If the student attached a caption/question with the document, answer it immediately!
+            # (Executed inside user_lock so it completes before any next message from this user, avoiding deadlock)
+            if caption and len(caption.strip()) > 1:
+                print(f"💬 [DOCUMENT CAPTION QUESTION] Processing user caption: '{caption}'")
+                await _process_whatsapp_message_internal(sender_phone, caption.strip(), is_tagged_reply=False)
+
+    except Exception as e:
+        print(f"❌ [CRITICAL DOCUMENT ERROR] Failed processing document {filename} for {sender_phone}: {e}")
+        traceback.print_exc()
         try:
-            await log_user_chat_message(sender_phone, "user", f"[📄 Uploaded Non-Medical Document: {filename}]", msg_type="document", metadata={"rejected": True, "reason": rejection_reason})
+            await send_whatsapp_cloud_msg(
+                sender_phone,
+                "⚠️ *Document Processing Error*\n\n"
+                f"I encountered an unexpected issue while processing *{filename}*. "
+                "Please try sending the file again!"
+            )
         except Exception:
             pass
-        return
-
-    # Tier 3: Indexing into Qdrant & MongoDB
-    clean_title = gatekeeper_res.get("title") or os.path.splitext(filename)[0].replace("_", " ").title()
-    category = gatekeeper_res.get("category", "General Medicine")
-    
-    progress_msg = (
-        f"{doc_icon} *Medical Document Verified: {clean_title}*\n\n"
-        f"Indexing {len(pages_data)} {unit_label} into your personal study vault... ⏳"
-    )
-    await send_whatsapp_cloud_msg(sender_phone, progress_msg)
-
-    success, chunk_count, err_msg = await index_user_medical_document(
-        sender_phone=sender_phone,
-        filename=filename,
-        pages_data=pages_data,
-        category=category,
-        clean_title=clean_title
-    )
-
-    if not success:
-        fail_msg = (
-            f"⚠️ *Indexing Error*\n\n"
-            f"I ran into an issue saving *{clean_title}* into your study vault: {err_msg}.\n\n"
-            "Please try uploading the file again!"
-        )
-        await send_whatsapp_cloud_msg(sender_phone, fail_msg)
-        return
-
-    # Success Card
-    success_card = (
-        f"✅ *Added to Your Personal Study Vault!*\n\n"
-        f"📚 *Document:* *{clean_title}*\n"
-        f"📑 *Scope:* {len(pages_data)} {unit_label} ({chunk_count} study chunks)\n"
-        f"🩺 *Discipline:* {category}\n\n"
-        f"You can now ask questions about this document anytime!\n"
-        f"💡 _Try: \"Summarize key clinical concepts in {clean_title}\"_"
-    )
-    await send_whatsapp_cloud_msg(sender_phone, success_card)
-
-    try:
-        await log_user_chat_message(sender_phone, "user", f"[📄 Uploaded Document: {clean_title}] ({len(pages_data)} pages)", msg_type="document", metadata={"title": clean_title, "chunks": chunk_count, "category": category})
-    except Exception:
-        pass
-
-    # If the student attached a caption/question with the document, answer it immediately!
-    if caption and len(caption.strip()) > 1:
-        print(f"💬 [DOCUMENT CAPTION QUESTION] Processing user caption: '{caption}'")
-        await process_whatsapp_message(sender_phone, caption.strip(), is_tagged_reply=False)
 
 # ==========================================
 # CURATED MEDICAL YOUTUBE VIDEO LECTURE ENGINE
@@ -4419,14 +4463,7 @@ async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: 
     await send_quiz_question(sender_phone, active_quiz)
     return True
 
-# User-level sequential lock to prevent race conditions on simultaneous messages from the same user
-_user_locks: dict[str, asyncio.Lock] = {}
-
-def get_user_lock(user_id: str) -> asyncio.Lock:
-    if user_id not in _user_locks:
-        _user_locks[user_id] = asyncio.Lock()
-    return _user_locks[user_id]
-
+# User-level sequential lock to prevent race conditions on simultaneous messages from the same user (defined above at line 127)
 async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_reply: bool = False, is_voice: bool = False):
     """Background task wrapper to process messages sequentially per user lock"""
     lock = get_user_lock(sender_phone)
