@@ -867,9 +867,11 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
 # ==========================================
 # 2.5 ROLLING CONVERSATION HISTORY & QUERY CONDENSER
 # ==========================================
-CONDENSE_PROMPT = """Given the chat history and a new message from the student, rewrite the new message as a fully standalone question that includes any context needed to understand it on its own.
-If the new message is already standalone (a new topic), return it unchanged.
+CONDENSE_PROMPT = """Given the chat history, the current medical topic under discussion, and a new message from the student, rewrite the new message as a fully standalone question that includes any context needed to understand it on its own.
+If the new message is already standalone (a new topic or deliberate topic jump), return it unchanged.
 Do not answer the question — only rewrite it.
+
+Current topic under discussion: {current_topic}
 
 Chat History:
 {history_text}
@@ -962,25 +964,38 @@ async def save_turn(phone_number: str, question: str, answer: str, max_turns: in
     except Exception as e:
         print(f"⚠️ Error saving turn for {phone_number}: {e}")
 
-async def condense_question(history: list[dict], question: str) -> str:
+def _smart_truncate(text: str, limit: int) -> str:
+    """Boundary-aware string truncation that avoids cutting mid-word or mid-sentence."""
+    if not text or len(text) <= limit:
+        return text
+    cut = text[:limit]
+    for delim in [". ", "! ", "? ", "\n"]:
+        idx = cut.rfind(delim)
+        if idx > limit * 0.5:
+            return cut[:idx + 1].strip()
+    idx = cut.rfind(" ")
+    return (cut[:idx] if idx > 0 else cut).strip() + "…"
+
+async def condense_question(history: list[dict], question: str, current_topic: str = "") -> str:
     """Rewrite follow-up queries into fully standalone questions using Groq (or OpenRouter fallback)."""
     clean_q = question.strip()
-    if not history:
+    if not history and not current_topic:
         return clean_q
 
-    # Build history context (last 4 turns is optimal for high speed and sharp focus)
+    # Asymmetric tiered truncation: generous for the immediate last turn (700 chars), tight for older context (180 chars)
+    recent_turns = history[-4:] if history else []
     history_lines = []
-    for h in history[-4:]:
+    for i, h in enumerate(recent_turns):
         q_text = h.get("q", "").strip()
-        a_text = h.get("a", "").strip()[:220]
+        is_most_recent = (i == len(recent_turns) - 1)
+        limit = 700 if is_most_recent else 180
+        a_text = _smart_truncate(h.get("a", "").strip(), limit)
         if q_text:
             history_lines.append(f"Q: {q_text}\nA: {a_text}")
 
-    if not history_lines:
-        return clean_q
-
-    history_text = "\n\n".join(history_lines)
-    prompt = CONDENSE_PROMPT.format(history_text=history_text, question=clean_q)
+    history_text = "\n\n".join(history_lines) if history_lines else "None (first turn)"
+    clean_topic = current_topic.strip() if current_topic and current_topic.lower() not in ["none", "high-yield clinical concepts"] else "None (infer from chat history if applicable)"
+    prompt = CONDENSE_PROMPT.format(current_topic=clean_topic, history_text=history_text, question=clean_q)
 
     # 1. Primary: Groq LPU (llama-3.1-8b-instant, ~100ms)
     t0 = time.perf_counter()
@@ -990,7 +1005,7 @@ async def condense_question(history: list[dict], question: str) -> str:
     if not rewritten:
         try:
             rewritten = await call_openrouter_llm(
-                system_prompt="You are an expert query condenser. Rewrite the user's message as a standalone question based on history. If already standalone, return it verbatim without preamble.",
+                system_prompt="You are an expert query condenser. Rewrite the user's message as a standalone question based on history and current topic. If already standalone, return it verbatim without preamble.",
                 user_prompt=prompt,
                 max_tokens=100,
                 model=FRONTDESK_MODEL,
@@ -4889,13 +4904,15 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             last_turn = history_turns[-1]
             last_assistant_msg = last_turn.get("a", "")
 
+        current_medical_topic = user_doc.get("last_medical_topic", "") if user_doc else ""
+
         t_condense_start = time.perf_counter()
         if is_tagged_reply and last_assistant_msg:
-            tagged_snippet = last_assistant_msg[:250]
+            tagged_snippet = _smart_truncate(last_assistant_msg, 900)
             tagged_input = f"[Student quoted previous message: '{tagged_snippet}'] {user_msg}"
-            standalone_question = await condense_question(history_turns, tagged_input)
+            standalone_question = await condense_question(history_turns, tagged_input, current_topic=current_medical_topic)
         else:
-            standalone_question = await condense_question(history_turns, user_msg)
+            standalone_question = await condense_question(history_turns, user_msg, current_topic=current_medical_topic)
         
         search_term = standalone_question
         query_to_search = standalone_question
@@ -5449,7 +5466,12 @@ async def chat_endpoint(req: QueryRequest):
         
         # Retrieve history and condense query into standalone question
         history_turns = await get_recent_history(req.user_id, n=8)
-        standalone_question = await condense_question(history_turns, user_msg)
+        current_topic = ""
+        if users_col is not None:
+            user_doc_api = await users_col.find_one({"user_id": req.user_id})
+            if user_doc_api:
+                current_topic = user_doc_api.get("last_medical_topic", "")
+        standalone_question = await condense_question(history_turns, user_msg, current_topic=current_topic)
         
         # Step 1: Extract medical terms from the standalone question
         medical_terms = extract_medical_terms(standalone_question)
