@@ -2980,20 +2980,22 @@ async def process_whatsapp_document(
                         "mime_type":    mime_type,
                     }
                     print(f"🚀 [MODAL DISPATCH] Firing to Modal for {sender_phone} / '{filename}'")
-                    # Fire-and-forget: do NOT await the result — Modal handles completion
-                    asyncio.create_task(
-                        shared_http_client.post(
-                            MODAL_ENDPOINT,
-                            json=payload,
-                            timeout=httpx.Timeout(15.0)  # only wait for the ACK from Modal's load balancer
-                        )
+                    resp = await shared_http_client.post(
+                        MODAL_ENDPOINT,
+                        json=payload,
+                        timeout=httpx.Timeout(120.0, connect=10.0)
                     )
+                    if resp.status_code in (200, 202):
+                        data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+                        if data.get("ok", True):
+                            print(f"✅ [MODAL DISPATCH] Successfully handled by Modal ({resp.status_code})")
+                            return
+                        print(f"⚠️ Modal returned ok=False ({data.get('error')}), falling back to local pipeline")
+                    else:
+                        print(f"⚠️ Modal dispatch returned HTTP {resp.status_code}, falling back to local pipeline")
                 except Exception as modal_err:
                     print(f"⚠️ Modal dispatch error (falling back to local pipeline): {modal_err}")
-                else:
-                    # Modal took over — we're done here.
-                    # active_upload will be cleared by the Modal container's finally block.
-                    return
+                # Falls through to the local fallback pipeline below
 
             try:
                 # ── LOCAL FALLBACK PIPELINE (used when MODAL_ENDPOINT is not set) ──────

@@ -4,8 +4,9 @@ modal_worker.py — NEURA AI Serverless Document Ingestion Worker
 Deployed on Modal.com (https://modal.com).
 
 Each document upload fires a POST to this web endpoint from main.py
-(fire-and-forget). Modal spins up ONE isolated container per document —
-no queues, no waiting — every student's upload runs simultaneously.
+(awaiting up to 120s from BackgroundTask). Modal spins up ONE isolated
+container per document — no queues, no waiting — every student's upload
+runs simultaneously.
 
 Deploy (once):
     pip install modal
@@ -65,7 +66,7 @@ neura_secrets = modal.Secret.from_name("neura-secrets")
 @modal.fastapi_endpoint(method="POST", label="neura-ingest")
 async def ingest(request: dict) -> dict:
     """
-    Called by main.py (Render) as fire-and-forget when a WhatsApp document arrives.
+    Called by main.py (Render) when a WhatsApp document arrives.
 
     Expected JSON body:
         {
@@ -111,7 +112,7 @@ async def ingest(request: dict) -> dict:
     # ── Initialise clients (one per container, warm for this call) ────────────
     qdrant_cl = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
     mongo_cl  = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
-    users_col = mongo_cl["neura_db"]["users"] if mongo_cl else None
+    users_col = mongo_cl["neura_db"]["users"] if mongo_cl is not None else None
     embedder  = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", threads=2)
     emb_pool  = ThreadPoolExecutor(max_workers=2)
     loop      = asyncio.get_event_loop()
@@ -178,47 +179,72 @@ async def ingest(request: dict) -> dict:
 
     # ── AI Medical Gatekeeper ─────────────────────────────────────────────────
     async def is_medical_doc(sample: str, fname: str) -> dict:
-        dtitle = re.sub(r"[_\-]+", " ", os.path.splitext(fname)[0]).title()[:50]
+        dtitle = os.path.splitext(fname)[0].replace("_", " ").replace("-", " ").title()
+        if len(dtitle) > 50:
+            dtitle = dtitle[:47] + "..."
         if len(sample.strip()) < 30:
             return {"is_medical": False, "category": "Unclassified", "title": dtitle, "rejection_reason": "Insufficient text."}
 
         prompt = (
-            "You are a strict academic gatekeeper for NEURA AI (MBBS medical school study assistant).\n"
-            f"File: {fname}\nSample:\n\"\"\"{sample[:2000]}\"\"\"\n\n"
-            "Is this genuine medical/clinical/biomedical/pharmacological/anatomical/health-sciences study material?\n"
-            "REJECT: receipts, CVs, admin forms, non-medical coursework, personal letters, spam.\n"
-            'Output ONLY valid JSON (no markdown): {"is_medical":true,"category":"...","title":"...","rejection_reason":""}'
+            "You are a strict academic gatekeeper for NEURA AI, an MBBS medical school study assistant.\n"
+            f"File Name: {fname}\n"
+            "Document Sample Text:\n"
+            f"\"\"\"{sample[:2000]}\"\"\"\n\n"
+            "Evaluate whether this document is genuine MEDICAL, CLINICAL, BIOMEDICAL, PHARMACEUTICAL, ANATOMICAL, or HEALTH SCIENCES study material (e.g. medical textbooks, lecture slides, clinical guidelines, hospital case notes, pathology slides, pharmacology handouts, journal articles, exam prep questions).\n\n"
+            "REJECT non-medical files, including:\n"
+            "- Receipts, invoices, bank statements, transaction slips, payment receipts\n"
+            "- CVs, resumes, job applications, cover letters\n"
+            "- Administrative documents (admission letters, fee slips, course registration forms, general timetables)\n"
+            "- Non-medical coursework (law, computer science, business, pure literature, non-medical math)\n"
+            "- Personal letters, stories, jokes, memes, spam\n\n"
+            "Output ONLY a valid JSON object in this exact schema (no markdown, no code blocks):\n"
+            "{\n"
+            '  "is_medical": true,\n'
+            '  "category": "Cardiology / Renal Physiology / Pathology / Pharmacology / Anatomy / etc.",\n'
+            '  "title": "Concise, descriptive title for this document (max 50 characters)",\n'
+            '  "rejection_reason": ""\n'
+            "}\n"
+            "If is_medical is false, provide a polite, concise rejection_reason (e.g., 'This file appears to be a financial receipt or payment invoice rather than medical study notes.')."
         )
         res = ""
-        # Primary: OpenRouter
+        # Primary: OpenRouter multi-candidate array [google/gemini-2.5-flash-lite, openai/gpt-4o-mini]
         if OPENROUTER_KEY:
-            try:
-                async with httpx.AsyncClient(timeout=25.0) as c:
-                    r = await c.post("https://openrouter.ai/api/v1/chat/completions",
-                        headers={"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"},
-                        json={"model": "google/gemini-2.5-flash-lite",
-                              "messages": [{"role": "system", "content": "Output ONLY JSON."},
-                                           {"role": "user", "content": prompt}],
-                              "temperature": 0.0, "max_tokens": 250})
-                    if r.status_code == 200:
-                        res = r.json()["choices"][0]["message"]["content"]
-            except Exception as e:
-                print(f"[GK openrouter] {e}")
+            for model_id in ["google/gemini-2.5-flash-lite", "openai/gpt-4o-mini"]:
+                try:
+                    async with httpx.AsyncClient(timeout=25.0) as c:
+                        r = await c.post("https://openrouter.ai/api/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"},
+                            json={"model": model_id,
+                                  "messages": [{"role": "system", "content": "You are an academic gatekeeper. Output ONLY JSON."},
+                                               {"role": "user", "content": prompt}],
+                                  "temperature": 0.0, "max_tokens": 250})
+                        if r.status_code == 200:
+                            data = r.json()
+                            res = data["choices"][0]["message"]["content"]
+                            if res:
+                                break
+                except Exception as e:
+                    print(f"[GK openrouter {model_id}] {e}")
 
-        # Fallback: Groq
+        # Fallback: Groq (active candidates: groq/compound-mini, llama-3.3-70b-versatile, qwen/qwen3.6-27b)
         if not res and GROQ_KEY:
-            try:
-                async with httpx.AsyncClient(timeout=20.0) as c:
-                    r = await c.post("https://api.groq.com/openai/v1/chat/completions",
-                        headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-                        json={"model": "llama-3.1-8b-instant",
-                              "messages": [{"role": "system", "content": "Output ONLY JSON."},
-                                           {"role": "user", "content": prompt}],
-                              "temperature": 0.0, "max_tokens": 250})
-                    if r.status_code == 200:
-                        res = r.json()["choices"][0]["message"]["content"]
-            except Exception as e:
-                print(f"[GK groq] {e}")
+            for groq_cand in ["groq/compound-mini", "llama-3.3-70b-versatile", "qwen/qwen3.6-27b"]:
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as c:
+                        r = await c.post("https://api.groq.com/openai/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+                            json={"model": groq_cand,
+                                  "messages": [{"role": "user", "content": prompt}],
+                                  "temperature": 0.0, "max_tokens": 250})
+                        if r.status_code == 200:
+                            data = r.json()
+                            content = data["choices"][0]["message"]["content"].strip()
+                            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                            if content:
+                                res = content
+                                break
+                except Exception as e:
+                    print(f"[GK groq {groq_cand}] {e}")
 
         # Parse JSON
         if res:
@@ -237,26 +263,60 @@ async def ingest(request: dict) -> dict:
             except Exception as pe:
                 print(f"[GK parse] {pe}")
 
-        # Offline heuristic fallback
-        STEMS = ["pharm","pathol","physiol","anatom","clini","diagnos","therap","syndrom",
-                 "diseas","symptom","patient","hyperten","diabet","arter","vein","nerv",
-                 "muscl","infect","bacter","viru","inhibit","receptor","enzym","tissu",
-                 "cardio","renal","nephr","pulmon","hepat","gastr","cerebr","vascul"]
-        if sum(1 for st in STEMS if st in sample.lower()) >= 2:
+        # Full 57-stem offline heuristic fallback matching main.py
+        MEDICAL_STEMS = [
+            "pharm", "pathol", "physiol", "anatom", "clini", "diagnos", "therap", "syndrom",
+            "diseas", "symptom", "patient", "hyperten", "diabet", "arter", "vein", "nerv",
+            "muscl", "infect", "bacter", "viru", "inhibit", "receptor", "enzym", "protein",
+            "tissu", "cardio", "renal", "nephr", "pulmon", "hepat", "gastr", "cerebr", "vascul",
+            "lesion", "carcin", "biops", "histol", "etiol", "antibiot", "neoplasm", "inflamm",
+            "immun", "antibod", "antigen", "hormon", "endocrin", "metabol", "hematol", "haematol",
+            "leukocyt", "erythrocyt", "platelet", "hemoglobin", "haemoglobin", "surger", "pediatr",
+            "obstetr", "gynecol", "anesthes", "toxicol", "tubul", "glomerul", "microbiol"
+        ]
+        sample_lower = sample.lower()
+        if sum(1 for st in MEDICAL_STEMS if st in sample_lower) >= 2:
             return {"is_medical": True, "category": "Medical Study Material", "title": dtitle, "rejection_reason": ""}
         return {"is_medical": False, "category": "Unverified", "title": dtitle,
-                "rejection_reason": "Could not verify authentic medical or health-sciences content."}
+                "rejection_reason": "Could not verify authentic medical, clinical, or health-sciences study content in this document."}
 
-    # ── Text chunking ─────────────────────────────────────────────────────────
-    def chunk_text(text: str, chunk_size: int = 850, overlap: int = 150) -> list:
-        words = text.split()
-        chunks, i = [], 0
-        while i < len(words):
-            end = min(i + chunk_size, len(words))
-            chunks.append(" ".join(words[i:end]))
-            if end == len(words):
+    # ── Character-based text chunking with delimiter boundary detection ────────
+    def chunk_text_with_overlap(text: str, chunk_size: int = 850, overlap: int = 150) -> list:
+        """Splits text into overlapping chunks (character-based), respecting sentence/paragraph boundaries."""
+        if not text or not text.strip():
+            return []
+        clean_text = re.sub(r'[ \t]+', ' ', text).strip()
+        if len(clean_text) <= chunk_size:
+            return [clean_text]
+        
+        chunks = []
+        start = 0
+        text_len = len(clean_text)
+        
+        while start < text_len:
+            end = start + chunk_size
+            if end >= text_len:
+                chunks.append(clean_text[start:].strip())
                 break
-            i += chunk_size - overlap
+            
+            # Try to break at a newline or period within the overlap window
+            split_idx = -1
+            sub = clean_text[start:end]
+            for delim in ["\n\n", "\n", ". ", "; ", ", "]:
+                last_pos = sub.rfind(delim, chunk_size - overlap)
+                if last_pos != -1:
+                    split_idx = start + last_pos + len(delim)
+                    break
+            
+            if split_idx == -1:
+                split_idx = end
+                
+            chunk_str = clean_text[start:split_idx].strip()
+            if len(chunk_str) > 30:
+                chunks.append(chunk_str)
+                
+            start = max(split_idx - overlap, start + 1)
+            
         return chunks
 
     # ── FastEmbed + Qdrant upsert ─────────────────────────────────────────────
@@ -274,7 +334,7 @@ async def ingest(request: dict) -> dict:
             )
             for si, (item, emb) in enumerate(zip(sl, embs)):
                 ci  = start_idx + bs + si
-                ch  = hashlib.sha256(item["text"].encode()).hexdigest()[:12]
+                ch  = hashlib.sha256(item["text"].encode("utf-8")).hexdigest()[:12]
                 pid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{phone}_{cfn}_{ci}_{ch}"))
                 points.append(qm.PointStruct(
                     id=pid, vector=emb.tolist(),
@@ -311,118 +371,296 @@ async def ingest(request: dict) -> dict:
         except Exception as e:
             print(f"[MONGO clear] {e}")
 
-    # ── Multi-format text extractors ──────────────────────────────────────────
+    # ── Multi-format text extractors matching main.py ─────────────────────────
     def extract_pdf(raw: bytes, fname: str):
+        if not raw or len(raw) < 100:
+            return False, "EMPTY_FILE", [], {"error": "Uploaded file is empty or corrupted."}
+        
+        # Method 1: PyMuPDF (fitz)
         try:
             import fitz
             doc = fitz.open(stream=raw, filetype="pdf")
             if doc.is_encrypted:
-                return False, "ENCRYPTED", [], {}
-            pages, empty = [], 0
-            for i, pg in enumerate(doc):
-                t = pg.get_text("text").strip()
-                if len(t.split()) < 5:
-                    empty += 1
-                pages.append((i + 1, t))
-            tot = len(pages)
-            if tot == 0:
-                return False, "EMPTY_DOCUMENT", [], {}
-            if tot > 200:
-                return False, "TOO_MANY_PAGES", [], {"page_count": tot}
-            tw = sum(len(t.split()) for _, t in pages)
-            er = empty / tot
-            if tw < 15 or er > 0.85:
-                return False, "SCANNED_IMAGE", [], {"empty_pages": empty, "page_count": tot, "empty_pct": round(er * 100, 1)}
-            return True, "OK", pages, {"page_count": tot, "total_words": tw, "empty_pages": empty, "empty_pct": round(er * 100, 1), "doc_type": "pdf"}
-        except Exception as e:
-            return False, "CORRUPTED", [], {"error": str(e)}
+                doc.close()
+                return False, "ENCRYPTED", [], {"error": "PDF is password protected."}
+            page_count = len(doc)
+            if page_count == 0:
+                doc.close()
+                return False, "EMPTY_PAGES", [], {"error": "PDF contains 0 pages."}
+            if page_count > 200:
+                doc.close()
+                return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 200).", "page_count": page_count}
+
+            pages_data = []
+            total_words = 0
+            empty_pages = 0
+            for idx in range(page_count):
+                txt = doc[idx].get_text("text").strip()
+                words = len(txt.split()) if txt else 0
+                total_words += words
+                if words >= 6:
+                    pages_data.append((idx + 1, txt))
+                else:
+                    empty_pages += 1
+            doc.close()
+
+            empty_ratio = empty_pages / page_count
+            avg_words = total_words / max(page_count, 1)
+
+            # Hardened 35% empty-page ratio check matching main.py
+            if page_count == 1 and total_words < 15:
+                return False, "SCANNED_IMAGE", [], {
+                    "error": "Single-page document contains insufficient readable text.",
+                    "total_words": total_words, "page_count": 1, "empty_pages": 1, "empty_pct": 100.0
+                }
+            if page_count >= 2 and (empty_ratio > 0.35 or avg_words < 12.0):
+                return False, "SCANNED_IMAGE", [], {
+                    "error": f"Scanned or image-only document ({empty_pages}/{page_count} pages have no extractable text).",
+                    "total_words": total_words, "page_count": page_count, "empty_pages": empty_pages, "empty_pct": round(empty_ratio * 100, 1)
+                }
+
+            return True, "OK", pages_data, {"page_count": page_count, "total_words": total_words, "empty_pages": empty_pages, "empty_pct": round(empty_ratio * 100, 1), "doc_type": "pdf"}
+        except Exception as fitz_err:
+            print(f"⚠️ PyMuPDF extraction failed for {fname}, attempting pypdf fallback: {fitz_err}")
+
+        # Method 2: pypdf fallback
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(io.BytesIO(raw))
+            if reader.is_encrypted:
+                return False, "ENCRYPTED", [], {"error": "PDF is password protected."}
+            page_count = len(reader.pages)
+            if page_count == 0:
+                return False, "EMPTY_PAGES", [], {"error": "PDF contains 0 pages."}
+            if page_count > 200:
+                return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 200).", "page_count": page_count}
+
+            pages_data = []
+            total_words = 0
+            empty_pages = 0
+            for idx, p in enumerate(reader.pages):
+                txt = (p.extract_text() or "").strip()
+                words = len(txt.split()) if txt else 0
+                total_words += words
+                if words >= 6:
+                    pages_data.append((idx + 1, txt))
+                else:
+                    empty_pages += 1
+
+            empty_ratio = empty_pages / page_count
+            avg_words = total_words / max(page_count, 1)
+
+            if page_count == 1 and total_words < 15:
+                return False, "SCANNED_IMAGE", [], {
+                    "error": "Single-page document contains insufficient readable text.",
+                    "total_words": total_words, "page_count": 1, "empty_pages": 1, "empty_pct": 100.0
+                }
+            if page_count >= 2 and (empty_ratio > 0.35 or avg_words < 12.0):
+                return False, "SCANNED_IMAGE", [], {
+                    "error": f"Scanned or image-only document ({empty_pages}/{page_count} pages have no extractable text).",
+                    "total_words": total_words, "page_count": page_count, "empty_pages": empty_pages, "empty_pct": round(empty_ratio * 100, 1)
+                }
+
+            return True, "OK", pages_data, {"page_count": page_count, "total_words": total_words, "empty_pages": empty_pages, "empty_pct": round(empty_ratio * 100, 1), "doc_type": "pdf"}
+        except Exception as pypdf_err:
+            print(f"❌ pypdf fallback failed for {fname}: {pypdf_err}")
+
+        return False, "CORRUPTED", [], {"error": "Unable to extract text from this PDF."}
 
     def extract_pptx(raw: bytes, fname: str):
         import zipfile, xml.etree.ElementTree as ET
+        pages_data = []
+        total_words = 0
+        empty_pages = 0
+
+        # Method 1: python-pptx (with speaker notes & tables)
         try:
-            with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-                sfs = sorted(
-                    [f for f in zf.namelist() if f.startswith("ppt/slides/slide") and f.endswith(".xml")],
-                    key=lambda x: int(re.search(r"\d+", x.split("/")[-1]).group())
-                )
-                pages, empty, tw = [], 0, 0
-                for si, sf in enumerate(sfs, 1):
-                    root = ET.fromstring(zf.read(sf))
-                    texts = [e.text for e in root.iter() if e.text and e.tag.endswith("}t")]
-                    txt = " ".join(" ".join(texts).split())
-                    wc = len(txt.split())
-                    tw += wc
-                    if wc < 6:
-                        empty += 1
-                    pages.append((si, txt))
-            tot = len(pages)
-            if tot == 0:
-                return False, "EMPTY_DOCUMENT", [], {}
-            er = empty / tot
-            if tw == 0 or er > 0.45 or (tot > 3 and tw / tot < 8.0):
-                return False, "SCANNED_IMAGE", [], {"empty_pages": empty, "page_count": tot, "empty_pct": round(er * 100, 1)}
-            return True, "OK", pages, {"page_count": tot, "total_words": tw, "doc_type": "presentation"}
-        except Exception as e:
-            return False, "CORRUPTED", [], {"error": str(e)}
+            import pptx
+            prs = pptx.Presentation(io.BytesIO(raw))
+            slide_count = len(prs.slides)
+            if slide_count == 0:
+                return False, "EMPTY_DOCUMENT", [], {"error": "Presentation contains 0 slides."}
+            if slide_count > 200:
+                return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 200).", "page_count": slide_count}
+
+            for s_idx, slide in enumerate(prs.slides, 1):
+                slide_texts = []
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        for paragraph in shape.text_frame.paragraphs:
+                            p_text = "".join(run.text for run in paragraph.runs if run.text).strip()
+                            if p_text:
+                                slide_texts.append(p_text)
+                    elif shape.has_table:
+                        for row in shape.table.rows:
+                            row_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                            if row_cells:
+                                slide_texts.append(" | ".join(row_cells))
+
+                if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                    notes_txt = slide.notes_slide.notes_text_frame.text.strip()
+                    if notes_txt:
+                        slide_texts.append(f"[Speaker Notes: {notes_txt}]")
+
+                combined_text = "\n".join(slide_texts).strip()
+                word_count = len(combined_text.split())
+                total_words += word_count
+                if word_count < 6:
+                    empty_pages += 1
+                pages_data.append((s_idx, combined_text))
+        except Exception as pptx_err:
+            print(f"⚠️ python-pptx parser error on {fname} ({pptx_err}), attempting XML fallback...")
+            pages_data = []
+
+        # Method 2: Pure-Python zipfile + XML fallback
+        if not pages_data:
+            try:
+                with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                    slide_files = [f for f in zf.namelist() if f.startswith("ppt/slides/slide") and f.endswith(".xml")]
+                    if not slide_files:
+                        return False, "EMPTY_DOCUMENT", [], {"error": "No slide XMLs found in PPTX archive."}
+                    slide_files.sort(key=lambda x: int(re.search(r'\d+', os.path.basename(x)).group()) if re.search(r'\d+', os.path.basename(x)) else 0)
+                    slide_count = len(slide_files)
+                    if slide_count > 200:
+                        return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 200).", "page_count": slide_count}
+
+                    total_words = 0
+                    empty_pages = 0
+                    for s_idx, sfile in enumerate(slide_files, 1):
+                        root = ET.fromstring(zf.read(sfile))
+                        texts = [elem.text for elem in root.iter() if elem.text and elem.tag.endswith('}t')]
+                        combined_text = " ".join(" ".join(texts).split())
+                        word_count = len(combined_text.split())
+                        total_words += word_count
+                        if word_count < 6:
+                            empty_pages += 1
+                        pages_data.append((s_idx, combined_text))
+            except Exception as e:
+                return False, "CORRUPTED", [], {"error": str(e)}
+
+        slide_count = len(pages_data)
+        empty_ratio = (empty_pages / slide_count) if slide_count > 0 else 1.0
+        avg_words = (total_words / slide_count) if slide_count > 0 else 0.0
+
+        stats = {
+            "page_count": slide_count, "total_words": total_words, "empty_pages": empty_pages,
+            "empty_pct": round(empty_ratio * 100, 1), "doc_type": "presentation"
+        }
+        if total_words == 0 or empty_ratio > 0.45 or (slide_count > 3 and avg_words < 8.0):
+            stats["error"] = f"Image-only slides ({empty_pages}/{slide_count} slides have no selectable text)."
+            return False, "SCANNED_IMAGE", [], stats
+
+        return True, "OK", pages_data, stats
 
     def extract_docx(raw: bytes, fname: str):
         import zipfile, xml.etree.ElementTree as ET
-        paras = []
+        pages_data = []
+        total_words = 0
+
+        # Method 1: python-docx
         try:
-            import docx as _docx
-            doc = _docx.Document(io.BytesIO(raw))
-            paras = [
-                (p.text.strip(), p.style.name.startswith("Heading") if p.style else False)
-                for p in doc.paragraphs if p.text.strip()
-            ]
+            import docx
+            doc = docx.Document(io.BytesIO(raw))
+            current_page = 1
+            current_page_text = []
+            current_word_count = 0
+
+            units = []
+            for p in doc.paragraphs:
+                txt = p.text.strip()
+                if txt:
+                    is_heading = p.style.name.startswith("Heading") if p.style else False
+                    units.append((txt, is_heading, "paragraph"))
+
             for table in doc.tables:
                 for row in table.rows:
-                    rt = " | ".join(c.text.strip() for c in row.cells if c.text.strip())
-                    if rt:
-                        paras.append((rt, False))
-        except Exception:
+                    row_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if row_cells:
+                        units.append((" | ".join(row_cells), False, "table"))
+
+            if not units:
+                return False, "EMPTY_DOCUMENT", [], {"error": "Word document has no readable text."}
+
+            for txt, is_heading, u_type in units:
+                w_count = len(txt.split())
+                if (current_word_count > 450) or (is_heading and current_word_count > 150):
+                    if current_page_text:
+                        pages_data.append((current_page, "\n\n".join(current_page_text).strip()))
+                        total_words += current_word_count
+                        current_page += 1
+                        current_page_text = []
+                        current_word_count = 0
+                current_page_text.append(txt)
+                current_word_count += w_count
+
+            if current_page_text:
+                pages_data.append((current_page, "\n\n".join(current_page_text).strip()))
+                total_words += current_word_count
+        except Exception as docx_err:
+            print(f"⚠️ python-docx parser error on {fname} ({docx_err}), attempting XML fallback...")
+            pages_data = []
+
+        # Method 2: Pure-Python zipfile + XML fallback
+        if not pages_data:
             try:
                 with zipfile.ZipFile(io.BytesIO(raw)) as zf:
                     if "word/document.xml" not in zf.namelist():
-                        return False, "EMPTY_DOCUMENT", [], {}
+                        return False, "EMPTY_DOCUMENT", [], {"error": "word/document.xml missing in docx archive."}
                     root = ET.fromstring(zf.read("word/document.xml"))
+                    paragraphs = []
                     for pe in root.iter():
                         if pe.tag.endswith("}p"):
                             ts = [e.text for e in pe.iter() if e.text and e.tag.endswith("}t")]
                             if ts:
-                                paras.append(("".join(ts).strip(), False))
+                                p_text = "".join(ts).strip()
+                                if p_text:
+                                    paragraphs.append(p_text)
+                    if not paragraphs:
+                        return False, "EMPTY_DOCUMENT", [], {"error": "No readable text found in Word document."}
+
+                    current_page = 1
+                    current_page_text = []
+                    current_word_count = 0
+                    total_words = 0
+                    for p_text in paragraphs:
+                        w_count = len(p_text.split())
+                        if current_word_count > 450:
+                            pages_data.append((current_page, "\n\n".join(current_page_text).strip()))
+                            total_words += current_word_count
+                            current_page += 1
+                            current_page_text = []
+                            current_word_count = 0
+                        current_page_text.append(p_text)
+                        current_word_count += w_count
+
+                    if current_page_text:
+                        pages_data.append((current_page, "\n\n".join(current_page_text).strip()))
+                        total_words += current_word_count
             except Exception as e:
                 return False, "CORRUPTED", [], {"error": str(e)}
-        if not paras:
-            return False, "EMPTY_DOCUMENT", [], {}
-        pgs, cp, cw, ct, tw = [], 1, 0, [], 0
-        for txt, ih in paras:
-            wc = len(txt.split())
-            if cw > 450 or (ih and cw > 150):
-                if ct:
-                    pgs.append((cp, "\n\n".join(ct).strip()))
-                    tw += cw; cp += 1; ct, cw = [], 0
-            ct.append(txt); cw += wc
-        if ct:
-            pgs.append((cp, "\n\n".join(ct).strip()))
-            tw += cw
-        if len(pgs) > 200:
-            return False, "TOO_MANY_PAGES", [], {"page_count": len(pgs)}
-        if tw < 15:
-            return False, "SCANNED_IMAGE", [], {}
-        return True, "OK", pgs, {"page_count": len(pgs), "total_words": tw, "doc_type": "word"}
+
+        page_count = len(pages_data)
+        stats = {
+            "page_count": page_count, "total_words": total_words, "empty_pages": 0,
+            "empty_pct": 0.0, "doc_type": "word"
+        }
+        if page_count > 200:
+            return False, "TOO_MANY_PAGES", [], {"error": f"Word document exceeds 200 virtual pages ({page_count} pages).", "page_count": page_count}
+        if total_words < 15:
+            return False, "SCANNED_IMAGE", [], {"error": "Document contains almost no readable text."}
+
+        return True, "OK", pages_data, stats
 
     def extract_document(raw: bytes, fname: str, mime: str):
         fn = fname.lower()
         if fn.endswith((".doc", ".ppt")) or mime in ("application/msword", "application/vnd.ms-powerpoint"):
-            if "ppt" in fn or "powerpoint" in mime:
+            if fn.endswith(".ppt") or mime == "application/vnd.ms-powerpoint":
                 r = extract_pptx(raw, fname)
-                if r[0]:
-                    return r
-            r = extract_docx(raw, fname)
-            if r[0]:
-                return r
-            return False, "LEGACY_BINARY", [], {"error": "Legacy 97-2003 format. Save as .docx/.pptx/.pdf."}
+                if r[0]: return r
+            if fn.endswith(".doc") or mime == "application/msword":
+                r = extract_docx(raw, fname)
+                if r[0]: return r
+            return False, "LEGACY_BINARY", [], {"error": "Legacy 97-2003 binary format. Please open in Word/PowerPoint and save as .docx or .pptx (or export to PDF)!"}
         if fn.endswith(".pptx") or "presentation" in mime:
             return extract_pptx(raw, fname)
         if fn.endswith(".docx") or "wordprocessing" in mime or "officedocument.word" in mime:
@@ -490,7 +728,7 @@ async def ingest(request: dict) -> dict:
                            f"(~{pct:.0f}%) with no selectable text.\n\nPlease export slides with digital text! 💡")
                 else:
                     msg = (f"📷 *Scanned Image Detected*\n\n*{filename}* appears to be a scanned PDF "
-                           f"({ep}/{tp} pages).\n\nPlease run OCR (Adobe Scan, CamScanner, Google Drive OCR) and re-upload! 💡🔍")
+                           f"({ep}/{tp} pages with no selectable text).\n\nPlease run OCR (Adobe Scan, CamScanner, Google Drive OCR) and re-upload! 💡🔍")
             else:
                 msg = (f"⚠️ *Unable to Read Document*\n\n"
                        f"I had trouble reading *{filename}*. It may be empty or corrupted.\n\n"
@@ -515,17 +753,17 @@ async def ingest(request: dict) -> dict:
                 "NEURA AI only indexes medical lecture slides, textbook chapters, and clinical handouts! 🩺📚")
             return {"ok": False, "error": "non_medical"}
 
-        title    = gk.get("title") or re.sub(r"[_\-]+", " ", os.path.splitext(filename)[0]).title()
+        title    = gk.get("title") or os.path.splitext(filename)[0].replace("_", " ").replace("-", " ").title()
         category = gk.get("category", "General Medicine")
 
         await wa_send(sender_phone,
             f"{icon} *Medical Document Verified: {title}*\n\n"
             f"Indexing {len(pages)} {unit} into your personal study vault... ⏳")
 
-        # Step 6: Chunk all pages
+        # Step 6: Chunk all pages using character-based chunking with boundary splitting
         chunks = []
         for pn, pt in pages:
-            for c in chunk_text(pt, chunk_size=850, overlap=150):
+            for c in chunk_text_with_overlap(pt, chunk_size=850, overlap=150):
                 if len(c.strip()) > 35:
                     chunks.append({"text": c.strip(), "page_number": pn})
 
@@ -548,11 +786,11 @@ async def ingest(request: dict) -> dict:
         except Exception as de:
             print(f"[QDRANT cleanup] {de}")
 
-        STAGE1    = 20
+        STAGE1_THRESHOLD = 20
         wat_today = datetime.now(timezone(timedelta(hours=1))).strftime("%Y-%m-%d")
-        n         = 0
+        n = 0
 
-        if len(chunks) <= STAGE1:
+        if len(chunks) <= STAGE1_THRESHOLD:
             # Single-stage (small documents — ≤20 chunks)
             n = await embed_upsert(chunks, 0, sender_phone, filename, title, category)
             if users_col is not None:
@@ -572,9 +810,9 @@ async def ingest(request: dict) -> dict:
         else:
             # Progressive 2-stage ingestion (large documents)
             # Stage 1: first 20 chunks → searchable immediately
-            s1     = chunks[:STAGE1]
-            n1     = await embed_upsert(s1, 0, sender_phone, filename, title, category)
-            mx     = max(c["page_number"] for c in s1)
+            stage1_chunks = chunks[:STAGE1_THRESHOLD]
+            n1 = await embed_upsert(stage1_chunks, 0, sender_phone, filename, title, category)
+            mx = max(c["page_number"] for c in stage1_chunks)
             if users_col is not None:
                 try:
                     rec = {"filename": filename, "title": title, "category": category,
@@ -598,7 +836,7 @@ async def ingest(request: dict) -> dict:
                 pass
 
             # Stage 2: remaining chunks
-            n = n1 + await embed_upsert(chunks[STAGE1:], STAGE1, sender_phone, filename, title, category)
+            n = n1 + await embed_upsert(chunks[STAGE1_THRESHOLD:], STAGE1_THRESHOLD, sender_phone, filename, title, category)
             if users_col is not None:
                 try:
                     await users_col.update_one(
