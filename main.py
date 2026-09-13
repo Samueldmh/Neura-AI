@@ -140,9 +140,14 @@ def get_user_doc_lock(user_id: str) -> asyncio.Lock:
         _user_doc_locks[user_id] = asyncio.Lock()
     return _user_doc_locks[user_id]
 
-# Global Document Ingestion Semaphore: Bounds active concurrent heavy document operations
-# (Meta CDN download, PyMuPDF parsing, and vector ingestion) to max 3 concurrent tasks to prevent OOM
-DOC_INGESTION_SEMAPHORE = asyncio.Semaphore(3)
+# Document Ingestion Dual-Lane Architecture:
+# Prevents large textbooks (>30 pages) from monopolizing workers and blocking quick lecture slides (<=30 pages).
+# Concurrency Budget: 2 small + 1 large = 3 concurrent heavy vector/Qdrant operations (Render RAM safe).
+SIZE_THRESHOLD_PAGES = 30
+SMALL_DOC_SEMAPHORE = asyncio.Semaphore(2)       # Express lane: up to 2 concurrent quick slide decks / handouts (<=30 pages)
+LARGE_DOC_SEMAPHORE = asyncio.Semaphore(1)       # Heavy lane: 1 large document / textbook chapter (>30 pages)
+MEDIA_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)  # Fast download & extraction guard (prevents RAM spikes)
+DOC_INGESTION_SEMAPHORE = SMALL_DOC_SEMAPHORE    # Backward compatibility alias
 
 # Lightweight in-memory query vector cache (<1MB RAM for 500 common curriculum topics)
 QUERY_VECTOR_CACHE = OrderedDict()
@@ -2919,21 +2924,12 @@ async def process_whatsapp_document(
             await send_whatsapp_cloud_msg(sender_phone, queue_ack_msg)
 
             try:
-                # Global Concurrency Limiter: Bounds active concurrent downloads, parsing, and vector ingestion to max 3
-                print(f"⏳ [DOCUMENT QUEUE] User {sender_phone} waiting for document ingestion slot for '{filename}'...")
-                async with DOC_INGESTION_SEMAPHORE:
-                    print(f"🚀 [DOCUMENT INGESTION SLOT ACQUIRED] Processing '{filename}' for {sender_phone}...")
-                    if users_col is not None:
-                        try:
-                            await users_col.update_one(
-                                {"user_id": sender_phone},
-                                {"$set": {"active_upload.status": "processing"}}
-                            )
-                        except Exception:
-                            pass
-
-                    doc_bytes = None
-                    try:
+                # Step 1: Guarded Download & Extraction (prevents memory spikes during raw bytes handling)
+                doc_bytes = None
+                try:
+                    print(f"⏳ [DOCUMENT DOWNLOAD QUEUE] User {sender_phone} acquiring download slot for '{filename}'...")
+                    async with MEDIA_DOWNLOAD_SEMAPHORE:
+                        print(f"🚀 [DOCUMENT DOWNLOADING] Fetching '{filename}' from Meta CDN for {sender_phone}...")
                         # Download from Meta CDN with 35s timeout
                         doc_bytes, detected_mime = await download_whatsapp_media(media_id, timeout=35.0)
                         if not doc_bytes:
@@ -2971,58 +2967,84 @@ async def process_whatsapp_document(
                             filename,
                             mime_type
                         )
-                    finally:
-                        if doc_bytes is not None:
-                            del doc_bytes
-                        gc.collect()
+                finally:
+                    if doc_bytes is not None:
+                        del doc_bytes
+                    gc.collect()
 
-                    if not is_valid:
-                        if err_code == "LEGACY_BINARY":
+                if not is_valid:
+                    if err_code == "LEGACY_BINARY":
+                        msg = (
+                            "💾 *Legacy Office Format Detected*\n\n"
+                            f"*{filename}* appears to be in an older 97–2003 binary format (`.doc` or `.ppt`).\n\n"
+                            "Please open it and save/export as modern *.docx*, *.pptx*, or *.pdf* so I can index all clinical terms, tables, and notes into your study vault! 🩺📚"
+                        )
+                    elif err_code == "ENCRYPTED":
+                        msg = (
+                            "🔒 *Password-Protected Document*\n\n"
+                            f"*{filename}* is encrypted with a password.\n\n"
+                            "Please remove the password protection and re-upload so I can index it into your study vault! 🔑"
+                        )
+                    elif err_code == "TOO_MANY_PAGES":
+                        msg = (
+                            f"📑 *Document Too Large*\n\n"
+                            f"*{filename}* has *{stats.get('page_count')} {unit_label}*. Personal study uploads are currently limited to *200 {unit_label}* per file.\n\n"
+                            "💡 *Tip:* Upload individual lecture modules or chapters for optimal results!"
+                        )
+                    elif err_code == "SCANNED_IMAGE":
+                        empty_p = stats.get("empty_pages", 0)
+                        tot_p = stats.get("page_count", 0)
+                        pct = stats.get("empty_pct", 0)
+                        if is_presentation:
                             msg = (
-                                "💾 *Legacy Office Format Detected*\n\n"
-                                f"*{filename}* appears to be in an older 97–2003 binary format (`.doc` or `.ppt`).\n\n"
-                                "Please open it and save/export as modern *.docx*, *.pptx*, or *.pdf* so I can index all clinical terms, tables, and notes into your study vault! 🩺📚"
+                                "📷 *Image-Only Slides Detected*\n\n"
+                                f"*{filename}* contains image photos with no selectable digital text "
+                                f"({empty_p} of {tot_p} slides, ~{pct:.0f}%, have no readable text).\n\n"
+                                "Neura AI searches and quizzes you directly on selectable digital text. "
+                                "Please export slides with selectable digital text or notes! 💡🔍"
                             )
-                        elif err_code == "ENCRYPTED":
-                            msg = (
-                                "🔒 *Password-Protected Document*\n\n"
-                                f"*{filename}* is encrypted with a password.\n\n"
-                                "Please remove the password protection and re-upload so I can index it into your study vault! 🔑"
-                            )
-                        elif err_code == "TOO_MANY_PAGES":
-                            msg = (
-                                f"📑 *Document Too Large*\n\n"
-                                f"*{filename}* has *{stats.get('page_count')} {unit_label}*. Personal study uploads are currently limited to *200 {unit_label}* per file.\n\n"
-                                f"💡 *Tip:* Upload individual lecture modules or chapters for optimal results!"
-                            )
-                        elif err_code == "SCANNED_IMAGE":
-                            empty_p = stats.get("empty_pages", 0)
-                            tot_p = stats.get("page_count", 0)
-                            pct = stats.get("empty_pct", 0)
-                            if is_presentation:
-                                msg = (
-                                    "📷 *Image-Only Slides Detected*\n\n"
-                                    f"*{filename}* contains image photos with no selectable digital text "
-                                    f"({empty_p} of {tot_p} slides, ~{pct:.0f}%, have no readable text).\n\n"
-                                    "Neura AI searches and quizzes you directly on selectable digital text. "
-                                    "Please export slides with selectable digital text or notes! 💡🔍"
-                                )
-                            else:
-                                msg = (
-                                    "📷 *Scanned Image / Non-Text Document Detected*\n\n"
-                                    f"*{filename}* contains scanned images with no readable digital text "
-                                    f"({empty_p} of {tot_p} pages, ~{pct:.0f}%, are image-only photos/scans).\n\n"
-                                    "Neura AI searches and quizzes you directly on selectable digital text. "
-                                    "Please run an OCR tool (e.g. Adobe Scan, CamScanner OCR, or Google Drive OCR) or export slides with selectable digital text! 💡🔍"
-                                )
                         else:
                             msg = (
-                                "⚠️ *Unable to Read Document*\n\n"
-                                f"I encountered an issue reading *{filename}*. The file may be empty or corrupted.\n\n"
-                                "Please check the file and try uploading again!"
+                                "📷 *Scanned Image / Non-Text Document Detected*\n\n"
+                                f"*{filename}* contains scanned images with no readable digital text "
+                                f"({empty_p} of {tot_p} pages, ~{pct:.0f}%, are image-only photos/scans).\n\n"
+                                "Neura AI searches and quizzes you directly on selectable digital text. "
+                                "Please run an OCR tool (e.g. Adobe Scan, CamScanner OCR, or Google Drive OCR) or export slides with selectable digital text! 💡🔍"
                             )
-                        await send_whatsapp_cloud_msg(sender_phone, msg)
-                        return
+                    else:
+                        msg = (
+                            "⚠️ *Unable to Read Document*\n\n"
+                            f"I encountered an issue reading *{filename}*. The file may be empty or corrupted.\n\n"
+                            "Please check the file and try uploading again!"
+                        )
+                    await send_whatsapp_cloud_msg(sender_phone, msg)
+                    return
+
+                # Step 2: Dual-Lane Semaphore Routing
+                # - Express Lane (<=30 pages): max 2 concurrent workers (slides, handouts)
+                # - Heavy Lane (>30 pages): max 1 concurrent worker (textbooks, long chapters)
+                is_small_doc = len(pages_data) <= SIZE_THRESHOLD_PAGES
+                target_semaphore = SMALL_DOC_SEMAPHORE if is_small_doc else LARGE_DOC_SEMAPHORE
+                if is_small_doc and DOC_INGESTION_SEMAPHORE is not SMALL_DOC_SEMAPHORE:
+                    target_semaphore = DOC_INGESTION_SEMAPHORE
+                lane_name = f"Express Lane (<= {SIZE_THRESHOLD_PAGES} {unit_label})" if is_small_doc else f"Heavy Lane (> {SIZE_THRESHOLD_PAGES} {unit_label})"
+                lane_tag = "express" if is_small_doc else "heavy"
+
+                print(f"⏳ [DOCUMENT QUEUE - {lane_name}] User {sender_phone} waiting for slot for '{filename}' ({len(pages_data)} {unit_label})...")
+                async with target_semaphore:
+                    print(f"🚀 [DOCUMENT SLOT ACQUIRED - {lane_name}] Processing '{filename}' ({len(pages_data)} {unit_label}) for {sender_phone}...")
+                    if users_col is not None:
+                        try:
+                            await users_col.update_one(
+                                {"user_id": sender_phone},
+                                {"$set": {
+                                    "active_upload.status": "processing",
+                                    "active_upload.lane": lane_tag,
+                                    "active_upload.page_count": len(pages_data)
+                                }}
+                            )
+                        except Exception:
+                            pass
 
                     # Build sample text for Tier 2 Medical Gatekeeper
                     sample_snippets = []
