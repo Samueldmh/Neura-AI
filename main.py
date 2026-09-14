@@ -4385,7 +4385,15 @@ async def complete_onboarding(sender_phone: str):
     level = user_doc.get("level", "") if user_doc else ""
     preferred_books = user_doc.get("preferred_books_list", []) if user_doc else []
     
-    await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "COMPLETED"}})
+    await users_col.update_one(
+        {"user_id": sender_phone},
+        {"$set": {
+            "onboarding_step": "COMPLETED",
+            "is_onboarded": True,
+            "has_completed_onboarding": True,
+            "is_updating": False
+        }}
+    )
     
     if preferred_books:
         books_summary = "\n".join(f"• {b}" for b in preferred_books)
@@ -4433,6 +4441,14 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
     name = user_doc.get("name", "Student")
     level = user_doc.get("level", "")
     
+    # Determine if user is already an onboarded student (vs brand new user in initial onboarding)
+    is_existing_user = bool(
+        user_doc.get("is_onboarded") is True or
+        user_doc.get("has_completed_onboarding") is True or
+        user_doc.get("is_updating") is True or
+        int(user_doc.get("total_queries_count", 0)) > 0
+    )
+    
     if step == "COMPLETED":
         # Block users from reusing old menu selections or level buttons after completing setup
         all_book_options = [b for books in AVAILABLE_BOOKS.values() for b in books] + [
@@ -4463,27 +4479,58 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
     if step == "ASK_NAME":
         extracted_name = await extract_name_with_llm(user_msg)
         if not extracted_name:
-            await send_whatsapp_cloud_msg(sender_phone, "I didn't quite catch that, or it didn't look like a real name! Please type your real first name so I know what to call you. 😊")
-            return True
+            if is_existing_user:
+                # Existing student changed mind about updating name and asked a question or typed a command
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$set": {"onboarding_step": "COMPLETED", "is_updating": False}}
+                )
+                return False
+            else:
+                await send_whatsapp_cloud_msg(sender_phone, "I didn't quite catch that, or it didn't look like a real name! Please type your real first name so I know what to call you. 😊")
+                return True
             
-        await users_col.update_one({"user_id": sender_phone}, {"$set": {"name": extracted_name, "onboarding_step": "ASK_LEVEL"}})
-        await send_whatsapp_interactive_list(
-            sender_phone, 
-            f"Nice to meet you, {extracted_name}! What is your current medical class/level?",
-            "Select Level",
-            ["200L", "300L", "400L", "500L", "600L"]
-        )
-        return True
+        if is_existing_user:
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$set": {"name": extracted_name, "onboarding_step": "COMPLETED", "is_updating": False}}
+            )
+            await send_whatsapp_cloud_msg(sender_phone, f"✅ Updated your name to *{extracted_name}*!")
+            return True
+        else:
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$set": {"name": extracted_name, "onboarding_step": "ASK_LEVEL"}}
+            )
+            await send_whatsapp_interactive_list(
+                sender_phone, 
+                f"Nice to meet you, {extracted_name}! What is your current medical class/level?",
+                "Select Level",
+                ["200L", "300L", "400L", "500L", "600L"]
+            )
+            return True
         
     # 3. Extract Level
     if step == "ASK_LEVEL":
         if user_msg not in ["200L", "300L", "400L", "500L", "600L"]:
-            await send_whatsapp_cloud_msg(sender_phone, "Please use the menu button to select your level.")
-            return True
+            if is_existing_user:
+                # Student initiated an update but does not want to continue (e.g. asked a medical question or typed a command)
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$set": {"onboarding_step": "COMPLETED", "is_updating": False}}
+                )
+                return False # Let normal RAG or command execution process this message!
+            else:
+                # Brand new user in initial onboarding: MUST complete the flow!
+                await send_whatsapp_cloud_msg(sender_phone, "Please use the menu button to select your level.")
+                return True
             
         new_level = user_msg
         std_books = get_all_curriculum_books_for_level(new_level)
-        await users_col.update_one({"user_id": sender_phone}, {"$set": {"level": new_level, "preferred_books_list": std_books}})
+        await users_col.update_one(
+            {"user_id": sender_phone},
+            {"$set": {"level": new_level, "preferred_books_list": std_books}}
+        )
         
         # Start subject loop
         has_subjects = await send_next_subject_menu(sender_phone, new_level)
@@ -4534,11 +4581,20 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
                     break
                     
         if not matched_book:
-            await send_whatsapp_cloud_msg(
-                sender_phone, 
-                "Please use the menu button to select/toggle your textbook, or tap Finish."
-            )
-            return True
+            if is_existing_user:
+                # Student initiated an update but does not want to continue (e.g. asked a medical question)
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$set": {"onboarding_step": "COMPLETED", "is_updating": False}}
+                )
+                return False # Let normal RAG or command execution process this message!
+            else:
+                # Brand new user in initial onboarding: MUST complete the flow!
+                await send_whatsapp_cloud_msg(
+                    sender_phone, 
+                    "Please use the menu button to select/toggle your textbook, or tap Finish."
+                )
+                return True
             
         # Single-book subject: 1-tap select & auto-advance
         if len(all_subject_books) <= 1:
@@ -4893,8 +4949,17 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             "clear wallet", "help", "menu", "commands", "reminders on", "reminders off",
             "reminders", "reminder", "docs", "documents", "my docs", "my documents", "uploads", "my uploads",
             "profile", "my profile", "streak", "my streak", "deletedoc", "delete doc", "feedback",
+            "update books", "updatebooks", "update textbooks", "updatetextbooks", "books", "textbooks",
+            "update level", "updatelevel", "update name", "updatename",
             "?", "m", "cmd"
         ]):
+            # If user is in an update flow and triggers a non-update command, gracefully clear the update state
+            if user_doc and user_doc.get("is_updating") and not any(k in msg_lower for k in ["update", "level", "books", "textbooks", "name"]):
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$set": {"onboarding_step": "COMPLETED", "is_updating": False}}
+                )
+
             if msg_lower in ["/", "/help", "help", "menu", "commands", "/menu", "/commands", "/start", "?", "m", "cmd"]:
                 await send_commands_menu(sender_phone)
                 return
@@ -5158,11 +5223,43 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     )
                     return
                 elif msg_lower in ["/update name", "/updatename", "/update_name", "/name", "update name", "updatename"]:
-                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_NAME"}})
+                    is_onboarded_user = bool(
+                        user_doc and (
+                            user_doc.get("is_onboarded") is True or
+                            user_doc.get("has_completed_onboarding") is True or
+                            user_doc.get("onboarding_step") == "COMPLETED" or
+                            int(user_doc.get("total_queries_count", 0)) > 0
+                        )
+                    )
+                    if not is_onboarded_user and user_doc and user_doc.get("onboarding_step") != "COMPLETED":
+                        is_onboarding = await handle_onboarding(sender_phone, user_msg)
+                        if is_onboarding:
+                            return
+
+                    await users_col.update_one(
+                        {"user_id": sender_phone},
+                        {"$set": {"onboarding_step": "ASK_NAME", "is_updating": True, "is_onboarded": True, "has_completed_onboarding": True}}
+                    )
                     await send_whatsapp_cloud_msg(sender_phone, "What would you like to change your name to?")
                     return
-                elif msg_lower in ["/update level", "/updatelevel", "/update_level", "/level", "update level", "updatelevel"]:
-                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"onboarding_step": "ASK_LEVEL"}})
+                elif msg_lower in ["/update level", "/updatelevel", "/update_level", "/level", "update level", "updatelevel", "level"]:
+                    is_onboarded_user = bool(
+                        user_doc and (
+                            user_doc.get("is_onboarded") is True or
+                            user_doc.get("has_completed_onboarding") is True or
+                            user_doc.get("onboarding_step") == "COMPLETED" or
+                            int(user_doc.get("total_queries_count", 0)) > 0
+                        )
+                    )
+                    if not is_onboarded_user and user_doc and user_doc.get("onboarding_step") != "COMPLETED":
+                        is_onboarding = await handle_onboarding(sender_phone, user_msg)
+                        if is_onboarding:
+                            return
+
+                    await users_col.update_one(
+                        {"user_id": sender_phone},
+                        {"$set": {"onboarding_step": "ASK_LEVEL", "is_updating": True, "is_onboarded": True, "has_completed_onboarding": True}}
+                    )
                     await send_whatsapp_interactive_list(
                         sender_phone, 
                         "What is your new medical class/level?",
@@ -5170,8 +5267,35 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         ["200L", "300L", "400L", "500L", "600L"]
                     )
                     return
-                elif msg_lower in ["/update books", "/updatebooks", "/update_books", "/books", "/textbooks", "update books", "updatebooks", "books", "textbooks"]:
-                    has_subjects = await send_next_subject_menu(sender_phone, level)
+                elif msg_lower in [
+                    "/update books", "/updatebooks", "/update_books",
+                    "/update textbooks", "/updatetextbooks", "/update_textbooks",
+                    "/books", "/textbooks",
+                    "update books", "updatebooks", "update textbooks", "updatetextbooks",
+                    "books", "textbooks"
+                ]:
+                    is_onboarded_user = bool(
+                        user_doc and (
+                            user_doc.get("is_onboarded") is True or
+                            user_doc.get("has_completed_onboarding") is True or
+                            user_doc.get("onboarding_step") == "COMPLETED" or
+                            int(user_doc.get("total_queries_count", 0)) > 0
+                        )
+                    )
+                    if not is_onboarded_user and user_doc and user_doc.get("onboarding_step") != "COMPLETED":
+                        is_onboarding = await handle_onboarding(sender_phone, user_msg)
+                        if is_onboarding:
+                            return
+
+                    target_level = level if level in ["200L", "300L", "400L", "500L", "600L"] else (user_doc.get("level") if user_doc else "400L")
+                    if target_level not in ["200L", "300L", "400L", "500L", "600L"]:
+                        target_level = "400L"
+
+                    await users_col.update_one(
+                        {"user_id": sender_phone},
+                        {"$set": {"is_updating": True, "is_onboarded": True, "has_completed_onboarding": True}}
+                    )
+                    has_subjects = await send_next_subject_menu(sender_phone, target_level)
                     if not has_subjects:
                         await complete_onboarding(sender_phone)
                     return
