@@ -85,20 +85,85 @@ COLLECTION_NAME = "neura_medical_knowledge"
 CURRICULUM = {
     "200L": ["Anatomy", "Physiology", "Biochemistry"],
     "300L": ["Anatomy", "Physiology", "Biochemistry"],
-    "400L": ["Histopathology", "Chemical Pathology", "Haematology", "Microbiology", "Pharmacology"],
-    "500L": ["Obstetrics & Gynaecology"],
+    "400L": ["Pharmacology", "Chemical Pathology", "Histopathology", "Haematology", "Microbiology"],
+    "500L": ["Obstetrics & Gynaecology", "Paediatrics"],
     "600L": ["Medicine & Surgery"]
 }
 
 AVAILABLE_BOOKS = {
-    "Anatomy": ["Clinically Oriented Anatomy 8th Ed by Keith L Moore, Arthur F Dalley"],
-    "Physiology": ["K Sembulingam Essentials of Medical Physiology 6th Edition"],
-    "Biochemistry": ["Textbook of Biochemistry For Medical Students 7th Edition"],
-    "Histopathology": ["Robbins Basic Pathology 10th Edition 2017 (1)"],
-    "Chemical Pathology": ["Martin and crooke clinical biochemistry"],
-    "Haematology": ["Essentials of Haematology"],
-    "Microbiology": ["Jawetz_Melnick_Adelbergs_Medical_Microbiology_27_edition_Med_zoneTV"],
-    "Pharmacology": ["Lippincott Illustrated Reviews: Pharmacology"]
+    "Anatomy": [
+        "Clinically Oriented Anatomy 8th Ed by Keith L Moore, Arthur F Dalley",
+        "lasts anatomy 12th 1",
+        "Junqueira's Basic Histology Text and Atlas ( PDFDrive )",
+        "inderbir singhs textbook of human histology with colour atlas and practical guide 9nbsped 9389034973 9789389034974 compress",
+        "langmans medical embryology 12th ed 1",
+        "Embryology KLM",
+        "Embryo vishram singh 1 260114 093822"
+    ],
+    "Physiology": [
+        "Guyton and Hall Textbook of Medical Physiology 13th Ed 2015",
+        "K Sembulingam Essentials of Medical Physiology 6th Edition",
+        "[Indu Khurana] Medical Physiology for Undergraduat(BookZZ.org)"
+    ],
+    "Biochemistry": [
+        "Lehninger Principles of Biochemistry, 5th Edition (2008, W. H. Freeman)",
+        "Textbook of Biochemistry For Medical Students 7th Edition",
+        "DM Vasudevan Textbook of Biochemistry For Medical Students 6th Edition 8"
+    ],
+    "Pharmacology": [
+        "Basic & Clinical Pharmacology (Fourteenth Edition)",
+        "Lippincott Illustrated Reviews: Pharmacology",
+        "Katzung & Trevor's Pharmacology Examination and Board Review ( PDFDrive.com )"
+    ],
+    "Chemical Pathology": [
+        "Martin and crooke clinical biochemistry",
+        "Textbook Lippincott Illustrated Reviews Biochemistry, 8e by Emine Ercikan Abali, PhD Susan D. Cline, PhD David S. Franklin, PhD"
+    ],
+    "Histopathology": [
+        "Robbins Basic Pathology 10th Edition 2017 (1)"
+    ],
+    "Haematology": [
+        "Essentials of Haematology"
+    ],
+    "Microbiology": [
+        "Jawetz_Melnick_Adelbergs_Medical_Microbiology_27_edition_Med_zoneTV"
+    ],
+    "Obstetrics & Gynaecology": [
+        "Ten teachers O&G"
+    ],
+    "Paediatrics": [
+        "Nelson Essentials of Pediatrics by Karen Marcdante Robert Kliegman"
+    ],
+    "Medicine & Surgery": [
+        "OceanofPDF.com Hutchisons Clinical Methods An Integrated Approach to Clinical Practice Edition 25 Michael Glynn"
+    ]
+}
+
+BOOK_DISPLAY_NAMES = {
+    "Clinically Oriented Anatomy 8th Ed by Keith L Moore, Arthur F Dalley": "Moore Anatomy (8e)",
+    "lasts anatomy 12th 1": "Last's Anatomy (12e)",
+    "Junqueira's Basic Histology Text and Atlas ( PDFDrive )": "Junqueira Histology",
+    "inderbir singhs textbook of human histology with colour atlas and practical guide 9nbsped 9389034973 9789389034974 compress": "Inderbir Singh Hist",
+    "langmans medical embryology 12th ed 1": "Langman Embryology (12e)",
+    "Embryology KLM": "KLM Embryology",
+    "Embryo vishram singh 1 260114 093822": "Vishram Singh Embryo",
+    "Guyton and Hall Textbook of Medical Physiology 13th Ed 2015": "Guyton & Hall Physio",
+    "K Sembulingam Essentials of Medical Physiology 6th Edition": "Sembulingam Physio",
+    "[Indu Khurana] Medical Physiology for Undergraduat(BookZZ.org)": "Indu Khurana Physio",
+    "Lehninger Principles of Biochemistry, 5th Edition (2008, W. H. Freeman)": "Lehninger Biochem",
+    "Textbook of Biochemistry For Medical Students 7th Edition": "Vasudevan Biochem (7e)",
+    "DM Vasudevan Textbook of Biochemistry For Medical Students 6th Edition 8": "Vasudevan Biochem (6e)",
+    "Basic & Clinical Pharmacology (Fourteenth Edition)": "Katzung Pharmacology",
+    "Lippincott Illustrated Reviews: Pharmacology": "Lippincott Pharm",
+    "Katzung & Trevor's Pharmacology Examination and Board Review ( PDFDrive.com )": "Katzung Board Review",
+    "Martin and crooke clinical biochemistry": "Martin & Crook ChemPath",
+    "Textbook Lippincott Illustrated Reviews Biochemistry, 8e by Emine Ercikan Abali, PhD Susan D. Cline, PhD David S. Franklin, PhD": "Lippincott Biochem (8e)",
+    "Robbins Basic Pathology 10th Edition 2017 (1)": "Robbins Pathology (10e)",
+    "Essentials of Haematology": "Essentials Haematology",
+    "Jawetz_Melnick_Adelbergs_Medical_Microbiology_27_edition_Med_zoneTV": "Jawetz Microbiology",
+    "Ten teachers O&G": "Ten Teachers O&G",
+    "Nelson Essentials of Pediatrics by Karen Marcdante Robert Kliegman": "Nelson Pediatrics",
+    "OceanofPDF.com Hutchisons Clinical Methods An Integrated Approach to Clinical Practice Edition 25 Michael Glynn": "Hutchison's Methods"
 }
 
 def get_all_curriculum_books_for_level(level: str) -> list:
@@ -542,6 +607,29 @@ async def register_whatsapp_chat_commands():
         print(f"⚠️ [META CLOUD API] Error syncing chat commands: {e}")
 
 @app.on_event("startup")
+async def upgrade_curriculum_for_all_users():
+    """Resets all existing users so they re-select their level and textbooks from the expanded 37-textbook library."""
+    if users_col is None:
+        return
+    try:
+        res = await users_col.update_many(
+            {"library_version": {"$ne": "v2_expanded_37_books"}},
+            {
+                "$set": {
+                    "preferred_books_list": [],
+                    "onboarding_step": "ASK_LEVEL",
+                    "requires_curriculum_setup": True,
+                    "is_onboarded": False,
+                    "has_completed_onboarding": False,
+                    "library_version": "v2_expanded_37_books"
+                }
+            }
+        )
+        if res.modified_count > 0:
+            print(f"📚 [LIBRARY UPGRADE] Successfully reset {res.modified_count} users to select from the 37-textbook library!")
+    except Exception as e:
+        print(f"⚠️ Error upgrading curriculum for users: {e}")
+
 async def startup_event():
     try:
         await qdrant.create_payload_index(
@@ -579,6 +667,7 @@ async def startup_event():
 
     # Synchronize native WhatsApp chat commands with Meta Cloud API
     asyncio.create_task(register_whatsapp_chat_commands())
+    asyncio.create_task(upgrade_curriculum_for_all_users())
 
 class LRUTopicCache:
     """High-speed in-memory 24-hour LRU cache for authoritative textbook explanations (~4KB per topic, max 1000 topics = ~4MB RAM)."""
@@ -4498,23 +4587,24 @@ async def send_subject_book_menu(sender_phone: str, level: str, subject: str) ->
             [{"id": "SKIP_SUBJECT", "title": "⏭️ Skip this subject", "description": "Continue to next subject"}]
         )
     elif len(all_books) == 1:
-        # Single-book subject: clean 1-tap selection
+        # Single-book subject: clean 1-tap selection with friendly name
         single_book = all_books[0]
+        disp_name = BOOK_DISPLAY_NAMES.get(single_book, single_book)
         body_text = f"Please select your preferred textbook for *{subject}*:"
         options = [{
             "id": single_book,
-            "title": single_book[:24].strip(),
-            "description": single_book[:72].strip()
+            "title": disp_name[:24].strip(),
+            "description": disp_name[:72].strip()
         }]
         await send_whatsapp_interactive_list(sender_phone, body_text, "Select Textbook", options)
     else:
-        # Multi-book subject: Live Checklist Dropdown
+        # Multi-book subject: Live Checklist Dropdown with friendly names
         selected_for_subject = [b for b in all_books if b in preferred_books]
         
         # Build visual checklist lines
         checklist_lines = []
         for b in all_books:
-            b_display = b.split(":")[0][:40]
+            b_display = BOOK_DISPLAY_NAMES.get(b, b.split(":")[0])[:40]
             if b in selected_for_subject:
                 checklist_lines.append(f"• [✓] *{b_display}*")
             else:
@@ -4543,19 +4633,21 @@ async def send_subject_book_menu(sender_phone: str, level: str, subject: str) ->
                 "description": f"Proceed with {len(selected_for_subject)} selected book(s)"
             })
             
-        # List all books with Add / Remove action indicators
+        # List all books with friendly short titles and Add / Remove indicators
         for b in all_books:
+            disp_name = BOOK_DISPLAY_NAMES.get(b, b)
+            short_name = disp_name[:18].strip()
             if b in selected_for_subject:
                 options.append({
                     "id": f"TOGGLE_{b}",
-                    "title": f"❌ Remove: {b}"[:24].strip(),
-                    "description": f"Remove {b}"[:72].strip()
+                    "title": f"❌ {short_name}"[:24].strip(),
+                    "description": f"Remove {disp_name}"[:72].strip()
                 })
             else:
                 options.append({
                     "id": f"TOGGLE_{b}",
-                    "title": f"➕ Add: {b}"[:24].strip(),
-                    "description": f"Add {b}"[:72].strip()
+                    "title": f"➕ {short_name}"[:24].strip(),
+                    "description": f"Add {disp_name}"[:72].strip()
                 })
                 
         # If no book selected yet, offer skip option
@@ -4729,6 +4821,19 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
         
     # 3. Extract Level
     if step == "ASK_LEVEL":
+        # Check if user needs the expanded library setup
+        if user_doc.get("requires_curriculum_setup") and user_msg not in ["200L", "300L", "400L", "500L", "600L"]:
+            welcome_upgrade = (
+                f"👋 Hello *{name}*! We've expanded Ranviar's medical library to **37 official textbooks** (including *Guyton*, *Moore Anatomy*, *Katzung*, *Robbins*, *Nelson Pediatrics*, and *Ten Teachers*)! 📚⚡\n\n"
+                "To configure your personalized study library, please select your medical class/level below:"
+            )
+            await send_whatsapp_interactive_list(
+                sender_phone, 
+                welcome_upgrade,
+                "Select Level",
+                ["200L", "300L", "400L", "500L", "600L"]
+            )
+            return True
         if user_msg not in ["200L", "300L", "400L", "500L", "600L"]:
             if is_existing_user:
                 # Student initiated an update but does not want to continue (e.g. asked a medical question or typed a command)
