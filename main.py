@@ -1765,11 +1765,95 @@ async def send_whatsapp_template_msg(to_number: str, template_name: str, paramet
 
 
 # ==========================================
-# MEDICAL DIAGRAM & ILLUSTRATION ENGINE
+# 1. REAL IMAGE SEARCH — WIKIMEDIA COMMONS
+# ==========================================
+
+async def search_wikimedia_image(topic: str) -> str | None:
+    """
+    Search Wikimedia Commons for a real, existing medical image (many sourced
+    from Gray's Anatomy, public-domain textbooks, and peer-reviewed uploads).
+    Returns a direct image URL, or None if nothing suitable is found.
+    """
+    clean_t = re.sub(r'[^a-zA-Z0-9\s]', ' ', topic).strip()
+    search_term = f"{clean_t} anatomy diagram medical"
+    url = "https://commons.wikimedia.org/w/api.php"
+    params = {
+        "action": "query",
+        "format": "json",
+        "generator": "search",
+        "gsrsearch": f"filetype:bitmap {search_term}",
+        "gsrlimit": 6,
+        "gsrnamespace": 6,  # File namespace only
+        "prop": "imageinfo",
+        "iiprop": "url|mime",
+        "iiurlwidth": 1024,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            r = await client.get(url, params=params, headers={"User-Agent": "Ranviar-MedicalBot/2.0 (info@ranviar.org)"})
+            if r.status_code != 200:
+                print(f"⚠️ Wikimedia search HTTP {r.status_code}")
+                return None
+            data = r.json()
+            pages = data.get("query", {}).get("pages", {})
+            for page in pages.values():
+                infos = page.get("imageinfo", [])
+                if not infos:
+                    continue
+                info = infos[0]
+                mime = info.get("mime", "")
+                if "gif" in mime:
+                    continue
+                img_url = info.get("thumburl") or info.get("url")
+                if img_url:
+                    return img_url
+    except Exception as e:
+        print(f"⚠️ Wikimedia search error: {e}")
+    return None
+
+
+# ==========================================
+# 2. REAL IMAGE SEARCH — NIH OPEN-i
+# ==========================================
+
+async def search_openi_image(topic: str) -> str | None:
+    """
+    Search NIH's Open-i biomedical image database (radiology, histology,
+    clinical photos indexed from PubMed Central articles).
+    Returns a direct image URL, or None if nothing found.
+    """
+    clean_t = re.sub(r'[^a-zA-Z0-9\s]', ' ', topic).strip()
+    url = "https://openi.nlm.nih.gov/api/search"
+    params = {"query": clean_t, "m": 1, "n": 5, "it": "x,p,m,g"}  # x-ray, photo, microscopy, graphic
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            r = await client.get(url, params=params)
+            if r.status_code != 200:
+                print(f"⚠️ Open-i search HTTP {r.status_code}")
+                return None
+            data = r.json()
+            results = data.get("list", [])
+            for item in results:
+                img_path = item.get("imgLarge") or item.get("imgThumb")
+                if img_path:
+                    if img_path.startswith("http"):
+                        return img_path
+                    return f"https://openi.nlm.nih.gov{img_path}"
+    except Exception as e:
+        print(f"⚠️ Open-i search error: {e}")
+    return None
+
+
+# ==========================================
+# 3. FALLBACK — AI-GENERATED (FLUX)
 # ==========================================
 
 async def generate_medical_image(topic: str, user_query: str = "") -> str:
-    """Generates an optimized medical illustration URL using FLUX via Pollinations (deterministic seed)."""
+    """
+    Generates an AI illustration via FLUX/Pollinations. Used ONLY when no real
+    reference image could be found. Deterministic seed via MD5 (stable across
+    restarts, unlike Python's built-in hash()).
+    """
     clean_t = re.sub(r'[^a-zA-Z0-9\s]', ' ', topic).strip()
     prompt = (
         f"Medical textbook scientific illustration of {clean_t}, "
@@ -1777,52 +1861,96 @@ async def generate_medical_image(topic: str, user_query: str = "") -> str:
         "high quality medical diagram, neutral studio lighting, white background"
     )
     encoded = urllib.parse.quote(prompt)
-    # Deterministic seed using md5 so same topic gets consistent diagram across server reboots
     seed = int(hashlib.md5(clean_t.lower().encode("utf-8")).hexdigest(), 16) % 100000
-    image_url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&model=flux&nologo=true&seed={seed}"
-    return image_url
+    return f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&model=flux&nologo=true&seed={seed}"
+
+
+# ==========================================
+# 4. ORCHESTRATOR — TRY REAL, THEN FALL BACK
+# ==========================================
+
+async def resolve_medical_image(topic: str, user_query: str = "") -> tuple[str | None, bool]:
+    """
+    Returns (image_url, is_ai_generated).
+    Tries real sources first; only generates if nothing real is found.
+    """
+    real_url = await search_wikimedia_image(topic)
+    if real_url:
+        print(f"📚 Using real Wikimedia image for '{topic}'")
+        return real_url, False
+
+    real_url = await search_openi_image(topic)
+    if real_url:
+        print(f"📚 Using real Open-i image for '{topic}'")
+        return real_url, False
+
+    print(f"⚠️ No real reference image found for '{topic}' — falling back to AI generation")
+    generated_url = await generate_medical_image(topic, user_query)
+    return generated_url, True
+
 
 async def deliver_medical_diagram_if_requested(sender_phone: str, topic: str, user_query: str) -> bool:
-    """Detects if user requested a diagram/image, generates it, and delivers via WhatsApp."""
+    """
+    Detects if the student requested a diagram/visual, resolves the best
+    available image (real first, AI-generated fallback), and delivers it.
+    """
     visual_triggers = [
-        "diagram", "illustration", "draw", "picture", "image", "flowchart", 
+        "diagram", "illustration", "draw", "picture", "image", "flowchart",
         "schematic", "visualize", "sketch", "show me", "photo", "look like"
     ]
     query_lower = user_query.lower()
     is_visual = any(re.search(rf"\b{trig}\b", query_lower) for trig in visual_triggers)
-    
+
     if not is_visual:
         return False
-        
-    print(f"🎨 [VISUAL INTENT DETECTED] Generating medical illustration for '{topic}'...")
+
+    print(f"🎨 [VISUAL INTENT DETECTED] Resolving medical image for '{topic}'...")
     try:
-        image_url = await generate_medical_image(topic, user_query)
-        caption = f"🖼️ *Medical Illustration:* {topic.title()}\n_Visual guide for your MBBS revision_"
+        image_url, is_generated = await resolve_medical_image(topic, user_query)
+        if not image_url:
+            print(f"⚠️ Could not resolve any image (real or generated) for '{topic}'")
+            return False
+
+        if is_generated:
+            caption = (
+                f"🖼️ *AI-Generated Illustration:* {topic.title()}\n"
+                "_⚠️ AI-generated for visual reference only — please verify against your textbook._"
+            )
+        else:
+            caption = f"🖼️ *Medical Reference Image:* {topic.title()}\n_Verified source — great for revision_"
+
         delivered = await send_whatsapp_image_url(sender_phone, image_url, caption=caption)
         if delivered:
-            print(f"✅ Medical illustration delivered to {sender_phone} for '{topic}'")
+            print(f"✅ Medical image delivered to {sender_phone} for '{topic}' (generated={is_generated})")
             return True
         else:
-            print(f"⚠️ Medical illustration delivery failed for {sender_phone} ('{topic}')")
+            print(f"⚠️ Medical image delivery failed for {sender_phone} ('{topic}')")
             return False
     except Exception as img_err:
-        print(f"⚠️ Error delivering medical diagram: {img_err}")
+        print(f"⚠️ Error delivering medical image: {img_err}")
         return False
 
+
+# ==========================================
+# 5. WHATSAPP UPLOADER
+# ==========================================
+
 async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str = "") -> bool:
-    """Sends an image to WhatsApp via Meta Cloud API using direct binary media upload (guaranteeing zero 404/429 hotlink failures)"""
+    """
+    Sends an image to WhatsApp via Meta Cloud API using direct binary media upload
+    (avoids 404/403/429 hotlink failures on student devices).
+    """
     if not image_url or not WHATSAPP_TOKEN:
-        print(f"⚠️ Cannot send image: missing image_url or WHATSAPP_TOKEN")
+        print("⚠️ Cannot send image: missing image_url or WHATSAPP_TOKEN")
         return False
 
     meta_media_url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/media"
     messages_url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     auth_headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}"}
 
-    # Step 1: Download image bytes server-side with custom User-Agent to bypass bot blocks
     image_bytes = None
     content_type = "image/jpeg"
-    
+
     try:
         req_headers = {
             "User-Agent": "Ranviar-MedicalBot/2.0 (contact: info@ranviar.org; MBBS study assistant)",
@@ -1840,49 +1968,44 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
     except Exception as fetch_err:
         print(f"⚠️ Error downloading image server-side from {image_url}: {fetch_err}")
 
-    # Step 2: Validate downloaded bytes
     if not image_bytes:
-        print(f"⚠️ Image could not be fetched server-side from {image_url}. Aborting image delivery.")
+        print(f"⚠️ Image could not be fetched server-side from {image_url}. Aborting.")
         return False
 
     try:
-        filename = image_url.split("/")[-1].split("?")[0] or "medical_diagram.jpg"
+        filename = image_url.split("/")[-1].split("?")[0] or "medical_image.jpg"
         if not any(filename.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
             filename += ".jpg"
-            
-        files = {
-            "file": (filename, image_bytes, content_type)
-        }
-        data = {
-            "messaging_product": "whatsapp",
-            "type": content_type
-        }
+
+        files = {"file": (filename, image_bytes, content_type)}
+        data = {"messaging_product": "whatsapp", "type": content_type}
+
         async with httpx.AsyncClient(timeout=25.0) as uploader:
             upload_res = await uploader.post(meta_media_url, headers=auth_headers, files=files, data=data)
             if upload_res.status_code == 200:
                 media_id = upload_res.json().get("id")
                 if media_id:
-                    # Step 3: Send using media_id
                     payload = {
                         "messaging_product": "whatsapp",
                         "recipient_type": "individual",
                         "to": to_number,
                         "type": "image",
-                        "image": {
-                            "id": media_id,
-                            "caption": caption[:1024] if caption else ""
-                        }
+                        "image": {"id": media_id, "caption": caption[:1024] if caption else ""}
                     }
                     async with httpx.AsyncClient(timeout=20.0) as sender:
-                        send_res = await sender.post(messages_url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}", "Content-Type": "application/json"}, json=payload)
+                        send_res = await sender.post(
+                            messages_url,
+                            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}", "Content-Type": "application/json"},
+                            json=payload
+                        )
                         if send_res.status_code == 200:
-                            print(f"✅ Meta Media-ID Send Status 200: Image successfully delivered to {to_number}")
+                            print(f"✅ Image successfully delivered to {to_number}")
                             return True
                         else:
                             print(f"⚠️ Meta send message failed ({send_res.status_code}): {send_res.text}")
                             return False
                 else:
-                    print(f"⚠️ Meta media upload 200 OK but missing 'id' in response: {upload_res.text}")
+                    print(f"⚠️ Meta media upload 200 OK but missing 'id': {upload_res.text}")
                     return False
             else:
                 print(f"⚠️ Meta media upload failed ({upload_res.status_code}): {upload_res.text}")
@@ -1890,6 +2013,7 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
     except Exception as upload_err:
         print(f"⚠️ Media upload to Meta exception: {upload_err}")
         return False
+
 
 # ==========================================
 # VOICE NOTE & SPEECH-TO-TEXT ENGINE (Groq Whisper Large v3)
