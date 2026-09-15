@@ -18,6 +18,7 @@ import httpx
 import hmac
 import hashlib
 import uuid
+import base64
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 import time
@@ -2099,6 +2100,179 @@ async def process_whatsapp_audio(sender_phone: str, media_id: str, is_tagged_rep
 
     # Step 4: Route into standard WhatsApp message processor with is_voice=True
     await process_whatsapp_message(sender_phone, transcript, is_tagged_reply, is_voice=True)
+
+
+# ==========================================
+# MEDICAL VISION ENGINE (OpenRouter Multimodal)
+# ==========================================
+
+SYSTEM_VISION_PROMPT = """You are Ranviar, an elite medical school study co-pilot and clinical colleague for {student_name}, a {class_level} MBBS student.
+You have been provided with an image uploaded by the student.
+
+Your task is to provide an accurate, high-yield, structured medical analysis based on what is in the image:
+
+1. EXAM QUESTIONS / MCQs / TEST STRIPS:
+   - Transcribe or state the question clearly.
+   - Clearly state the CORRECT OPTION in bold (e.g. *Option B: Atrial Fibrillation*).
+   - Provide a concise, high-yield clinical explanation referencing standard textbooks (e.g. Guyton, Robbins, Katzung, Moore).
+   - Explain briefly why the major distractors / other options are incorrect.
+
+2. ECG / RHYTHM STRIPS:
+   - Provide a systematic interpretation:
+     • *Rate & Rhythm*: (Regular/irregular, estimated rate)
+     • *Axis & Waves*: (P-waves, PR interval, QRS width, ST segments, T waves, QT interval)
+     • *Key Findings*: (e.g. ST elevation in leads II, III, aVF)
+     • *Clinical Impression / Diagnosis*:
+     • *Immediate High-Yield Management Point*:
+
+3. HISTOLOGY / PATHOLOGY / MICROBIOLOGY:
+   - Identify the tissue, organ, or pathogen.
+   - Describe hallmark microscopic/histological features (e.g. Reed-Sternberg cells, granulomas, signet-ring cells, Gram-negative diplococci).
+   - Provide the likely diagnosis and clinical significance.
+
+4. RADIOLOGY (X-Ray / CT / MRI):
+   - Identify view/modality and key radiological abnormalities (e.g. lobar consolidation, pneumothorax, fracture type).
+
+5. DIAGRAMS & ANATOMICAL / BIOCHEMICAL SCHEMATICS:
+   - Walk through the pathway, anatomical relations, or physiological mechanism with clarity.
+
+6. NON-MEDICAL / OFF-TOPIC IMAGES:
+   - If the uploaded image is completely non-medical (e.g. a meme, selfie, scenery, random object), warmly decline:
+     "I noticed this doesn't seem to be a medical study image or clinical case. As Ranviar, your MBBS co-pilot, I'm best at analyzing ECGs, histology slides, radiology films, clinical photos, and textbook MCQs. Feel free to upload any medical material you'd like us to study!"
+
+Tone & Formatting:
+- Use structured WhatsApp markdown (*bold*, bullet points, emojis).
+- Keep it sharp, empathetic, and exam-focused.
+"""
+
+async def process_whatsapp_image(
+    sender_phone: str,
+    media_id: str,
+    caption: str = "",
+    mime_type: str = "image/jpeg",
+    is_tagged_reply: bool = False
+):
+    """Processes incoming WhatsApp images using OpenRouter Vision (Gemini 2.5 Flash)."""
+    print(f"\n🖼️ [VISION START] Processing image from {sender_phone} (Media ID: {media_id}, Caption: '{caption}')...")
+
+    # 1. Typing indicator
+    try:
+        await send_whatsapp_typing_indicator(sender_phone)
+    except Exception:
+        pass
+
+    # 2. Download image bytes
+    img_bytes, detected_mime = await download_whatsapp_media(media_id)
+    if not img_bytes:
+        await send_whatsapp_cloud_msg(
+            sender_phone,
+            "⚠️ I couldn't download the image from WhatsApp. Please check your connection and send it again! 🖼️"
+        )
+        return
+
+    effective_mime = detected_mime if (detected_mime and "image" in detected_mime) else (mime_type or "image/jpeg")
+    b64_image = base64.b64encode(img_bytes).decode("utf-8")
+    del img_bytes
+
+    # 3. User profile
+    student_name = "Doctor"
+    class_level = "MBBS"
+    if users_col is not None:
+        try:
+            user_doc = await users_col.find_one({"user_id": sender_phone})
+            if user_doc:
+                student_name = user_doc.get("name", "Doctor")
+                class_level = user_doc.get("level", "MBBS")
+        except Exception:
+            pass
+
+    try:
+        await update_user_study_streak(sender_phone)
+    except Exception:
+        pass
+
+    logged_caption = f"[🖼️ Image Uploaded] {caption}" if caption else "[🖼️ Image Uploaded]"
+    try:
+        await log_user_chat_message(sender_phone, "user", logged_caption, msg_type="image_query")
+    except Exception:
+        pass
+
+    # 4. OpenRouter Vision API Call
+    if not OPENROUTER_API_KEY:
+        await send_whatsapp_cloud_msg(
+            sender_phone,
+            "⚠️ Vision analysis service is temporarily unavailable. Please try again shortly."
+        )
+        return
+
+    sys_prompt = SYSTEM_VISION_PROMPT.format(
+        student_name=student_name,
+        class_level=class_level
+    )
+    user_prompt_text = caption.strip() if caption.strip() else "Please analyze this medical image thoroughly for my MBBS studies."
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://ranviar.org",
+        "X-Title": "Ranviar Medical Vision"
+    }
+
+    vision_models = [
+        "google/gemini-2.5-flash",
+        "google/gemini-flash-1.5",
+        "meta-llama/llama-3.2-11b-vision-instruct"
+    ]
+
+    payload = {
+        "model": vision_models[0],
+        "models": vision_models,
+        "messages": [
+            {"role": "system", "content": sys_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_prompt_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{effective_mime};base64,{b64_image}"
+                        }
+                    }
+                ]
+            }
+        ],
+        "temperature": 0.2,
+        "max_tokens": 1500
+    }
+
+    del b64_image
+    gc.collect()
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                analysis = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                if not analysis:
+                    analysis = "I reviewed the image, but couldn't generate a clear analysis. Could you provide a higher-resolution photo or specify what you'd like me to focus on?"
+            else:
+                print(f"⚠️ Vision API Error {resp.status_code}: {resp.text}")
+                analysis = "⚠️ I encountered an issue analyzing this image. Please ensure the image is clear and try sending it again."
+    except Exception as e:
+        print(f"⚠️ Exception calling Vision API: {e}")
+        analysis = "⚠️ A connection timeout occurred while analyzing your image. Please try again in a moment."
+
+    # 5. Send reply
+    await send_whatsapp_cloud_msg(sender_phone, analysis)
+
+    try:
+        await log_user_chat_message(sender_phone, "assistant", analysis, msg_type="image_analysis")
+    except Exception:
+        pass
+
 
 # ==========================================
 # USER STUDY VAULT: 3-TIER DOCUMENT GATEKEEPER & INGESTION ENGINE
@@ -6096,9 +6270,22 @@ async def handle_whatsapp_webhook(request: Request):
                             print(f"⚠️ Document from {sender_phone} missing media_id")
                             task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read the uploaded document. Please try uploading again! 📄")
                             return Response(content=json.dumps({"status": "missing_media_id"}), media_type="application/json", background=task)
+                    elif msg_type == "image":
+                        img_obj = msg.get("image", {})
+                        media_id = img_obj.get("id")
+                        caption = (img_obj.get("caption") or "").strip()
+                        mime_type = img_obj.get("mime_type", "image/jpeg")
+                        if media_id:
+                            print(f"🖼️ Received Image from {sender_phone} (Media ID: {media_id}, Caption: '{caption}')")
+                            task = BackgroundTask(process_whatsapp_image, sender_phone, media_id, caption, mime_type, is_tagged_reply)
+                            return Response(content=json.dumps({"status": "processing_image"}), media_type="application/json", background=task)
+                        else:
+                            print(f"⚠️ Image from {sender_phone} missing media_id")
+                            task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read the image. Please try uploading again! 🖼️")
+                            return Response(content=json.dumps({"status": "missing_media_id"}), media_type="application/json", background=task)
                     else:
                         print(f"⚠️ Received unsupported message type '{msg_type}' from {sender_phone}")
-                        task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "I can read text, voice notes, and PDF medical documents! Please type, record, or upload your materials. 🤖🎙️📚")
+                        task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "I can read text, voice notes, images/ECGs/slides, and PDF medical documents! Please send your materials. 🤖🎙️📸📚")
                         return Response(content=json.dumps({"status": "unsupported_media"}), media_type="application/json", background=task)
 
         return Response(content=json.dumps({"status": "ignored"}), media_type="application/json")
