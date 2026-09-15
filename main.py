@@ -1769,7 +1769,7 @@ async def send_whatsapp_template_msg(to_number: str, template_name: str, paramet
 # ==========================================
 
 async def generate_medical_image(topic: str, user_query: str = "") -> str:
-    """Generates an optimized medical illustration URL using FLUX via Pollinations."""
+    """Generates an optimized medical illustration URL using FLUX via Pollinations (deterministic seed)."""
     clean_t = re.sub(r'[^a-zA-Z0-9\s]', ' ', topic).strip()
     prompt = (
         f"Medical textbook scientific illustration of {clean_t}, "
@@ -1777,11 +1777,12 @@ async def generate_medical_image(topic: str, user_query: str = "") -> str:
         "high quality medical diagram, neutral studio lighting, white background"
     )
     encoded = urllib.parse.quote(prompt)
-    seed = abs(hash(clean_t)) % 100000
+    # Deterministic seed using md5 so same topic gets consistent diagram across server reboots
+    seed = int(hashlib.md5(clean_t.lower().encode("utf-8")).hexdigest(), 16) % 100000
     image_url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&model=flux&nologo=true&seed={seed}"
     return image_url
 
-async def deliver_medical_diagram_if_requested(sender_phone: str, topic: str, user_query: str):
+async def deliver_medical_diagram_if_requested(sender_phone: str, topic: str, user_query: str) -> bool:
     """Detects if user requested a diagram/image, generates it, and delivers via WhatsApp."""
     visual_triggers = [
         "diagram", "illustration", "draw", "picture", "image", "flowchart", 
@@ -1791,27 +1792,34 @@ async def deliver_medical_diagram_if_requested(sender_phone: str, topic: str, us
     is_visual = any(re.search(rf"\b{trig}\b", query_lower) for trig in visual_triggers)
     
     if not is_visual:
-        return
+        return False
         
     print(f"🎨 [VISUAL INTENT DETECTED] Generating medical illustration for '{topic}'...")
     try:
         image_url = await generate_medical_image(topic, user_query)
         caption = f"🖼️ *Medical Illustration:* {topic.title()}\n_Visual guide for your MBBS revision_"
-        await send_whatsapp_image_url(sender_phone, image_url, caption=caption)
-        print(f"✅ Medical illustration delivered to {sender_phone} for '{topic}'")
+        delivered = await send_whatsapp_image_url(sender_phone, image_url, caption=caption)
+        if delivered:
+            print(f"✅ Medical illustration delivered to {sender_phone} for '{topic}'")
+            return True
+        else:
+            print(f"⚠️ Medical illustration delivery failed for {sender_phone} ('{topic}')")
+            return False
     except Exception as img_err:
         print(f"⚠️ Error delivering medical diagram: {img_err}")
+        return False
 
-async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str = ""):
+async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str = "") -> bool:
     """Sends an image to WhatsApp via Meta Cloud API using direct binary media upload (guaranteeing zero 404/429 hotlink failures)"""
     if not image_url or not WHATSAPP_TOKEN:
-        return
+        print(f"⚠️ Cannot send image: missing image_url or WHATSAPP_TOKEN")
+        return False
 
     meta_media_url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/media"
     messages_url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     auth_headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}"}
 
-    # Step 1: Download image bytes server-side with custom User-Agent to bypass Wikimedia bot blocks
+    # Step 1: Download image bytes server-side with custom User-Agent to bypass bot blocks
     image_bytes = None
     content_type = "image/jpeg"
     
@@ -1820,7 +1828,7 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
             "User-Agent": "Ranviar-MedicalBot/2.0 (contact: info@ranviar.org; MBBS study assistant)",
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
         }
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=req_headers) as downloader:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=req_headers) as downloader:
             r = await downloader.get(image_url)
             if r.status_code == 200 and len(r.content) > 1000:
                 image_bytes = r.content
@@ -1828,50 +1836,60 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
                 if "svg" in content_type:
                     content_type = "image/png"
             else:
-                print(f"⚠️ Image download failed with HTTP {r.status_code} for {image_url}")
+                print(f"⚠️ Image download failed with HTTP {r.status_code} (bytes: {len(r.content)}) for {image_url}")
     except Exception as fetch_err:
-        print(f"⚠️ Error downloading image server-side: {fetch_err}")
+        print(f"⚠️ Error downloading image server-side from {image_url}: {fetch_err}")
 
-    # Step 2: If downloaded, upload directly to WhatsApp's media endpoint to obtain a robust media_id
-    if image_bytes:
-        try:
-            filename = image_url.split("/")[-1].split("?")[0] or "medical_diagram.jpg"
-            if not any(filename.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
-                filename += ".jpg"
-                
-            files = {
-                "file": (filename, image_bytes, content_type)
-            }
-            data = {
-                "messaging_product": "whatsapp",
-                "type": content_type
-            }
-            async with httpx.AsyncClient(timeout=25.0) as uploader:
-                upload_res = await uploader.post(meta_media_url, headers=auth_headers, files=files, data=data)
-                if upload_res.status_code == 200:
-                    media_id = upload_res.json().get("id")
-                    if media_id:
-                        # Send using media_id (100% reliable, no 404/403/429 hotlink failures on WhatsApp)
-                        payload = {
-                            "messaging_product": "whatsapp",
-                            "recipient_type": "individual",
-                            "to": to_number,
-                            "type": "image",
-                            "image": {
-                                "id": media_id,
-                                "caption": caption[:1024] if caption else ""
-                            }
+    # Step 2: Validate downloaded bytes
+    if not image_bytes:
+        print(f"⚠️ Image could not be fetched server-side from {image_url}. Aborting image delivery.")
+        return False
+
+    try:
+        filename = image_url.split("/")[-1].split("?")[0] or "medical_diagram.jpg"
+        if not any(filename.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+            filename += ".jpg"
+            
+        files = {
+            "file": (filename, image_bytes, content_type)
+        }
+        data = {
+            "messaging_product": "whatsapp",
+            "type": content_type
+        }
+        async with httpx.AsyncClient(timeout=25.0) as uploader:
+            upload_res = await uploader.post(meta_media_url, headers=auth_headers, files=files, data=data)
+            if upload_res.status_code == 200:
+                media_id = upload_res.json().get("id")
+                if media_id:
+                    # Step 3: Send using media_id
+                    payload = {
+                        "messaging_product": "whatsapp",
+                        "recipient_type": "individual",
+                        "to": to_number,
+                        "type": "image",
+                        "image": {
+                            "id": media_id,
+                            "caption": caption[:1024] if caption else ""
                         }
-                        async with httpx.AsyncClient(timeout=20.0) as sender:
-                            send_res = await sender.post(messages_url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}", "Content-Type": "application/json"}, json=payload)
-                            print(f"Meta Media-ID Send Status {send_res.status_code}: {send_res.text}")
-                            return
-        except Exception as upload_err:
-            print(f"⚠️ Media upload to Meta failed: {upload_err}")
-
-    # Step 3: If image bytes could not be downloaded server-side, abort sending media to prevent Meta 131053 error
-    print(f"⚠️ Image could not be fetched server-side from {image_url}. Aborting image delivery to protect WhatsApp delivery status.")
-    return
+                    }
+                    async with httpx.AsyncClient(timeout=20.0) as sender:
+                        send_res = await sender.post(messages_url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}", "Content-Type": "application/json"}, json=payload)
+                        if send_res.status_code == 200:
+                            print(f"✅ Meta Media-ID Send Status 200: Image successfully delivered to {to_number}")
+                            return True
+                        else:
+                            print(f"⚠️ Meta send message failed ({send_res.status_code}): {send_res.text}")
+                            return False
+                else:
+                    print(f"⚠️ Meta media upload 200 OK but missing 'id' in response: {upload_res.text}")
+                    return False
+            else:
+                print(f"⚠️ Meta media upload failed ({upload_res.status_code}): {upload_res.text}")
+                return False
+    except Exception as upload_err:
+        print(f"⚠️ Media upload to Meta exception: {upload_err}")
+        return False
 
 # ==========================================
 # VOICE NOTE & SPEECH-TO-TEXT ENGINE (Groq Whisper Large v3)
@@ -2192,7 +2210,7 @@ async def process_whatsapp_image(
     is_tagged_reply: bool = False
 ):
     """Processes incoming WhatsApp images using OpenRouter Vision (Gemini 2.5 Flash)."""
-    print(f"\n🖼️ [VISION START] Processing image from {sender_phone} (Media ID: {media_id}, Caption: '{caption}')...")
+    print(f"\n🖼️ [VISION START] Processing image from {sender_phone} (Media ID: {media_id}, Caption: '{caption}', Tagged: {is_tagged_reply})...")
 
     # 1. Typing indicator
     try:
@@ -2213,7 +2231,7 @@ async def process_whatsapp_image(
     b64_image = base64.b64encode(img_bytes).decode("utf-8")
     del img_bytes
 
-    # 3. User profile
+    # 3. User profile & study streak
     student_name = "Doctor"
     class_level = "MBBS"
     if users_col is not None:
@@ -2236,6 +2254,19 @@ async def process_whatsapp_image(
     except Exception:
         pass
 
+    # Handle is_tagged_reply: prepend quoted context if the student tagged a previous message
+    tagged_prefix = ""
+    if is_tagged_reply:
+        try:
+            history_turns = await get_recent_history(sender_phone, n=2)
+            if history_turns:
+                last_turn = history_turns[-1]
+                prev_text = last_turn.get("a") or last_turn.get("q") or ""
+                if prev_text:
+                    tagged_prefix = f"[Student tagged previous message: \"{prev_text[:250]}\"]\n"
+        except Exception:
+            pass
+
     # 4. OpenRouter Vision API Call
     if not OPENROUTER_API_KEY:
         await send_whatsapp_cloud_msg(
@@ -2248,7 +2279,8 @@ async def process_whatsapp_image(
         student_name=student_name,
         class_level=class_level
     )
-    user_prompt_text = caption.strip() if caption.strip() else "Please analyze this medical image thoroughly for my MBBS studies."
+    base_prompt = caption.strip() if caption.strip() else "Please analyze this medical image thoroughly for my MBBS studies."
+    user_prompt_text = f"{tagged_prefix}{base_prompt}" if tagged_prefix else base_prompt
 
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -2289,20 +2321,35 @@ async def process_whatsapp_image(
     del b64_image
     gc.collect()
 
+    analysis = ""
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
             resp = await client.post(url, headers=headers, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                analysis = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                if not analysis:
-                    analysis = "I reviewed the image, but couldn't generate a clear analysis. Could you provide a higher-resolution photo or specify what you'd like me to focus on?"
-            else:
-                print(f"⚠️ Vision API Error {resp.status_code}: {resp.text}")
-                analysis = "⚠️ I encountered an issue analyzing this image. Please ensure the image is clear and try sending it again."
-    except Exception as e:
-        print(f"⚠️ Exception calling Vision API: {e}")
-        analysis = "⚠️ A connection timeout occurred while analyzing your image. Please try again in a moment."
+    except httpx.TimeoutException:
+        print(f"⚠️ Vision API Timeout for {sender_phone}")
+        await send_whatsapp_cloud_msg(sender_phone, "⚠️ The vision analysis timed out while examining your image. Please try sending it again in a moment.")
+        return
+    except Exception as net_err:
+        print(f"⚠️ Network error calling Vision API: {net_err}")
+        await send_whatsapp_cloud_msg(sender_phone, "⚠️ A connection error occurred while contacting the vision service. Please try again shortly.")
+        return
+
+    if resp.status_code != 200:
+        print(f"⚠️ Vision API Error {resp.status_code}: {resp.text}")
+        analysis = "⚠️ I encountered an issue analyzing this image. Please ensure the image is clear and try sending it again."
+    else:
+        try:
+            data = resp.json()
+            choices = data.get("choices")
+            if isinstance(choices, list) and len(choices) > 0:
+                first_choice = choices[0]
+                if isinstance(first_choice, dict):
+                    analysis = first_choice.get("message", {}).get("content", "").strip()
+            if not analysis:
+                analysis = "I reviewed the image, but couldn't generate a clear analysis. Could you provide a higher-resolution photo or specify what you'd like me to focus on?"
+        except Exception as parse_err:
+            print(f"⚠️ Vision API JSON parse error: {parse_err} | Raw response: {resp.text[:300]}")
+            analysis = "⚠️ An unexpected format was returned while analyzing your image. Please re-send or try another photo."
 
     # 5. Send reply
     await send_whatsapp_cloud_msg(sender_phone, analysis)
@@ -5814,9 +5861,9 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                             }
                         }
                     )
+                return  # ⚡ CRITICAL: Return immediately on cache hit to prevent duplicate answer & diagram!
                 
-                # [DISABLED] Automatic follow-up Practice MCQs interactive button per user request
-                # clean_topic_label =         # ⚡ Step 1: Speculative Parallel Execution (Concurrent Vector Retrieval + Typo Normalization)
+        # ⚡ Step 1: Speculative Parallel Execution (Concurrent Vector Retrieval + Typo Normalization)
         t_parallel_start = time.perf_counter()
         local_terms = extract_medical_terms(search_term)
         active_books = get_explicit_book_override(search_term, preferred_books_list)
