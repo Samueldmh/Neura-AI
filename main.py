@@ -1763,6 +1763,45 @@ async def send_whatsapp_template_msg(to_number: str, template_name: str, paramet
         print(f"⚠️ Template send error to {to_number}: {e}")
         return False
 
+
+# ==========================================
+# MEDICAL DIAGRAM & ILLUSTRATION ENGINE
+# ==========================================
+
+async def generate_medical_image(topic: str, user_query: str = "") -> str:
+    """Generates an optimized medical illustration URL using FLUX via Pollinations."""
+    clean_t = re.sub(r'[^a-zA-Z0-9\s]', ' ', topic).strip()
+    prompt = (
+        f"Medical textbook scientific illustration of {clean_t}, "
+        "accurate anatomical and physiological details, clean clear educational schematic, "
+        "high quality medical diagram, neutral studio lighting, white background"
+    )
+    encoded = urllib.parse.quote(prompt)
+    seed = abs(hash(clean_t)) % 100000
+    image_url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&model=flux&nologo=true&seed={seed}"
+    return image_url
+
+async def deliver_medical_diagram_if_requested(sender_phone: str, topic: str, user_query: str):
+    """Detects if user requested a diagram/image, generates it, and delivers via WhatsApp."""
+    visual_triggers = [
+        "diagram", "illustration", "draw", "picture", "image", "flowchart", 
+        "schematic", "visualize", "sketch", "show me", "photo", "look like"
+    ]
+    query_lower = user_query.lower()
+    is_visual = any(re.search(rf"\b{trig}\b", query_lower) for trig in visual_triggers)
+    
+    if not is_visual:
+        return
+        
+    print(f"🎨 [VISUAL INTENT DETECTED] Generating medical illustration for '{topic}'...")
+    try:
+        image_url = await generate_medical_image(topic, user_query)
+        caption = f"🖼️ *Medical Illustration:* {topic.title()}\n_Visual guide for your MBBS revision_"
+        await send_whatsapp_image_url(sender_phone, image_url, caption=caption)
+        print(f"✅ Medical illustration delivered to {sender_phone} for '{topic}'")
+    except Exception as img_err:
+        print(f"⚠️ Error delivering medical diagram: {img_err}")
+
 async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str = ""):
     """Sends an image to WhatsApp via Meta Cloud API using direct binary media upload (guaranteeing zero 404/429 hotlink failures)"""
     if not image_url or not WHATSAPP_TOKEN:
@@ -5750,6 +5789,11 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         await send_whatsapp_video_cta_card(sender_phone, video_info)
                 except Exception as vid_err:
                     print(f"⚠️ Cache video send error: {vid_err}")
+                # Deliver Medical Diagram if student requested visual
+                try:
+                    await deliver_medical_diagram_if_requested(sender_phone, clean_topic, user_msg)
+                except Exception as diag_err:
+                    print(f"⚠️ Cache diagram error: {diag_err}")
                 
                 if chat_history_col is not None:
                     await save_turn(sender_phone, user_msg, cached_answer)
@@ -5944,6 +5988,13 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 await send_whatsapp_video_cta_card(sender_phone, video_info)
             except Exception as vid_err:
                 print(f"⚠️ Error sending video CTA card: {vid_err}")
+
+        # Deliver Medical Diagram if student requested visual/illustration
+        if not is_not_covered:
+            try:
+                await deliver_medical_diagram_if_requested(sender_phone, clean_topic, user_msg)
+            except Exception as diag_err:
+                print(f"⚠️ Main pipeline diagram error: {diag_err}")
 
         if chat_history_col is not None:
             await save_turn(sender_phone, user_msg, ai_answer)
