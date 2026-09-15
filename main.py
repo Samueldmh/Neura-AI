@@ -1765,173 +1765,6 @@ async def send_whatsapp_template_msg(to_number: str, template_name: str, paramet
 
 
 # ==========================================
-# 1. REAL IMAGE SEARCH — WIKIMEDIA COMMONS
-# ==========================================
-
-async def search_wikimedia_image(topic: str) -> str | None:
-    """
-    Search Wikimedia Commons for a real, existing medical image (many sourced
-    from Gray's Anatomy, public-domain textbooks, and peer-reviewed uploads).
-    Returns a direct image URL, or None if nothing suitable is found.
-    """
-    clean_t = re.sub(r'[^a-zA-Z0-9\s]', ' ', topic).strip()
-    search_term = f"{clean_t} anatomy diagram medical"
-    url = "https://commons.wikimedia.org/w/api.php"
-    params = {
-        "action": "query",
-        "format": "json",
-        "generator": "search",
-        "gsrsearch": f"filetype:bitmap {search_term}",
-        "gsrlimit": 6,
-        "gsrnamespace": 6,  # File namespace only
-        "prop": "imageinfo",
-        "iiprop": "url|mime",
-        "iiurlwidth": 1024,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            r = await client.get(url, params=params, headers={"User-Agent": "Ranviar-MedicalBot/2.0 (info@ranviar.org)"})
-            if r.status_code != 200:
-                print(f"⚠️ Wikimedia search HTTP {r.status_code}")
-                return None
-            data = r.json()
-            pages = data.get("query", {}).get("pages", {})
-            for page in pages.values():
-                infos = page.get("imageinfo", [])
-                if not infos:
-                    continue
-                info = infos[0]
-                mime = info.get("mime", "")
-                if "gif" in mime:
-                    continue
-                img_url = info.get("thumburl") or info.get("url")
-                if img_url:
-                    return img_url
-    except Exception as e:
-        print(f"⚠️ Wikimedia search error: {e}")
-    return None
-
-
-# ==========================================
-# 2. REAL IMAGE SEARCH — NIH OPEN-i
-# ==========================================
-
-async def search_openi_image(topic: str) -> str | None:
-    """
-    Search NIH's Open-i biomedical image database (radiology, histology,
-    clinical photos indexed from PubMed Central articles).
-    Returns a direct image URL, or None if nothing found.
-    """
-    clean_t = re.sub(r'[^a-zA-Z0-9\s]', ' ', topic).strip()
-    url = "https://openi.nlm.nih.gov/api/search"
-    params = {"query": clean_t, "m": 1, "n": 5, "it": "x,p,m,g"}  # x-ray, photo, microscopy, graphic
-    try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            r = await client.get(url, params=params)
-            if r.status_code != 200:
-                print(f"⚠️ Open-i search HTTP {r.status_code}")
-                return None
-            data = r.json()
-            results = data.get("list", [])
-            for item in results:
-                img_path = item.get("imgLarge") or item.get("imgThumb")
-                if img_path:
-                    if img_path.startswith("http"):
-                        return img_path
-                    return f"https://openi.nlm.nih.gov{img_path}"
-    except Exception as e:
-        print(f"⚠️ Open-i search error: {e}")
-    return None
-
-
-# ==========================================
-# 3. FALLBACK — AI-GENERATED (FLUX)
-# ==========================================
-
-async def generate_medical_image(topic: str, user_query: str = "") -> str:
-    """
-    Generates an AI illustration via FLUX/Pollinations. Used ONLY when no real
-    reference image could be found. Deterministic seed via MD5 (stable across
-    restarts, unlike Python's built-in hash()).
-    """
-    clean_t = re.sub(r'[^a-zA-Z0-9\s]', ' ', topic).strip()
-    prompt = (
-        f"Medical textbook scientific illustration of {clean_t}, "
-        "accurate anatomical and physiological details, clean clear educational schematic, "
-        "high quality medical diagram, neutral studio lighting, white background"
-    )
-    encoded = urllib.parse.quote(prompt)
-    seed = int(hashlib.md5(clean_t.lower().encode("utf-8")).hexdigest(), 16) % 100000
-    return f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&model=flux&nologo=true&seed={seed}"
-
-
-# ==========================================
-# 4. ORCHESTRATOR — TRY REAL, THEN FALL BACK
-# ==========================================
-
-async def resolve_medical_image(topic: str, user_query: str = "") -> tuple[str | None, bool]:
-    """
-    Returns (image_url, is_ai_generated).
-    Tries real sources first; only generates if nothing real is found.
-    """
-    real_url = await search_wikimedia_image(topic)
-    if real_url:
-        print(f"📚 Using real Wikimedia image for '{topic}'")
-        return real_url, False
-
-    real_url = await search_openi_image(topic)
-    if real_url:
-        print(f"📚 Using real Open-i image for '{topic}'")
-        return real_url, False
-
-    print(f"⚠️ No real reference image found for '{topic}' — falling back to AI generation")
-    generated_url = await generate_medical_image(topic, user_query)
-    return generated_url, True
-
-
-async def deliver_medical_diagram_if_requested(sender_phone: str, topic: str, user_query: str) -> bool:
-    """
-    Detects if the student requested a diagram/visual, resolves the best
-    available image (real first, AI-generated fallback), and delivers it.
-    """
-    visual_triggers = [
-        "diagram", "illustration", "draw", "picture", "image", "flowchart",
-        "schematic", "visualize", "sketch", "show me", "photo", "look like"
-    ]
-    query_lower = user_query.lower()
-    is_visual = any(re.search(rf"\b{trig}\b", query_lower) for trig in visual_triggers)
-
-    if not is_visual:
-        return False
-
-    print(f"🎨 [VISUAL INTENT DETECTED] Resolving medical image for '{topic}'...")
-    try:
-        image_url, is_generated = await resolve_medical_image(topic, user_query)
-        if not image_url:
-            print(f"⚠️ Could not resolve any image (real or generated) for '{topic}'")
-            return False
-
-        if is_generated:
-            caption = (
-                f"🖼️ *AI-Generated Illustration:* {topic.title()}\n"
-                "_⚠️ AI-generated for visual reference only — please verify against your textbook._"
-            )
-        else:
-            caption = f"🖼️ *Medical Reference Image:* {topic.title()}\n_Verified source — great for revision_"
-
-        delivered = await send_whatsapp_image_url(sender_phone, image_url, caption=caption)
-        if delivered:
-            print(f"✅ Medical image delivered to {sender_phone} for '{topic}' (generated={is_generated})")
-            return True
-        else:
-            print(f"⚠️ Medical image delivery failed for {sender_phone} ('{topic}')")
-            return False
-    except Exception as img_err:
-        print(f"⚠️ Error delivering medical image: {img_err}")
-        return False
-
-
-# ==========================================
 # 5. WHATSAPP UPLOADER
 # ==========================================
 
@@ -5960,11 +5793,6 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         await send_whatsapp_video_cta_card(sender_phone, video_info)
                 except Exception as vid_err:
                     print(f"⚠️ Cache video send error: {vid_err}")
-                # Deliver Medical Diagram if student requested visual
-                try:
-                    await deliver_medical_diagram_if_requested(sender_phone, clean_topic, user_msg)
-                except Exception as diag_err:
-                    print(f"⚠️ Cache diagram error: {diag_err}")
                 
                 if chat_history_col is not None:
                     await save_turn(sender_phone, user_msg, cached_answer)
@@ -6160,12 +5988,6 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             except Exception as vid_err:
                 print(f"⚠️ Error sending video CTA card: {vid_err}")
 
-        # Deliver Medical Diagram if student requested visual/illustration
-        if not is_not_covered:
-            try:
-                await deliver_medical_diagram_if_requested(sender_phone, clean_topic, user_msg)
-            except Exception as diag_err:
-                print(f"⚠️ Main pipeline diagram error: {diag_err}")
 
         if chat_history_col is not None:
             await save_turn(sender_phone, user_msg, ai_answer)
