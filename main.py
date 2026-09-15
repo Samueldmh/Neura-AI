@@ -4590,50 +4590,62 @@ async def send_subject_book_menu(sender_phone: str, level: str, subject: str) ->
         # Single-book subject: clean 1-tap selection with friendly name
         single_book = all_books[0]
         disp_name = BOOK_DISPLAY_NAMES.get(single_book, single_book)
-        body_text = f"Please select your preferred textbook for *{subject}*:"
-        options = [{
-            "id": single_book,
-            "title": disp_name[:24].strip(),
-            "description": disp_name[:72].strip()
-        }]
+        body_text = f"Select your preferred textbook for *{subject}*:"
+        options = [
+            {"id": single_book, "title": disp_name[:24].strip(), "description": f"Select {disp_name}"[:72]},
+            {"id": "SKIP_SUBJECT", "title": "⏭️ Skip / None", "description": f"Skip {subject} for now"}
+        ]
         await send_whatsapp_interactive_list(sender_phone, body_text, "Select Textbook", options)
     else:
-        # Multi-book subject: Live Checklist Dropdown with friendly names
+        # Multi-book subject: Live Checklist Dropdown with Select All and Done buttons
         selected_for_subject = [b for b in all_books if b in preferred_books]
         
         # Build visual checklist lines
         checklist_lines = []
         for b in all_books:
-            b_display = BOOK_DISPLAY_NAMES.get(b, b.split(":")[0])[:40]
+            b_display = BOOK_DISPLAY_NAMES.get(b, b.split(":")[0])[:38]
             if b in selected_for_subject:
                 checklist_lines.append(f"• [✓] *{b_display}*")
             else:
                 checklist_lines.append(f"• [  ] {b_display}")
         checklist_str = "\n".join(checklist_lines)
         
-        if selected_for_subject:
-            body_text = (
-                f"📚 *{subject} Textbooks* ({len(selected_for_subject)}/{len(all_books)} Selected):\n"
-                f"{checklist_str}\n\n"
-                f"Tap a book below to add/remove, or tap Finish when you're done!"
-            )
-        else:
-            body_text = (
-                f"📚 *{subject} Textbooks* (0/{len(all_books)} Selected):\n"
-                f"{checklist_str}\n\n"
-                f"Tap a textbook below to select it:"
-            )
-            
+        body_text = (
+            f"📚 *{subject} Textbooks* ({len(selected_for_subject)}/{len(all_books)} Selected):\n"
+            f"{checklist_str}\n\n"
+            "👉 Tap books to add them, tap *Select All* to take all of them, or tap *Done* to continue!"
+        )
+        
         options = []
-        # Add Finish option if at least 1 book is selected
+        # Option 1: Done & Next Subject (Always available so students can proceed anytime)
         if selected_for_subject:
             options.append({
                 "id": f"FINISH_SUBJECT_{subject}",
-                "title": "✅ Finish & Next Subject",
-                "description": f"Proceed with {len(selected_for_subject)} selected book(s)"
+                "title": "✅ Done & Next Subject",
+                "description": f"Proceed with {len(selected_for_subject)} selected textbook(s)"
+            })
+        else:
+            options.append({
+                "id": f"FINISH_SUBJECT_{subject}",
+                "title": "⏭️ Skip & Next Subject",
+                "description": f"Continue without selecting any {subject} books"
+            })
+
+        # Option 2: Select All / Deselect All
+        if len(selected_for_subject) < len(all_books):
+            options.append({
+                "id": f"SELECT_ALL_{subject}",
+                "title": f"✨ Select All ({len(all_books)} books)"[:24],
+                "description": f"Select all {subject} textbooks in 1 tap"
+            })
+        else:
+            options.append({
+                "id": f"CLEAR_ALL_{subject}",
+                "title": "🔄 Deselect All",
+                "description": f"Unselect all {subject} books"
             })
             
-        # List all books with friendly short titles and Add / Remove indicators
+        # Individual books: Add / Remove
         for b in all_books:
             disp_name = BOOK_DISPLAY_NAMES.get(b, b)
             short_name = disp_name[:18].strip()
@@ -4848,10 +4860,10 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
                 return True
             
         new_level = user_msg
-        std_books = get_all_curriculum_books_for_level(new_level)
+        # Start with empty selection so students can cleanly select 1, 2, 3, or all books manually!
         await users_col.update_one(
             {"user_id": sender_phone},
-            {"$set": {"level": new_level, "preferred_books_list": std_books}}
+            {"$set": {"level": new_level, "preferred_books_list": []}}
         )
         
         # Start subject loop
@@ -4883,6 +4895,24 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             has_more = await send_next_subject_menu(sender_phone, level, current_subject)
             if not has_more:
                 await complete_onboarding(sender_phone)
+            return True
+
+        # Handle Select All in 1 tap
+        if user_msg == f"SELECT_ALL_{current_subject}" or user_msg.startswith(f"SELECT_ALL_{current_subject}") or "Select All" in user_msg:
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$addToSet": {"preferred_books_list": {"$each": all_subject_books}}}
+            )
+            await send_subject_book_menu(sender_phone, level, current_subject)
+            return True
+
+        # Handle Deselect All in 1 tap
+        if user_msg == f"CLEAR_ALL_{current_subject}" or user_msg.startswith(f"CLEAR_ALL_{current_subject}") or "Deselect All" in user_msg:
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$pull": {"preferred_books_list": {"$in": all_subject_books}}}
+            )
+            await send_subject_book_menu(sender_phone, level, current_subject)
             return True
             
         # B. Handle Toggle / Book Selection
