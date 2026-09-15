@@ -110,7 +110,7 @@ def get_all_curriculum_books_for_level(level: str) -> list:
                 books.append(b)
     return books
 
-app = FastAPI(title="NEURA AI Backend", version="2.0.0")
+app = FastAPI(title="Ranviar Backend", version="2.0.0")
 
 # Initialize FastEmbed & Qdrant Client
 print("Initializing FastEmbed & Qdrant Client...")
@@ -331,7 +331,7 @@ async def update_user_study_streak(user_id: str) -> int:
 # Concurrency Limiter for Automated Streak Nudges: bounds parallel LLM generations and WhatsApp sends to 10
 STREAK_NUDGE_SEMAPHORE = asyncio.Semaphore(10)
 
-STREAK_MSG_PROMPT = """You are writing a short, warm WhatsApp daily study nudge for a medical student on NEURA AI.
+STREAK_MSG_PROMPT = """You are writing a short, warm WhatsApp daily study nudge for a medical student on Ranviar.
 
 Student name: {name}
 Current streak: {streak_count} day(s) {streak_note}
@@ -526,7 +526,7 @@ async def register_whatsapp_chat_commands():
         {"command_name": "quiz", "command_description": "Start an interactive MBBS clinical quiz"},
         {"command_name": "reminders", "command_description": "Toggle daily study streak reminders on/off"},
         {"command_name": "deletedoc", "command_description": "Remove a document from your study vault"},
-        {"command_name": "feedback", "command_description": "Share anonymous feedback on NEURA AI"},
+        {"command_name": "feedback", "command_description": "Share anonymous feedback on Ranviar"},
         {"command_name": "reset", "command_description": "Reset profile & chat history to start over"}
     ]
     payload = {"commands": commands}
@@ -644,7 +644,7 @@ Reference material (for your own understanding — do not quote it directly):
 """
 SYSTEM_MEDICAL_PROMPT = SYSTEM_PROMPT
 
-SYSTEM_QUIZ_PROMPT = """{user_context}You are NEURA AI. Based on the retrieved medical context, generate exactly 7 rigorous, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions (MCQs).
+SYSTEM_QUIZ_PROMPT = """{user_context}You are Ranviar. Based on the retrieved medical context, generate exactly 7 rigorous, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions (MCQs).
 
 RULES FOR MCQs:
 1. NO PREAMBLES & NO CONVERSATIONAL FILLER: Start immediately with Question 1. Never include introductory conversational chatter, greetings, or announcements.
@@ -656,7 +656,7 @@ RULES FOR MCQs:
    - For every answer, explain why the correct option is right AND why the key distractor options are wrong. State the clinical rationale directly without meta-commentary about textbooks or sources.
 """
 
-SYSTEM_INTERACTIVE_QUIZ_PROMPT = """You are NEURA AI, an elite medical study assistant and co-pilot for MBBS students.
+SYSTEM_INTERACTIVE_QUIZ_PROMPT = """You are Ranviar, an elite medical study assistant and co-pilot for MBBS students.
 Your task is to generate exactly 5 rigorous, high-yield, medical-school standard (MBBS / USMLE Step 1 & 2 style) Multiple Choice Questions that test the student DIRECTLY and EXCLUSIVELY on the MEDICAL EXPLANATION AND CLINICAL CONCEPTS provided in the prompt.
 
 CRITICAL RULES:
@@ -714,7 +714,7 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
 
     # 2.1 Direct Name Callout or Friendly Presence Check Fast-Path (<0.01ms)
     msg_no_punc = re.sub(r'[^\w\s]', ' ', msg_clean).strip()
-    if msg_no_punc in ["neura", "neura ai", "hey neura", "hi neura", "hello neura", "neura dear"]:
+    if msg_no_punc in ["ranviar", "ranviar ai", "hey ranviar", "hi ranviar", "hello ranviar", "ranviar dear"]:
         return "CONVERSATIONAL"
 
     # 2.2 Presence Check-ins, Emotional Venting & Casual Banter Fast-Path (Guarded against compound medical queries)
@@ -727,9 +727,9 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
         r"\b(med\s*school\s*(is\s*)?(hard|killing\s*me|stressful|tough|choking\s*me))\b",
         r"\b(ward\s*rounds?\s*(was|were|is)\s*(long|stressful|tiring|hectic|crazy|brutal))\b",
         r"\b(tell\s*me\s*a\s*joke|make\s*me\s*laugh)\b",
-        r"\b(who|which\s*person|is\s*it\s*\w+)\s*(that\s*)?(made|created|built|developed|designed|owns?|founded)\s*(you|neura)\b",
+        r"\b(who|which\s*person|is\s*it\s*\w+)\s*(that\s*)?(made|created|built|developed|designed|owns?|founded)\s*(you|ranviar)\b",
         r"\b(who\s*(is|are)\s*(your\s*)?(maker|creator|developer|founder|boss|father|owner|team))\b",
-        r"\b(did\s*\w+\s*(make|create|build)\s*(you|neura))\b",
+        r"\b(did\s*\w+\s*(make|create|build)\s*(you|ranviar))\b",
         r"\b(is\s*it\s*samuel)\b",
         r"\b(who\s*made\s*you|who\s*created\s*you|are\s*you\s*(real|human|an?\s*ai))\b",
         r"\b(what\s*are\s*you\s*doing|what('s|\s*is)\s*up\s*with\s*you)\b",
@@ -745,7 +745,7 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
         r"\b(how\s*far|wetin\s*dey|how\s*body|how\s*you\s*dey|how\s*things|kedu|bawo|sannu)\b",
         r"\b(boss\s*man|senior\s*man|chief|my\s*guy|boss)\b",
         r"\b(how\s*(are\s*you|r\s*u|is\s*it\s*going|you\s*doing|are\s*you\s*doing|everything))\b",
-        r"\b(who\s*are\s*you|what\s*is\s*neura(\s*ai)?|what\s*can\s*you\s*do|introduce\s*yourself)\b",
+        r"\b(who\s*are\s*you|what\s*is\s*ranviar(\s*ai)?|what\s*can\s*you\s*do|introduce\s*yourself)\b",
         r"\b(hallo|wie\s*geht'?s|guten\s*tag|servus|moin|bonjour|salut|cava|comment\s*ca\s*va|hola|buenos\s*dias)\b"
     ]
     if any(re.search(pat, msg_clean) for pat in greeting_patterns) and len(msg_clean.split()) <= 4:
@@ -809,9 +809,9 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
                     dialog_str = "RECENT CONVERSATION HISTORY:\n" + "\n".join(turns) + "\n\n"
 
             router_prompt = (
-                "You are an expert conversational intent classifier for NEURA AI, a medical study companion for MBBS students.\n"
+                "You are an expert conversational intent classifier for Ranviar, a medical study companion for MBBS students.\n"
                 "Read the RECENT CONVERSATION HISTORY (if provided) and the student's LATEST MESSAGE to determine their true semantic intent:\n\n"
-                "- PLATFORM_META: Questions about the NEURA AI platform itself, its features, commands (/wallet, /deposit, /feedback, /profile), anonymous beta testing, privacy, data confidentiality, pricing, token balance, how the bot works, or who created it.\n"
+                "- PLATFORM_META: Questions about the Ranviar platform itself, its features, commands (/wallet, /deposit, /feedback, /profile), anonymous beta testing, privacy, data confidentiality, pricing, token balance, how the bot works, or who created it.\n"
                 "  * CRITICAL CONTEXT RULE: If the assistant just mentioned 'beta feedback', 'wallet', 'streak', or commands and the student asks 'what do you mean by that?', 'why?', or asks for clarification, classify as PLATFORM_META!\n"
                 "- GREETING: Simple greetings, hello, foreign greetings (e.g. 'bonjour', 'kedu', 'bawo').\n"
                 "- CONVERSATIONAL: Casual banter, presence checks ('are you there', 'u there', 'are you still there', 'you awake'), emotional venting ('I am so tired', 'ward rounds were tough', 'med school is hard'), personal study check-ins, or motivation.\n"
@@ -827,8 +827,8 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
             headers = {
                 "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://neura-ai.org",
-                "X-Title": "NEURA AI Intent Router"
+                "HTTP-Referer": "https://ranviar.org",
+                "X-Title": "Ranviar Intent Router"
             }
             user_input_with_history = f"{dialog_str}LATEST STUDENT MESSAGE:\n\"{message}\""
             payload = {
@@ -884,8 +884,8 @@ async def call_openrouter_llm(
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://neura-ai.org",
-        "X-Title": "NEURA AI Medical Assistant"
+        "HTTP-Referer": "https://ranviar.org",
+        "X-Title": "Ranviar Medical Assistant"
     }
     
     messages = [{"role": "system", "content": system_prompt}]
@@ -955,8 +955,8 @@ async def stream_openrouter_llm_to_whatsapp(system_prompt: str, user_prompt: str
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://neura-ai.org",
-        "X-Title": "NEURA AI Medical Assistant"
+        "HTTP-Referer": "https://ranviar.org",
+        "X-Title": "Ranviar Medical Assistant"
     }
     
     messages = [{"role": "system", "content": system_prompt}]
@@ -1777,7 +1777,7 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
     
     try:
         req_headers = {
-            "User-Agent": "NeuraAI-MedicalBot/2.0 (contact: info@neura.ai; MBBS study assistant)",
+            "User-Agent": "Ranviar-MedicalBot/2.0 (contact: info@ranviar.org; MBBS study assistant)",
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
         }
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=req_headers) as downloader:
@@ -1837,7 +1837,7 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
 # VOICE NOTE & SPEECH-TO-TEXT ENGINE (Groq Whisper Large v3)
 # ==========================================
 WHISPER_MEDICAL_PROMPT = (
-    "NEURA AI medical study session: MBBS student discussing Anatomy, Physiology, "
+    "Ranviar medical study session: MBBS student discussing Anatomy, Physiology, "
     "Biochemistry, Pathology, Pharmacology, Microbiology, Haematology, Histopathology, "
     "Chemical Pathology, Obstetrics & Gynaecology, Medicine & Surgery, Nigerian context."
 )
@@ -2479,7 +2479,7 @@ def extract_docx_pages_from_bytes(docx_bytes: bytes, filename: str) -> tuple[boo
 
 def extract_document_pages_from_bytes(file_bytes: bytes, filename: str, mime_type: str = "") -> tuple[bool, str, list[tuple[int, str]], dict]:
     """
-    Unified multi-format document parser for NEURA AI.
+    Unified multi-format document parser for Ranviar.
     Routes intelligently to:
     - Legacy 97-2003 binary formats (.doc, .ppt) checked FIRST to provide immediate conversion guidance.
     - Microsoft PowerPoint (.pptx)
@@ -2531,7 +2531,7 @@ async def evaluate_document_is_medical(sample_text: str, filename: str) -> dict:
         }
 
     prompt = (
-        "You are a strict academic gatekeeper for NEURA AI, an MBBS medical school study assistant.\n"
+        "You are a strict academic gatekeeper for Ranviar, an MBBS medical school study assistant.\n"
         f"File Name: {filename}\n"
         "Document Sample Text:\n"
         f"\"\"\"{sample_text[:2000]}\"\"\"\n\n"
@@ -2893,7 +2893,7 @@ async def process_whatsapp_document(
     if not is_supported_ext and not is_supported_mime:
         msg = (
             "📄 *Supported Document Formats*\n\n"
-            f"I received *{filename}*, but Neura AI currently reads:\n"
+            f"I received *{filename}*, but Ranviar currently reads:\n"
             "• 📑 *PDF Documents* (`.pdf`)\n"
             "• 📝 *Word Documents* (`.docx`)\n"
             "• 📊 *PowerPoint Slides* (`.pptx`)\n\n"
@@ -3092,7 +3092,7 @@ async def process_whatsapp_document(
                                 "📷 *Image-Only Slides Detected*\n\n"
                                 f"*{filename}* contains image photos with no selectable digital text "
                                 f"({empty_p} of {tot_p} slides, ~{pct:.0f}%, have no readable text).\n\n"
-                                "Neura AI searches and quizzes you directly on selectable digital text. "
+                                "Ranviar searches and quizzes you directly on selectable digital text. "
                                 "Please export slides with selectable digital text or notes! 💡🔍"
                             )
                         else:
@@ -3100,7 +3100,7 @@ async def process_whatsapp_document(
                                 "📷 *Scanned Image / Non-Text Document Detected*\n\n"
                                 f"*{filename}* contains scanned images with no readable digital text "
                                 f"({empty_p} of {tot_p} pages, ~{pct:.0f}%, are image-only photos/scans).\n\n"
-                                "Neura AI searches and quizzes you directly on selectable digital text. "
+                                "Ranviar searches and quizzes you directly on selectable digital text. "
                                 "Please run an OCR tool (e.g. Adobe Scan, CamScanner OCR, or Google Drive OCR) or export slides with selectable digital text! 💡🔍"
                             )
                     else:
@@ -3155,7 +3155,7 @@ async def process_whatsapp_document(
                         msg = (
                             f"📋 *Document Not Indexed: {filename}*\n\n"
                             f"{rejection_reason}\n\n"
-                            "To keep your personal study vault focused and accurate for your MBBS exams, *NEURA AI* only indexes medical lecture slides, textbook chapters, and clinical handouts! 🩺📚"
+                            "To keep your personal study vault focused and accurate for your MBBS exams, *Ranviar* only indexes medical lecture slides, textbook chapters, and clinical handouts! 🩺📚"
                         )
                         await send_whatsapp_cloud_msg(sender_phone, msg)
                         try:
@@ -3458,7 +3458,7 @@ async def initialize_flutterwave_transaction(amount_ngn: int, email: str, phone:
         "Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY.strip()}",
         "Content-Type": "application/json"
     }
-    reference = f"NEURA_{phone}_{uuid.uuid4().hex[:8]}"
+    reference = f"RANVIAR_{phone}_{uuid.uuid4().hex[:8]}"
     payload = {
         "tx_ref": reference,
         "amount": str(amount_ngn),
@@ -3471,8 +3471,8 @@ async def initialize_flutterwave_transaction(amount_ngn: int, email: str, phone:
             "name": name
         },
         "customizations": {
-            "title": "NEURA AI Wallet Top-Up",
-            "description": f"NEURA AI MBBS Study Assistant (₦{amount_ngn:,})",
+            "title": "Ranviar Wallet Top-Up",
+            "description": f"Ranviar MBBS Study Assistant (₦{amount_ngn:,})",
             "logo": "https://raw.githubusercontent.com/Samueldmh/Neura-AI/main/assets/logo.png"
         }
     }
@@ -3495,7 +3495,7 @@ async def initialize_paystack_transaction(amount_ngn: int, email: str, phone: st
         "Authorization": f"Bearer {PAYSTACK_SECRET_KEY.strip()}",
         "Content-Type": "application/json"
     }
-    reference = f"NEURA_{phone}_{uuid.uuid4().hex[:8]}"
+    reference = f"RANVIAR_{phone}_{uuid.uuid4().hex[:8]}"
     payload = {
         "amount": amount_ngn * 100,
         "email": email,
@@ -3511,7 +3511,7 @@ async def initialize_paystack_transaction(amount_ngn: int, email: str, phone: st
                 },
                 {
                     "display_name": "Product",
-                    "variable_name": "NEURA AI Wallet Credit"
+                    "variable_name": "Ranviar Wallet Credit"
                 }
             ]
         }
@@ -3530,7 +3530,7 @@ async def initialize_paystack_transaction(amount_ngn: int, email: str, phone: st
 async def send_deposit_menu(sender_phone: str, current_balance: float):
     """Sends the hybrid deposit menu with quick presets and custom amount prompt"""
     body_text = (
-        f"💳 *NEURA AI Wallet Top-Up*\n\n"
+        f"💳 *Ranviar Wallet Top-Up*\n\n"
         f"• Current Balance: *₦{current_balance:.2f}*\n"
         f"• Minimum Deposit: *₦500*\n\n"
         f"Tap a quick tier below, or reply with any custom amount (e.g. *500*, *1000*, *1500*, or */deposit 500*):"
@@ -3576,7 +3576,7 @@ async def handle_deposit_request(sender_phone: str, user_msg: str) -> bool:
         )
         return True
 
-    email = f"user_{sender_phone.replace('+', '')}@neura.ai"
+    email = f"user_{sender_phone.replace('+', '')}@ranviar.org"
     
     # Try Flutterwave first, fallback to Paystack if configured
     auth_url = None
@@ -3587,7 +3587,7 @@ async def handle_deposit_request(sender_phone: str, user_msg: str) -> bool:
 
     if auth_url:
         card_body = (
-            f"💳 *NEURA AI In-App Checkout*\n\n"
+            f"💳 *Ranviar In-App Checkout*\n\n"
             f"• Amount: *₦{amount_ngn:,}*\n"
             f"• Payment Gateway: *Flutterwave*\n"
             f"• Status: *Ready*\n\n"
@@ -3604,7 +3604,7 @@ async def handle_deposit_request(sender_phone: str, user_msg: str) -> bool:
 async def send_commands_menu(sender_phone: str):
     """Sends an interactive WhatsApp List containing all available slash commands with 1-tap execution"""
     body_text = (
-        "📋 *NEURA AI Commands Menu*\n\n"
+        "📋 *Ranviar Commands Menu*\n\n"
         "Tap a command below to execute it instantly, or type any of them directly into the chat:"
     )
     options = [
@@ -3616,7 +3616,7 @@ async def send_commands_menu(sender_phone: str):
         {"id": "/update level", "title": "🎓 /update level", "description": "Update your current class/level (e.g. 400L)"},
         {"id": "/documents", "title": "📑 /documents", "description": "View your uploaded lecture slides & handouts"},
         {"id": "/reset", "title": "🔄 /reset", "description": "Reset full profile & chat history to start over"},
-        {"id": "/feedback", "title": "📝 /feedback", "description": "Share anonymous feedback on NEURA AI"},
+        {"id": "/feedback", "title": "📝 /feedback", "description": "Share anonymous feedback on Ranviar"},
     ]
     await send_whatsapp_interactive_list(sender_phone, body_text, "View Commands", options)
 
@@ -3641,7 +3641,7 @@ SEARCH_STOP_WORDS = {
     "diagram", "diagrams", "illustration", "illustrations", "picture", "pictures",
     "image", "images", "draw", "drawing", "drawings", "photo", "photos", "pic", "pics",
     "sketch", "visual", "visualize", "view",
-    "neura", "ai", "there", "still", "here", "u", "ur", "ready", "online", "awake",
+    "ranviar", "ai", "there", "still", "here", "u", "ur", "ready", "online", "awake",
     "samuel", "sam", "creator", "developer", "founder", "maker", "built", "build"
 }
 
@@ -3904,8 +3904,8 @@ async def normalize_medical_query(user_msg: str, chat_history: list = None) -> d
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://neura-ai.org",
-        "X-Title": "NEURA AI Medical Assistant"
+        "HTTP-Referer": "https://ranviar.org",
+        "X-Title": "Ranviar Medical Assistant"
     }
     
     dialog_str = ""
@@ -3982,8 +3982,8 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list, stu
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://neura-ai.org",
-        "X-Title": "NEURA AI Medical Assistant"
+        "HTTP-Referer": "https://ranviar.org",
+        "X-Title": "Ranviar Medical Assistant"
     }
     system_prompt = (
         "You are an expert MBBS medical retrieval evaluator and intelligent clinical study co-pilot.\n"
@@ -4430,7 +4430,7 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             upsert=True
         )
         welcome_msg = (
-            "Hello! 👋 I'm *NEURA AI*, your clinical co-pilot and medical study assistant.\n\n"
+            "Hello! 👋 I'm *Ranviar*, your clinical co-pilot and medical study assistant.\n\n"
             "I'm here to help you master complex clinical concepts, diagnose medical cases, and practice high-yield exam MCQs tailored to your level.\n\n"
             "To get started, what is your first name?"
         )
@@ -4715,9 +4715,9 @@ async def send_quiz_question(sender_phone: str, quiz_state: dict):
         elif percentage >= 60:
             result_msg += "👍 Good effort! Review the citations to sharpen your knowledge."
         else:
-            result_msg += "📖 Keep practicing! Ask NEURA AI to explain the topic again to strengthen your core concepts."
+            result_msg += "📖 Keep practicing! Ask Ranviar to explain the topic again to strengthen your core concepts."
 
-        result_msg += "\n\n💬 _Help us improve NEURA AI! Share quick anonymous feedback: https://forms.gle/dNr7SV5EUiqiFySx5_"
+        result_msg += "\n\n💬 _Help us improve Ranviar! Share quick anonymous feedback: https://forms.gle/dNr7SV5EUiqiFySx5_"
 
         await send_whatsapp_cloud_msg(sender_phone, result_msg)
         await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
@@ -4728,7 +4728,7 @@ async def send_quiz_question(sender_phone: str, quiz_state: dict):
     vignette = q.get("vignette", "")
 
     question_text = (
-        f"🏥 *NEURA AI MBBS Exam Quiz* (Q{q_num}/{total})\n\n"
+        f"🏥 *Ranviar MBBS Exam Quiz* (Q{q_num}/{total})\n\n"
         f"{vignette}\n\n"
         f"A) {q.get('option_a')}\n"
         f"B) {q.get('option_b')}\n"
@@ -5023,7 +5023,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     await users_col.update_one({"user_id": sender_phone}, {"$set": {"reminders_enabled": True}}, upsert=True)
                     await send_whatsapp_cloud_msg(
                         sender_phone,
-                        "🔔 *Study Streak Reminders Enabled!*\n\nNEURA AI will gently safeguard your streak if you're inactive for 8–12 hours (between 6:00 AM and 11:00 PM WAT)."
+                        "🔔 *Study Streak Reminders Enabled!*\n\nRanviar will gently safeguard your streak if you're inactive for 8–12 hours (between 6:00 AM and 11:00 PM WAT)."
                     )
                     return
                 elif msg_lower in ["/reminders off", "/reminder off", "reminders off"]:
@@ -5040,7 +5040,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     rem_body = (
                         f"⏰ *Study Streak Reminders*\n\n"
                         f"Current Status: *{status_str}*\n\n"
-                        "NEURA AI sends a personalized study nudge if you haven't studied for 8–12 hours to protect your daily streak.\n\n"
+                        "Ranviar sends a personalized study nudge if you haven't studied for 8–12 hours to protect your daily streak.\n\n"
                         "Tap an option below to update:"
                     )
                     rem_buttons = [
@@ -5051,11 +5051,11 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     return
                 elif msg_lower == "/feedback":
                     feedback_msg = (
-                        "📝 *NEURA AI Beta Feedback Survey*\n\n"
-                        "Your feedback helps us make NEURA AI 10x better for medical students!\n\n"
+                        "📝 *Ranviar Beta Feedback Survey*\n\n"
+                        "Your feedback helps us make Ranviar 10x better for medical students!\n\n"
                         "This survey is 100% anonymous (takes under 2 minutes):\n"
                         "👉 https://forms.gle/dNr7SV5EUiqiFySx5\n\n"
-                        "Thank you for beta testing NEURA AI! 🧠⚡"
+                        "Thank you for beta testing Ranviar! 🧠⚡"
                     )
                     await send_whatsapp_cloud_msg(sender_phone, feedback_msg)
                     return
@@ -5370,14 +5370,14 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         
         if intent == "GREETING":
             clean_msg = user_msg.strip().lower()
-            is_intro = any(w in clean_msg for w in ["who are you", "what is neura", "what can you do", "introduce yourself", "wer bist du", "qui es-tu"])
+            is_intro = any(w in clean_msg for w in ["who are you", "what is ranviar", "what can you do", "introduce yourself", "wer bist du", "qui es-tu"])
             is_german = any(w in clean_msg for w in ["wie geht", "hallo", "guten tag", "servus", "moin", "alles gut"])
             is_french = any(w in clean_msg for w in ["bonjour", "salut", "ca va", "comment ca va"])
             is_slang = any(w in clean_msg for w in ["how far", "boss man", "wetin", "my guy", "chief", "senior man", "yo", "wassup", "sup", "boss", "kedu", "bawo", "sannu"])
             
             if is_intro:
                 intro_msg = (
-                    f"Hello *{name}*! 👋 I am *NEURA AI* 🧠⚡ — your elite medical study co-pilot engineered specifically for MBBS students!\n\n"
+                    f"Hello *{name}*! 👋 I am *Ranviar* 🧠⚡ — your elite medical study co-pilot engineered specifically for MBBS students!\n\n"
                     f"🩺 *What I do:*\n"
                     f"• Deliver instant, high-yield clinical breakdowns and in-depth pathophysiological explanations.\n"
                     f"• Drill you with interactive 1-by-1 USMLE/MBBS practice MCQs with instant feedback.\n"
@@ -5388,14 +5388,14 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 return
             elif is_german:
                 greeting_msg = (
-                    f"Hallo *{name}*! 👋 Ich bin *NEURA AI* 🧠⚡ — dein medizinischer Lernassistent und Co-Pilot für dein Medizinstudium!\n\n"
+                    f"Hallo *{name}*! 👋 Ich bin *Ranviar* 🧠⚡ — dein medizinischer Lernassistent und Co-Pilot für dein Medizinstudium!\n\n"
                     f"Welches medizinische Thema oder welchen klinischen Fall möchtest du heute durchgehen?"
                 )
                 await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
                 return
             elif is_french:
                 greeting_msg = (
-                    f"Bonjour *{name}*! 👋 Je suis *NEURA AI* 🧠⚡ — ton assistant d'études médicales et co-pilote pour tes études de médecine!\n\n"
+                    f"Bonjour *{name}*! 👋 Je suis *Ranviar* 🧠⚡ — ton assistant d'études médicales et co-pilote pour tes études de médecine!\n\n"
                     f"Quel sujet médical ou cas clinique veux-tu explorer aujourd'hui?"
                 )
                 await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
@@ -5410,7 +5410,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 return
             else:
                 greeting_msg = (
-                    f"Hello *{name}*! 👋 Welcome to *NEURA AI* — Your Personal Medical Co-Pilot! 🧠⚡\n\n"
+                    f"Hello *{name}*! 👋 Welcome to *Ranviar* — Your Personal Medical Co-Pilot! 🧠⚡\n\n"
                     f"What medical topic, clinical case, or concept are we mastering today?"
                 )
                 await send_whatsapp_cloud_msg(sender_phone, greeting_msg)
@@ -5418,12 +5418,12 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         if intent == "PLATFORM_META":
             platform_system = (
-                f"You are Neura, the AI medical study companion for Nigerian MBBS students chatting with {name} on WhatsApp.\n"
-                "The student is asking a question about the NEURA AI platform, beta testing, privacy, feedback, or app features.\n"
+                f"You are Ranviar, the AI medical study companion for Nigerian MBBS students chatting with {name} on WhatsApp.\n"
+                "The student is asking a question about the Ranviar platform, beta testing, privacy, feedback, or app features.\n"
                 "GUIDELINES:\n"
                 "- Answer directly, warmly, and naturally in 1 to 3 short sentences.\n"
                 "- If asked what 'anonymous beta feedback' means, explain simply: 'Anonymous beta feedback just means any bug reports, impressions, or suggestions you share are completely confidential and never linked to your name or phone number—so you can be 100% honest with us! 😊'\n"
-                "- If asked who created you or what Neura is, explain that Neura is an AI study co-pilot built specifically for Nigerian MBBS medical students, grounded in accredited curriculum textbooks.\n"
+                "- If asked who created you or what Ranviar is, explain that Ranviar is an AI study co-pilot built specifically for Nigerian MBBS medical students, grounded in accredited curriculum textbooks.\n"
                 "- If asked about commands or wallet, mention they can type /commands to explore features.\n"
                 "- STRICT PROHIBITION: Under NO circumstances output a medical textbook lecture, headers, bulleted chapters, Senior Exam Tips, or YouTube video cards. Output pure natural conversational WhatsApp chat."
             )
@@ -5478,10 +5478,10 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
         if intent == "CONVERSATIONAL":
             conv_system = (
-                f"You are Neura, a brilliant, warm, and empathetic senior medical colleague (like a trusted senior resident or sharp study buddy) chatting with {name}, a {level} MBBS medical student on WhatsApp.\n"
+                f"You are Ranviar, a brilliant, warm, and empathetic senior medical colleague (like a trusted senior resident or sharp study buddy) chatting with {name}, a {level} MBBS medical student on WhatsApp.\n"
                 "PERSONA & VOICE GUIDELINES:\n"
                 "- Sound like an authentic, supportive human colleague texting on WhatsApp, NOT an AI bot, search engine, or robot.\n"
-                "- CREATOR / SAMUEL QUESTIONS: If asked who created you, who made you, or if Samuel made you ('Is it Samuel that made you?'): Acknowledge warmly, proudly, and directly! Yes, Samuel is the visionary developer and founder who engineered and trained NEURA AI specifically to help Nigerian MBBS students conquer their medical training.\n"
+                "- CREATOR / SAMUEL QUESTIONS: If asked who created you, who made you, or if Samuel made you ('Is it Samuel that made you?'): Acknowledge warmly, proudly, and directly! Yes, Samuel is the visionary developer and founder who engineered and trained Ranviar specifically to help Nigerian MBBS students conquer their medical training.\n"
                 "- If the student is checking in ('are you there', 'u there', emojis like 🥺), respond with genuine warmth and reassurance (e.g. 'Always right here with you! 😊 Taking a breather, or are we diving into something new?').\n"
                 "- If the student is exhausted, stressed, or venting about ward rounds / med school, validate their feelings with real empathy and encouragement (e.g. 'Ward rounds can be brutal, Doc. Grab some water and take a quick break—you've got this!').\n"
                 "- If they ask general study advice ('how do I study pharm', 'tips for 300L'), give practical, high-yield guidance in a peer-to-peer tone.\n"
@@ -5618,7 +5618,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         if not local_terms and not normalized_data.get("search_keywords"):
             print(f"[SAFETY VALVE] Query '{search_term}' has 0 medical keywords. Redirecting to Conversational Companion...")
             conv_system = (
-                f"You are Neura, a brilliant, warm, and supportive senior medical colleague talking to {name}, a {level} MBBS medical student on WhatsApp.\n"
+                f"You are Ranviar, a brilliant, warm, and supportive senior medical colleague talking to {name}, a {level} MBBS medical student on WhatsApp.\n"
                 "Respond warmly, naturally, and concisely in 1-2 sentences. Keep it conversational. Under no circumstances output textbook headers, bulleted lists, or clinical definitions here."
             )
             conv_reply = await call_openrouter_llm(conv_system, user_msg, max_tokens=200)
@@ -5725,7 +5725,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # 1. At least 2 medical chunks were retrieved
         # 2. At least one chunk has similarity score >= 0.65 (authentic textbook content)
         # 3. Topic does not contain platform/meta/conversational words
-        non_medical_words = ["feedback", "beta", "anonymous", "wallet", "deposit", "command", "profile", "streak", "hello", "hi", "how are you", "what is neura", "who made", "test", "reminder", "reset"]
+        non_medical_words = ["feedback", "beta", "anonymous", "wallet", "deposit", "command", "profile", "streak", "hello", "hi", "how are you", "what is ranviar", "who made", "test", "reminder", "reset"]
         clean_topic_lower = clean_topic.lower()
         should_fetch_video = (
             len(context_blocks) >= 2 and
@@ -5825,7 +5825,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
     except Exception as e:
         print(f"ERROR in process_whatsapp_message: {str(e)}")
         print(traceback.format_exc())
-        await send_whatsapp_cloud_msg(sender_phone, "Sorry, NEURA AI experienced a temporary connection delay. Please try asking your medical question again!")
+        await send_whatsapp_cloud_msg(sender_phone, "Sorry, Ranviar experienced a temporary connection delay. Please try asking your medical question again!")
     finally:
         gc.collect()
 
@@ -5837,7 +5837,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 def root():
     return {
         "status": "online",
-        "system": "NEURA AI Official WhatsApp Cloud API Backend v2.0",
+        "system": "Ranviar Official WhatsApp Cloud API Backend v2.0",
         "phone_number_id": PHONE_NUMBER_ID,
         "openrouter_configured": bool(OPENROUTER_API_KEY),
         "billing": "Flutterwave In-App WebView + Dynamic Token Multiplier"
@@ -5866,7 +5866,7 @@ async def flutterwave_webhook(request: Request):
             customer = data.get("customer", {})
             phone = customer.get("phone_number") or customer.get("phonenumber")
             
-            if not phone and "NEURA_" in tx_ref:
+            if not phone and "RANVIAR_" in tx_ref:
                 parts = tx_ref.split("_")
                 if len(parts) >= 2:
                     phone = parts[1]
@@ -5966,16 +5966,16 @@ async def payment_complete_page(request: Request):
     if is_successful:
         html_content = """
         <!DOCTYPE html>
-        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Confirmed - NEURA AI</title>
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Confirmed - Ranviar</title>
         <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#0f172a;text-align:center;}
         .card{background:white;padding:32px;border-radius:16px;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);max-width:400px;margin:20px;}
         .icon{font-size:48px;margin-bottom:16px;}h1{font-size:24px;margin:0 0 8px;color:#16a34a;}p{color:#64748b;font-size:16px;line-height:1.5;}</style></head>
-        <body><div class="card"><div class="icon">✅</div><h1>Payment Confirmed!</h1><p>Your NEURA AI wallet has been successfully credited. You can return to WhatsApp.</p></div></body></html>
+        <body><div class="card"><div class="icon">✅</div><h1>Payment Confirmed!</h1><p>Your Ranviar wallet has been successfully credited. You can return to WhatsApp.</p></div></body></html>
         """
     else:
         html_content = """
         <!DOCTYPE html>
-        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Cancelled - NEURA AI</title>
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Cancelled - Ranviar</title>
         <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#0f172a;text-align:center;}
         .card{background:white;padding:32px;border-radius:16px;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);max-width:400px;margin:20px;}
         .icon{font-size:48px;margin-bottom:16px;}h1{font-size:24px;margin:0 0 8px;color:#dc2626;}p{color:#64748b;font-size:16px;line-height:1.5;}</style></head>
@@ -6115,7 +6115,7 @@ async def chat_endpoint(req: QueryRequest):
         
         if intent == "GREETING":
             return {
-                "response": "Hello! 👋 I'm *NEURA AI*, your medical study assistant.\n\nI can answer medical questions directly from your textbooks (*Lippincott Pharmacology*, *Hoffbrand's Haematology*, etc.) with exact citations, or generate practice MCQs for your MBBS exams!\n\nWhat concept are we studying today?"
+                "response": "Hello! 👋 I'm *Ranviar*, your medical study assistant.\n\nI can answer medical questions directly from your textbooks (*Lippincott Pharmacology*, *Hoffbrand's Haematology*, etc.) with exact citations, or generate practice MCQs for your MBBS exams!\n\nWhat concept are we studying today?"
             }
         
         # Retrieve history and condense query into standalone question
@@ -6186,7 +6186,7 @@ async def chat_endpoint(req: QueryRequest):
         print(f"ERROR in chat_endpoint: {str(e)}")
         print(traceback.format_exc())
         return {
-            "response": f"NEURA AI encountered an error processing your query: {str(e)}. Please check backend API configuration!"
+            "response": f"Ranviar encountered an error processing your query: {str(e)}. Please check backend API configuration!"
         }
 
 # ==========================================
@@ -6731,7 +6731,7 @@ async def admin_dashboard_page():
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NEURA AI — Enterprise Administration Hub</title>
+  <title>Ranviar — Enterprise Administration Hub</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <style>
@@ -6969,7 +6969,7 @@ async def admin_dashboard_page():
     <div class="card w-full max-w-sm p-6 shadow-sm">
       <div class="border-b border-[#E4E6EA] pb-3 mb-5">
         <div class="text-xs font-bold uppercase tracking-wider text-[#5A5E67]">Internal Access</div>
-        <h2 class="text-lg font-bold text-[#17181A] mt-0.5">NEURA AI Enterprise Portal</h2>
+        <h2 class="text-lg font-bold text-[#17181A] mt-0.5">Ranviar Enterprise Portal</h2>
       </div>
       
       <div class="space-y-4">
@@ -7003,7 +7003,7 @@ async def admin_dashboard_page():
         <div class="p-5 border-b border-[#22262E] flex items-center justify-between">
           <div>
             <div class="text-sm font-bold text-white tracking-tight flex items-center gap-1.5">
-              <span>NEURA AI</span>
+              <span>Ranviar</span>
               <span class="text-[9px] bg-white/10 text-white px-1.5 py-0.5 rounded font-mono">2.0</span>
             </div>
             <div class="text-[10px] text-[#9298A3] uppercase tracking-wider mt-0.5">Clinical Suite</div>
@@ -7317,7 +7317,7 @@ async def admin_dashboard_page():
 
               <div class="wa-chat-bg p-3.5 rounded min-h-[220px] flex flex-col justify-start">
                 <div class="wa-bubble-ai p-3 text-xs space-y-1">
-                  <div class="text-[10px] font-bold uppercase tracking-wider text-[#008069] border-b border-[#E9EDEF] pb-0.5">NEURA AI Broadcast</div>
+                  <div class="text-[10px] font-bold uppercase tracking-wider text-[#008069] border-b border-[#E9EDEF] pb-0.5">Ranviar Broadcast</div>
                   <div id="preview-text" class="text-xs text-[#111B21] whitespace-pre-wrap leading-relaxed">
                     Type your announcement on the left to see live rendering.
                   </div>
@@ -7490,7 +7490,7 @@ async def admin_dashboard_page():
   </div>
 
   <script>
-    let authToken = localStorage.getItem("neura_admin_token") || "";
+    let authToken = localStorage.getItem("ranviar_admin_token") || "";
     let rawStudentsList = [];
     let rawChatThreads = [];
     let activeLevelFilter = "ALL";
@@ -7568,7 +7568,7 @@ async def admin_dashboard_page():
         if (res.ok) {
           const data = await res.json();
           authToken = data.token;
-          localStorage.setItem("neura_admin_token", authToken);
+          localStorage.setItem("ranviar_admin_token", authToken);
           showDashboard();
         } else {
           err.classList.remove("hidden");
@@ -7591,7 +7591,7 @@ async def admin_dashboard_page():
 
     function performLogout() {
       authToken = "";
-      localStorage.removeItem("neura_admin_token");
+      localStorage.removeItem("ranviar_admin_token");
       document.getElementById("dashboard-content").classList.add("hidden");
       document.getElementById("login-modal").classList.remove("hidden");
       document.getElementById("admin-pass").value = "";
@@ -7892,7 +7892,7 @@ async def admin_dashboard_page():
             const timeFormatted = formatFullDateTime(e.timestamp);
             const roleBadge = isUser 
               ? '<span class="text-[9px] font-bold text-[#008069] bg-[#E8F8F0] px-1.5 py-0.5 rounded">STUDENT</span>'
-              : '<span class="text-[9px] font-bold text-[#17181A] bg-[#F1F2F4] px-1.5 py-0.5 rounded">NEURA AI</span>';
+              : '<span class="text-[9px] font-bold text-[#17181A] bg-[#F1F2F4] px-1.5 py-0.5 rounded">Ranviar</span>';
 
             return `
               <div class="p-2 bg-white rounded border border-[#E4E6EA] space-y-1">
@@ -8158,7 +8158,7 @@ async def admin_dashboard_page():
             <div class="flex justify-start items-end gap-2">
               <div class="wa-bubble-ai p-3 max-w-[90%] sm:max-w-[80%] space-y-1">
                 <div class="text-[11px] font-bold text-[#008069] border-b border-[#E9EDEF] pb-1 mb-1 flex items-center justify-between">
-                  <span>${isBroadcast ? '📢 NEURA AI Broadcast' : 'NEURA AI Clinical Engine'}</span>
+                  <span>${isBroadcast ? '📢 Ranviar Broadcast' : 'Ranviar Clinical Engine'}</span>
                   ${m.metadata?.msg_type ? `<span class="text-[9px] font-mono text-[#667781]">(${m.metadata.msg_type})</span>` : ''}
                 </div>
                 ${hasIssue ? '<div class="mb-1 text-[10px] font-bold text-[#B7791F] bg-[#FEF7EC] border border-[#FAD7A0] px-1.5 py-0.5 rounded w-max">Diagnostic Alert</div>' : ''}
