@@ -140,30 +140,30 @@ AVAILABLE_BOOKS = {
 }
 
 BOOK_DISPLAY_NAMES = {
-    "Clinically Oriented Anatomy 8th Ed by Keith L Moore, Arthur F Dalley": "Keith L. Moore Clinically Oriented Anatomy (8th Ed)",
+    "Clinically Oriented Anatomy 8th Ed by Keith L Moore, Arthur F Dalley": "Moore's Clinically Oriented Anatomy (8th Ed)",
     "lasts anatomy 12th 1": "Last's Anatomy: Regional and Applied (12th Ed)",
-    "Junqueira's Basic Histology Text and Atlas ( PDFDrive )": "Junqueira's Basic Histology: Text and Atlas (15th Ed)",
-    "inderbir singhs textbook of human histology with colour atlas and practical guide 9nbsped 9389034973 9789389034974 compress": "Inderbir Singh's Human Histology with Colour Atlas (9th Ed)",
+    "Junqueira's Basic Histology Text and Atlas ( PDFDrive )": "Junqueira's Basic Histology (15th Ed)",
+    "inderbir singhs textbook of human histology with colour atlas and practical guide 9nbsped 9389034973 9789389034974 compress": "Inderbir Singh's Human Histology (9th Ed)",
     "langmans medical embryology 12th ed 1": "Langman's Medical Embryology (12th Ed)",
-    "Embryology KLM": "Moore The Developing Human: Clinically Oriented Embryology (KLM)",
-    "Embryo vishram singh 1 260114 093822": "Vishram Singh Clinical and Surgical Embryology",
-    "Guyton and Hall Textbook of Medical Physiology 13th Ed 2015": "Guyton & Hall Textbook of Medical Physiology (13th Ed)",
-    "K Sembulingam Essentials of Medical Physiology 6th Edition": "K. Sembulingam Essentials of Medical Physiology (6th Ed)",
-    "[Indu Khurana] Medical Physiology for Undergraduat(BookZZ.org)": "Indu Khurana Medical Physiology for Undergraduates",
+    "Embryology KLM": "Moore's Developing Human: Clinically Oriented Embryology",
+    "Embryo vishram singh 1 260114 093822": "Vishram Singh Clinical Embryology",
+    "Guyton and Hall Textbook of Medical Physiology 13th Ed 2015": "Guyton and Hall Medical Physiology (13th Ed)",
+    "K Sembulingam Essentials of Medical Physiology 6th Edition": "Sembulingam Essentials of Medical Physiology (6th Ed)",
+    "[Indu Khurana] Medical Physiology for Undergraduat(BookZZ.org)": "Indu Khurana Medical Physiology",
     "Lehninger Principles of Biochemistry, 5th Edition (2008, W. H. Freeman)": "Lehninger Principles of Biochemistry (5th Ed)",
-    "Textbook of Biochemistry For Medical Students 7th Edition": "DM Vasudevan Textbook of Biochemistry for Medical Students (7th Ed)",
-    "DM Vasudevan Textbook of Biochemistry For Medical Students 6th Edition 8": "DM Vasudevan Textbook of Biochemistry (6th Ed)",
-    "Basic & Clinical Pharmacology (Fourteenth Edition)": "Bertram Katzung Basic & Clinical Pharmacology (14th Ed)",
+    "Textbook of Biochemistry For Medical Students 7th Edition": "Vasudevan Textbook of Biochemistry (7th Ed)",
+    "DM Vasudevan Textbook of Biochemistry For Medical Students 6th Edition 8": "Vasudevan Textbook of Biochemistry (6th Ed)",
+    "Basic & Clinical Pharmacology (Fourteenth Edition)": "Katzung Basic & Clinical Pharmacology (14th Ed)",
     "Lippincott Illustrated Reviews: Pharmacology": "Lippincott Illustrated Reviews: Pharmacology (6th Ed)",
-    "Katzung & Trevor's Pharmacology Examination and Board Review ( PDFDrive.com )": "Katzung & Trevor's Pharmacology Examination and Board Review",
+    "Katzung & Trevor's Pharmacology Examination and Board Review ( PDFDrive.com )": "Katzung & Trevor's Pharmacology Board Review",
     "Martin and crooke clinical biochemistry": "Martin Crook Clinical Biochemistry in Practice",
     "Textbook Lippincott Illustrated Reviews Biochemistry, 8e by Emine Ercikan Abali, PhD Susan D. Cline, PhD David S. Franklin, PhD": "Lippincott Illustrated Reviews: Biochemistry (8th Ed)",
-    "Robbins Basic Pathology 10th Edition 2017 (1)": "Robbins Basic Pathology (10th Ed) - Kumar, Abbas, Aster",
+    "Robbins Basic Pathology 10th Edition 2017 (1)": "Robbins Basic Pathology (10th Ed)",
     "Essentials of Haematology": "Kawthalkar Essentials of Haematology (2nd Ed)",
     "Jawetz_Melnick_Adelbergs_Medical_Microbiology_27_edition_Med_zoneTV": "Jawetz, Melnick & Adelberg's Medical Microbiology (27th Ed)",
     "Ten teachers O&G": "Obstetrics & Gynaecology by Ten Teachers (20th Ed)",
-    "Nelson Essentials of Pediatrics by Karen Marcdante Robert Kliegman": "Nelson Essentials of Pediatrics - Marcdante & Kliegman",
-    "OceanofPDF.com Hutchisons Clinical Methods An Integrated Approach to Clinical Practice Edition 25 Michael Glynn": "Hutchison's Clinical Methods: An Integrated Approach (25th Ed)"
+    "Nelson Essentials of Pediatrics by Karen Marcdante Robert Kliegman": "Nelson Essentials of Pediatrics",
+    "OceanofPDF.com Hutchisons Clinical Methods An Integrated Approach to Clinical Practice Edition 25 Michael Glynn": "Hutchison's Clinical Methods (25th Ed)"
 }
 
 def get_all_curriculum_books_for_level(level: str) -> list:
@@ -4772,14 +4772,7 @@ async def complete_onboarding(sender_phone: str):
         f"🎉 Awesome, {name}! Your profile is all set up for *{level}*.\n\n"
         f"📚 *Your Selected Textbooks:*\n"
         f"{books_summary}\n\n"
-        f"You can now start asking me medical questions directly from these textbooks! 🧠⚡\n\n"
-        f"⚙️ *Quick Commands:*\n"
-        f"• Type */feedback* to share quick feedback\n"
-        f"• Type */profile* to view your profile\n"
-        f"• Type */update name* to change your name\n"
-        f"• Type */update level* to change your level\n"
-        f"• Type */update books* to change your textbooks\n\n"
-        f"💬 _Help us improve! Share 2-min anonymous beta feedback anytime: https://forms.gle/dNr7SV5EUiqiFySx5_"
+        f"You're all set! What medical topic or case are we studying today? 🧠⚡"
     )
     await send_whatsapp_cloud_msg(sender_phone, final_msg)
 
