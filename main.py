@@ -733,6 +733,7 @@ Rules:
 - If the reference material is thin or doesn't fully answer it, say so honestly rather than padding
 - Never use phrases like "based on the context," "according to the provided material," or "the document states." Speak as if you already know this, informed by the textbook.
 - STRICT MEDICAL SCOPE: You are exclusively an MBBS medical study companion. If a student asks about a subject completely outside human medicine, biology, healthcare, or clinical training (e.g. economics, macroeconomics, finance, computer coding, politics, sports, general pop culture), DO NOT attempt to answer it or invent medical analogies for it. Politely and warmly decline, and redirect the student to a clinical condition, pharmacology, anatomy, or pathology topic.
+- PLATFORM MEDIA CAPABILITIES: You fully accept and process PDF/Word/PowerPoint documents (up to 150MB, saved in their vault), photos/images (ECGs, histology, X-rays, pathology slides), and voice notes. If the student asks if you accept files or pictures, always affirm enthusiastically and guide them to send their materials.
 
 Reference material (for your own understanding — do not quote it directly):
 {retrieved_chunks}
@@ -846,9 +847,12 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
     if any(re.search(pat, msg_clean) for pat in greeting_patterns) and len(msg_clean.split()) <= 4:
         return "GREETING"
 
-    # 2.4 Platform, Beta Feedback & Privacy Fast-Path (<0.01ms)
+    # 2.4 Platform, Beta Feedback, Privacy & Media Capabilities Fast-Path (<0.01ms)
     platform_fast_patterns = [
-        r"\b(beta\s*feedback|anonymous|feedback|survey|privacy|confidential|wallet|deposit|how\s*to\s*use|commands?|features?)\b"
+        r"\b(beta\s*feedback|anonymous|feedback|survey|privacy|confidential|wallet|deposit|how\s*to\s*use|commands?|features?)\b",
+        r"\b(accept|take|support|send|upload|process|read|see|view)\s+(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|notes?|audio|voice\s*notes?|attachments?)\b",
+        r"\bcan\s+(i|you)\s+(send|upload|accept|read|see|view|take|process)\s+(you\s+)?(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|notes?|audio|voice\s*notes?|attachments?)\b",
+        r"\bdo\s+you\s+(accept|take|support|read|see|process)\s+(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|notes?|audio|voice\s*notes?|attachments?)\b"
     ]
     if any(re.search(pat, msg_clean) for pat in platform_fast_patterns) and not any(ind in msg_clean for ind in KNOWN_MED_INDICATORS):
         return "PLATFORM_META"
@@ -906,7 +910,7 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
             router_prompt = (
                 "You are an expert conversational intent classifier for Ranviar, a medical study companion for MBBS students.\n"
                 "Read the RECENT CONVERSATION HISTORY (if provided) and the student's LATEST MESSAGE to determine their true semantic intent:\n\n"
-                "- PLATFORM_META: Questions about the Ranviar platform itself, its features, commands (/wallet, /deposit, /feedback, /profile), anonymous beta testing, privacy, data confidentiality, pricing, token balance, how the bot works, or who created it.\n"
+                "- PLATFORM_META: Questions about the Ranviar platform itself, its features, media capabilities (accepting or uploading files, documents, lecture slides, PDFs, pictures, photos, images, voice notes), commands (/wallet, /deposit, /feedback, /profile, /documents), anonymous beta testing, privacy, data confidentiality, pricing, token balance, how the bot works, or who created it.\n"
                 "  * CRITICAL CONTEXT RULE: If the assistant just mentioned 'beta feedback', 'wallet', 'streak', or commands and the student asks 'what do you mean by that?', 'why?', or asks for clarification, classify as PLATFORM_META!\n"
                 "- GREETING: Simple greetings, hello, foreign greetings (e.g. 'bonjour', 'kedu', 'bawo').\n"
                 "- CONVERSATIONAL: Casual banter, presence checks ('are you there', 'u there', 'are you still there', 'you awake'), emotional venting ('I am so tired', 'ward rounds were tough', 'med school is hard'), personal study check-ins, or motivation.\n"
@@ -1624,6 +1628,7 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url
             }
         }
         status_ok = False
+        res = None
         try:
             res = await shared_http_client.post(url, headers=headers, json=payload)
             status_ok = (res.status_code == 200)
@@ -1636,7 +1641,9 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url
                 status_ok = False
         if not status_ok:
             all_success = False
-        print(f"Meta Graph API Send Status {res.status_code if 'res' in locals() else 'ERR'}: {getattr(res, 'text', '')}")
+        status_code = res.status_code if res is not None else 'ERR'
+        resp_text = getattr(res, 'text', '') if res is not None else ''
+        print(f"Meta Graph API Send Status {status_code}: {resp_text}")
         
     if all_success:
         try:
@@ -5463,6 +5470,38 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 await send_whatsapp_interactive_button(sender_phone, wallet_card, wallet_buttons)
                 return
 
+            # Direct inquiry about accepting files, documents, pictures, images, PDFs, slides, or voice notes
+            is_media_capability_query = bool(
+                re.search(r'\b(accept|take|support|read|see|process)\s+(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|voice\s*notes?|attachments?)\b', msg_lower) or
+                re.search(r'\b(can\s+(i|you)\s+(send|upload|give|drop|share|accept|read|see|view|process)\s+(you\s+)?(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|handouts?|voice\s*notes?|audio|attachments?))\b', msg_lower) or
+                re.search(r'\b(do\s+you\s+(accept|take|support|read|see|process)\s+(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|handouts?|voice\s*notes?|audio|attachments?))\b', msg_lower) or
+                re.search(r'\b(how\s+(do\s+i|can\s+i|to)\s+(upload|send)\s+(files?|pictures?|photos?|images?|documents?|pdfs?|slides?))\b', msg_lower) or
+                re.search(r'\b(what\s+(files?|documents?|pictures?|formats?)\s+(can\s+i\s+send|do\s+you\s+accept))\b', msg_lower)
+            )
+            if is_media_capability_query and not any(ind in msg_lower for ind in ["stemi", "infarction", "arrhythmia", "ischemia", "fracture", "pathophysiology"]):
+                name_val = "Doctor"
+                if users_col is not None:
+                    ud = await users_col.find_one({"user_id": sender_phone})
+                    if ud:
+                        name_val = ud.get("name", "Doctor")
+                media_info_card = (
+                    f"🩺 *Yes, Ranviar Fully Accepts Files & Pictures!* 📸📄\n\n"
+                    f"Hello *{name_val}*! You can send your study materials directly into this chat on WhatsApp:\n\n"
+                    f"• 📄 *Documents & Lecture Slides (PDF, Word, PPT)*:\n"
+                    f"  Tap the paperclip 📎 -> *Document* -> select your lecture notes or slides (up to *150MB*). Even scanned documents are read with AI OCR! Once uploaded, they are stored in your personal vault (up to 60 docs), so there is *no need to send a document more than once*.\n\n"
+                    f"• 📸 *Pictures & Clinical Images*:\n"
+                    f"  Send photos of histology slides, pathology specimens, ECG strips, chest X-rays, textbook diagrams, or clinical cases directly from your camera 📷 or gallery. I will analyze them with medical vision AI!\n\n"
+                    f"• 🎙️ *Voice Notes*:\n"
+                    f"  Tap and hold the microphone to ask questions by voice—I will transcribe and break down the concept thoroughly.\n\n"
+                    f"Go ahead and drop a document, picture, or clinical question whenever you're ready! 🚀"
+                )
+                media_buttons = [
+                    {"id": "/documents", "title": "📂 My Vault"},
+                    {"id": "/menu", "title": "📋 Main Menu"}
+                ]
+                await send_whatsapp_interactive_button(sender_phone, media_info_card, media_buttons)
+                return
+
             if msg_lower.startswith("/broadcast ") or msg_lower.startswith("broadcast "):
                 admin_phones = [p.strip() for p in os.getenv("ADMIN_PHONES", "").split(",") if p.strip()]
                 single_admin = os.getenv("ADMIN_PHONE", "").strip()
@@ -5940,11 +5979,42 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 return
 
         if intent == "PLATFORM_META":
+            # Check if this is specifically asking if we accept files, pictures, documents, etc.
+            is_media_query = bool(
+                re.search(r'\b(accept|take|support|read|see|process)\s+(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|voice\s*notes?|attachments?)\b', user_msg.lower()) or
+                re.search(r'\b(can\s+(i|you)\s+(send|upload|give|drop|share|accept|read|see|view|process)\s+(you\s+)?(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|handouts?|voice\s*notes?|audio|attachments?))\b', user_msg.lower()) or
+                re.search(r'\b(do\s+you\s+(accept|take|support|read|see|process)\s+(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|handouts?|voice\s*notes?|audio|attachments?))\b', user_msg.lower()) or
+                re.search(r'\b(how\s+(do\s+i|can\s+i|to)\s+(upload|send)\s+(files?|pictures?|photos?|images?|documents?|pdfs?|slides?))\b', user_msg.lower()) or
+                re.search(r'\b(what\s+(files?|documents?|pictures?|formats?)\s+(can\s+i\s+send|do\s+you\s+accept))\b', user_msg.lower())
+            )
+            if is_media_query and not any(ind in user_msg.lower() for ind in ["stemi", "infarction", "arrhythmia", "ischemia", "fracture", "pathophysiology"]):
+                media_info_card = (
+                    f"🩺 *Yes, Ranviar Fully Accepts Files & Pictures!* 📸📄\n\n"
+                    f"Hello *{name}*! You can send your study materials directly into this chat on WhatsApp:\n\n"
+                    f"• 📄 *Documents & Lecture Slides (PDF, Word, PPT)*:\n"
+                    f"  Tap the paperclip 📎 -> *Document* -> select your lecture notes or slides (up to *150MB*). Even scanned documents are read with AI OCR! Once uploaded, they are stored in your personal vault (up to 60 docs), so there is *no need to send a document more than once*.\n\n"
+                    f"• 📸 *Pictures & Clinical Images*:\n"
+                    f"  Send photos of histology slides, pathology specimens, ECG strips, chest X-rays, textbook diagrams, or clinical cases directly from your camera 📷 or gallery. I will analyze them with medical vision AI!\n\n"
+                    f"• 🎙️ *Voice Notes*:\n"
+                    f"  Tap and hold the microphone to ask questions by voice—I will transcribe and break down the concept thoroughly.\n\n"
+                    f"Go ahead and drop a document, picture, or clinical question whenever you're ready! 🚀"
+                )
+                media_buttons = [
+                    {"id": "/documents", "title": "📂 My Vault"},
+                    {"id": "/menu", "title": "📋 Main Menu"}
+                ]
+                await send_whatsapp_interactive_button(sender_phone, media_info_card, media_buttons)
+                return
+
             platform_system = (
                 f"You are Ranviar, the AI medical study companion for Nigerian MBBS students chatting with {name} on WhatsApp.\n"
                 "The student is asking a question about the Ranviar platform, beta testing, privacy, feedback, or app features.\n"
                 "GUIDELINES:\n"
                 "- Answer directly, warmly, and naturally in 1 to 3 short sentences.\n"
+                "- FILE, PICTURE, AND MEDIA CAPABILITIES: You FULLY accept and process files, documents, pictures, and voice notes! If asked whether you accept files or pictures, always confirm enthusiastically ('Yes! 🩺📸📄') and explain:\n"
+                "  1. Documents & PDFs: Students can send lecture notes, slides, or PDF handouts up to 150MB (even scanned documents with AI OCR!) via paperclip 📎 -> Document. They are stored in their personal study vault (up to 60 docs), so they never need to send a document more than once!\n"
+                "  2. Pictures & Images: Students can send photos of histology slides, pathology specimens, ECG strips, chest X-rays, or textbook diagrams directly via camera 📷 or gallery. You analyze them with medical vision AI!\n"
+                "  3. Voice Notes: Students can send WhatsApp voice notes anytime; you listen, transcribe, and break down medical concepts.\n"
                 "- If asked what 'anonymous beta feedback' means, explain simply: 'Anonymous beta feedback just means any bug reports, impressions, or suggestions you share are completely confidential and never linked to your name or phone number—so you can be 100% honest with us! 😊'\n"
                 "- If asked who created you or what Ranviar is, explain that Ranviar is an AI study co-pilot built specifically for Nigerian MBBS medical students, grounded in accredited curriculum textbooks.\n"
                 "- If asked about commands or wallet, mention they can type /commands to explore features.\n"
@@ -6004,6 +6074,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 f"You are Ranviar, a brilliant, warm, and empathetic senior medical colleague (like a trusted senior resident or sharp study buddy) chatting with {name}, a {level} MBBS medical student on WhatsApp.\n"
                 "PERSONA & VOICE GUIDELINES:\n"
                 "- Sound like an authentic, supportive human colleague texting on WhatsApp, NOT an AI bot, search engine, or robot.\n"
+                "- FILE & PICTURE CAPABILITIES: You FULLY accept files, documents (PDFs up to 150MB, slides, handouts saved in their vault up to 60 docs), pictures/photos (histology, ECGs, pathology, X-rays), and voice notes! If asked whether you accept files or pictures, always confirm enthusiastically and tell them to send them right away!\n"
                 "- CREATOR / SAMUEL QUESTIONS: If asked who created you, who made you, or if Samuel made you ('Is it Samuel that made you?'): Acknowledge warmly, proudly, and directly! Yes, Samuel is the visionary developer and founder who engineered and trained Ranviar specifically to help Nigerian MBBS students conquer their medical training.\n"
                 "- If the student is checking in ('are you there', 'u there', emojis like 🥺), respond with genuine warmth and reassurance (e.g. 'Always right here with you! 😊 Taking a breather, or are we diving into something new?').\n"
                 "- If the student is exhausted, stressed, or venting about ward rounds / med school, validate their feelings with real empathy and encouragement (e.g. 'Ward rounds can be brutal, Doc. Grab some water and take a quick break—you've got this!').\n"
