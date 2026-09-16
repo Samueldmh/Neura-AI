@@ -140,30 +140,30 @@ AVAILABLE_BOOKS = {
 }
 
 BOOK_DISPLAY_NAMES = {
-    "Clinically Oriented Anatomy 8th Ed by Keith L Moore, Arthur F Dalley": "Moore Anatomy (8e)",
-    "lasts anatomy 12th 1": "Last's Anatomy (12e)",
-    "Junqueira's Basic Histology Text and Atlas ( PDFDrive )": "Junqueira Histology",
-    "inderbir singhs textbook of human histology with colour atlas and practical guide 9nbsped 9389034973 9789389034974 compress": "Inderbir Singh Hist",
-    "langmans medical embryology 12th ed 1": "Langman Embryology (12e)",
-    "Embryology KLM": "KLM Embryology",
-    "Embryo vishram singh 1 260114 093822": "Vishram Singh Embryo",
-    "Guyton and Hall Textbook of Medical Physiology 13th Ed 2015": "Guyton & Hall Physio",
-    "K Sembulingam Essentials of Medical Physiology 6th Edition": "Sembulingam Physio",
-    "[Indu Khurana] Medical Physiology for Undergraduat(BookZZ.org)": "Indu Khurana Physio",
-    "Lehninger Principles of Biochemistry, 5th Edition (2008, W. H. Freeman)": "Lehninger Biochem",
-    "Textbook of Biochemistry For Medical Students 7th Edition": "Vasudevan Biochem (7e)",
-    "DM Vasudevan Textbook of Biochemistry For Medical Students 6th Edition 8": "Vasudevan Biochem (6e)",
-    "Basic & Clinical Pharmacology (Fourteenth Edition)": "Katzung Pharmacology",
-    "Lippincott Illustrated Reviews: Pharmacology": "Lippincott Pharm",
-    "Katzung & Trevor's Pharmacology Examination and Board Review ( PDFDrive.com )": "Katzung Board Review",
-    "Martin and crooke clinical biochemistry": "Martin & Crook ChemPath",
-    "Textbook Lippincott Illustrated Reviews Biochemistry, 8e by Emine Ercikan Abali, PhD Susan D. Cline, PhD David S. Franklin, PhD": "Lippincott Biochem (8e)",
-    "Robbins Basic Pathology 10th Edition 2017 (1)": "Robbins Pathology (10e)",
-    "Essentials of Haematology": "Essentials Haematology",
-    "Jawetz_Melnick_Adelbergs_Medical_Microbiology_27_edition_Med_zoneTV": "Jawetz Microbiology",
-    "Ten teachers O&G": "Ten Teachers O&G",
-    "Nelson Essentials of Pediatrics by Karen Marcdante Robert Kliegman": "Nelson Pediatrics",
-    "OceanofPDF.com Hutchisons Clinical Methods An Integrated Approach to Clinical Practice Edition 25 Michael Glynn": "Hutchison's Methods"
+    "Clinically Oriented Anatomy 8th Ed by Keith L Moore, Arthur F Dalley": "Keith L. Moore Clinically Oriented Anatomy (8th Ed)",
+    "lasts anatomy 12th 1": "Last's Anatomy: Regional and Applied (12th Ed)",
+    "Junqueira's Basic Histology Text and Atlas ( PDFDrive )": "Junqueira's Basic Histology: Text and Atlas (15th Ed)",
+    "inderbir singhs textbook of human histology with colour atlas and practical guide 9nbsped 9389034973 9789389034974 compress": "Inderbir Singh's Human Histology with Colour Atlas (9th Ed)",
+    "langmans medical embryology 12th ed 1": "Langman's Medical Embryology (12th Ed)",
+    "Embryology KLM": "Moore The Developing Human: Clinically Oriented Embryology (KLM)",
+    "Embryo vishram singh 1 260114 093822": "Vishram Singh Clinical and Surgical Embryology",
+    "Guyton and Hall Textbook of Medical Physiology 13th Ed 2015": "Guyton & Hall Textbook of Medical Physiology (13th Ed)",
+    "K Sembulingam Essentials of Medical Physiology 6th Edition": "K. Sembulingam Essentials of Medical Physiology (6th Ed)",
+    "[Indu Khurana] Medical Physiology for Undergraduat(BookZZ.org)": "Indu Khurana Medical Physiology for Undergraduates",
+    "Lehninger Principles of Biochemistry, 5th Edition (2008, W. H. Freeman)": "Lehninger Principles of Biochemistry (5th Ed)",
+    "Textbook of Biochemistry For Medical Students 7th Edition": "DM Vasudevan Textbook of Biochemistry for Medical Students (7th Ed)",
+    "DM Vasudevan Textbook of Biochemistry For Medical Students 6th Edition 8": "DM Vasudevan Textbook of Biochemistry (6th Ed)",
+    "Basic & Clinical Pharmacology (Fourteenth Edition)": "Bertram Katzung Basic & Clinical Pharmacology (14th Ed)",
+    "Lippincott Illustrated Reviews: Pharmacology": "Lippincott Illustrated Reviews: Pharmacology (6th Ed)",
+    "Katzung & Trevor's Pharmacology Examination and Board Review ( PDFDrive.com )": "Katzung & Trevor's Pharmacology Examination and Board Review",
+    "Martin and crooke clinical biochemistry": "Martin Crook Clinical Biochemistry in Practice",
+    "Textbook Lippincott Illustrated Reviews Biochemistry, 8e by Emine Ercikan Abali, PhD Susan D. Cline, PhD David S. Franklin, PhD": "Lippincott Illustrated Reviews: Biochemistry (8th Ed)",
+    "Robbins Basic Pathology 10th Edition 2017 (1)": "Robbins Basic Pathology (10th Ed) - Kumar, Abbas, Aster",
+    "Essentials of Haematology": "Kawthalkar Essentials of Haematology (2nd Ed)",
+    "Jawetz_Melnick_Adelbergs_Medical_Microbiology_27_edition_Med_zoneTV": "Jawetz, Melnick & Adelberg's Medical Microbiology (27th Ed)",
+    "Ten teachers O&G": "Obstetrics & Gynaecology by Ten Teachers (20th Ed)",
+    "Nelson Essentials of Pediatrics by Karen Marcdante Robert Kliegman": "Nelson Essentials of Pediatrics - Marcdante & Kliegman",
+    "OceanofPDF.com Hutchisons Clinical Methods An Integrated Approach to Clinical Practice Edition 25 Michael Glynn": "Hutchison's Clinical Methods: An Integrated Approach (25th Ed)"
 }
 
 def get_all_curriculum_books_for_level(level: str) -> list:
@@ -2477,6 +2477,7 @@ def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool,
             total_words = 0
             empty_pages = 0
             text_pages = 0
+            empty_page_indices = []
             
             for idx in range(page_count):
                 page = doc[idx]
@@ -2488,6 +2489,7 @@ def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool,
                     pages_data.append((idx + 1, txt))
                 else:
                     empty_pages += 1
+                    empty_page_indices.append(idx)
             doc.close()
             
             # Scanned Document / Non-Text Ratio Gate:
@@ -2504,7 +2506,7 @@ def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool,
             if page_count >= 2 and (empty_ratio > 0.35 or avg_words < 12.0):
                 return False, "SCANNED_IMAGE", [], {
                     "error": f"Scanned or image-only document ({empty_pages}/{page_count} pages have no extractable text).",
-                    "total_words": total_words, "page_count": page_count, "empty_pages": empty_pages, "empty_pct": empty_ratio * 100
+                    "total_words": total_words, "page_count": page_count, "empty_pages": empty_pages, "empty_pct": empty_ratio * 100, "empty_page_indices": empty_page_indices
                 }
                 
             return True, "OK", pages_data, {"page_count": page_count, "total_words": total_words, "empty_pages": empty_pages, "empty_pct": empty_ratio * 100}
@@ -2549,7 +2551,7 @@ def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool,
             if page_count >= 2 and (empty_ratio > 0.35 or avg_words < 12.0):
                 return False, "SCANNED_IMAGE", [], {
                     "error": f"Scanned or image-only document ({empty_pages}/{page_count} pages have no extractable text).",
-                    "total_words": total_words, "page_count": page_count, "empty_pages": empty_pages, "empty_pct": empty_ratio * 100
+                    "total_words": total_words, "page_count": page_count, "empty_pages": empty_pages, "empty_pct": empty_ratio * 100, "empty_page_indices": empty_page_indices
                 }
                 
             return True, "OK", pages_data, {"page_count": page_count, "total_words": total_words, "empty_pages": empty_pages, "empty_pct": empty_ratio * 100}
@@ -2782,6 +2784,93 @@ def extract_docx_pages_from_bytes(docx_bytes: bytes, filename: str) -> tuple[boo
     except Exception as e:
         print(f"❌ Error extracting text from Word document {filename}: {e}")
         return False, "CORRUPTED", [], {"error": str(e)}
+
+
+# ── SCANNED PDF HIGH-PRECISION VISION OCR ENGINE ──────────────────────────
+async def transcribe_scanned_pdf_pages(pdf_bytes: bytes, scanned_indices: list[int], max_pages: int = 40) -> list[tuple[int, str]]:
+    """
+    Renders scanned PDF pages lacking extractable text into JPEG images via PyMuPDF,
+    and runs high-precision OCR transcription via OpenRouter Gemini 2.5 Flash Vision.
+    """
+    if not fitz or not pdf_bytes or not OPENROUTER_API_KEY:
+        return []
+
+    target_indices = scanned_indices[:max_pages]
+    print(f"🔍 [SCANNED PDF OCR] Initiating vision transcription for {len(target_indices)} page(s): {target_indices}")
+    
+    ocr_semaphore = asyncio.Semaphore(4)
+
+    async def _ocr_single_page(page_idx: int, img_jpeg: bytes) -> tuple[int, str]:
+        async with ocr_semaphore:
+            try:
+                b64_img = base64.b64encode(img_jpeg).decode("utf-8")
+                payload = {
+                    "model": "google/gemini-2.5-flash",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "You are an expert medical document OCR engine. Transcribe all readable medical text, "
+                                        "headings, bullet points, clinical notes, tables, drug names, and dosages from this "
+                                        "scanned document page verbatim. Output ONLY the extracted text with clean line breaks, "
+                                        "without conversational preamble, markdown meta-text, or commentary."
+                                    )
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}
+                                }
+                            ]
+                        }
+                    ],
+                    "temperature": 0.1
+                }
+                headers = {
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                async with httpx.AsyncClient(timeout=45.0) as client:
+                    resp = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        txt = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                        return (page_idx + 1, txt)
+                    else:
+                        print(f"⚠️ OCR failed for page {page_idx + 1}: HTTP {resp.status_code} {resp.text[:150]}")
+            except Exception as e:
+                print(f"⚠️ OCR exception on page {page_idx + 1}: {e}")
+            return (page_idx + 1, "")
+
+    # Extract pixmaps in thread to avoid blocking loop
+    def _render_pixmaps():
+        rendered = []
+        try:
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            for idx in target_indices:
+                if 0 <= idx < len(doc):
+                    pix = doc[idx].get_pixmap(dpi=120)
+                    rendered.append((idx, pix.tobytes("jpeg")))
+            doc.close()
+        except Exception as err:
+            print(f"⚠️ Error rendering pixmaps for OCR: {err}")
+        return rendered
+
+    loop = asyncio.get_running_loop()
+    rendered_pages = await loop.run_in_executor(None, _render_pixmaps)
+
+    tasks = [_ocr_single_page(idx, jpeg) for idx, jpeg in rendered_pages]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    extracted_pages = []
+    for r in results:
+        if isinstance(r, tuple) and len(r) == 2 and r[1] and len(r[1].split()) >= 6:
+            extracted_pages.append(r)
+
+    print(f"✅ [SCANNED PDF OCR] Successfully transcribed {len(extracted_pages)}/{len(target_indices)} scanned page(s).")
+    return extracted_pages
 
 def extract_document_pages_from_bytes(file_bytes: bytes, filename: str, mime_type: str = "") -> tuple[bool, str, list[tuple[int, str]], dict]:
     """
@@ -3219,11 +3308,11 @@ async def process_whatsapp_document(
                         custom_docs = ud.get("custom_documents", [])
                         existing_filenames = {d.get("filename") for d in custom_docs if isinstance(d, dict)}
                         
-                        # Quota: 15 documents max per personal study vault
-                        if filename not in existing_filenames and len(custom_docs) >= 15:
+                        # Quota: 60 documents max per personal study vault
+                        if filename not in existing_filenames and len(custom_docs) >= 60:
                             msg = (
-                                "⚠️ *Personal Study Vault Full (15/15 Documents)*\n\n"
-                                f"Your personal study vault has reached the maximum capacity of *15 documents*.\n\n"
+                                "⚠️ *Personal Study Vault Full (60/60 Documents)*\n\n"
+                                f"Your personal study vault has reached the maximum capacity of *60 documents*.\n\n"
                                 f"To upload *{filename}*, please remove an older lecture slide or handout first using:\n\n"
                                 "👉 `/deletedoc [number or title]`\n\n"
                                 "💡 Type `/documents` to see all your uploaded documents and their numbers! 📂"
@@ -3231,13 +3320,13 @@ async def process_whatsapp_document(
                             await send_whatsapp_cloud_msg(sender_phone, msg)
                             return
 
-                        # Daily rate limit: 10 uploads per day (WAT timezone: UTC+1)
+                        # Daily rate limit: 30 uploads per day (WAT timezone: UTC+1)
                         wat_today = datetime.now(timezone(timedelta(hours=1))).strftime("%Y-%m-%d")
                         daily_uploads = ud.get("daily_doc_uploads", {}).get(wat_today, 0)
-                        if daily_uploads >= 10:
+                        if daily_uploads >= 30:
                             msg = (
                                 "⏳ *Daily Upload Limit Reached*\n\n"
-                                "To ensure fast processing and stability for all students, personal document uploads are limited to *10 per day*.\n\n"
+                                "To ensure fast processing and stability for all students, personal document uploads are limited to *30 per day*.\n\n"
                                 "Your daily quota will reset at midnight (WAT)!\n\n"
                                 "💡 You can continue asking questions from your current study vault and library textbooks anytime."
                             )
@@ -3339,13 +3428,13 @@ async def process_whatsapp_document(
                             await send_whatsapp_cloud_msg(sender_phone, msg)
                             return
 
-                        # Tier 1b: File size sanity check (28MB limit)
+                        # Tier 1b: File size sanity check (150MB limit)
                         file_size_mb = len(doc_bytes) / (1024 * 1024)
-                        if file_size_mb > 28.0:
+                        if file_size_mb > 150.0:
                             msg = (
                                 "⚠️ *File Size Limit Exceeded*\n\n"
-                                f"Your document is *{file_size_mb:.1f} MB*. To ensure fast search and memory stability on WhatsApp, uploads must be under *28 MB*.\n\n"
-                                "💡 *Tip:* Try splitting large slide decks into individual topics or lecture modules!"
+                                f"Your document is *{file_size_mb:.1f} MB*. Personal study uploads on Ranviar must be under *150 MB*.\n\n"
+                                "💡 *Tip:* Try splitting very large textbook PDFs into individual modules or chapters!"
                             )
                             await send_whatsapp_cloud_msg(sender_phone, msg)
                             return
@@ -3369,6 +3458,35 @@ async def process_whatsapp_document(
                     if doc_bytes is not None:
                         del doc_bytes
                     gc.collect()
+
+                if not is_valid:
+                    # ── Scanned PDF Fallback: Run AI Vision OCR on scanned/image-based pages ──
+                    if err_code == "SCANNED_IMAGE" and (fname_lower.endswith(".pdf") or "pdf" in mime_type) and doc_bytes:
+                        try:
+                            empty_indices = stats.get("empty_page_indices", [])
+                            if not empty_indices and stats.get("page_count", 0) > 0:
+                                empty_indices = list(range(stats.get("page_count", 1)))
+                            
+                            ocr_ack = (
+                                f"🔍 *Reading Scanned Handout: {filename}*\n\n"
+                                "I detected scanned/photocopied pages in your document. Transcribing all medical text, diagrams, and clinical tables with AI Vision OCR now... ⏳📑"
+                            )
+                            await send_whatsapp_cloud_msg(sender_phone, ocr_ack)
+                            
+                            ocr_pages = await transcribe_scanned_pdf_pages(doc_bytes, empty_indices, max_pages=40)
+                            if ocr_pages:
+                                # Combine digital pages and OCR pages
+                                existing_pg_map = {p[0]: p[1] for p in pages_data}
+                                for pg_num, pg_txt in ocr_pages:
+                                    existing_pg_map[pg_num] = pg_txt
+                                pages_data = sorted(existing_pg_map.items(), key=lambda x: x[0])
+                                is_valid = True
+                                err_code = "OK"
+                                stats["is_scanned_ocr"] = True
+                                stats["total_words"] = sum(len(txt.split()) for _, txt in pages_data)
+                                print(f"✅ [SCANNED PDF RECOVERED] {filename} recovered with {len(pages_data)} pages and {stats['total_words']} words!")
+                        except Exception as ocr_err:
+                            print(f"⚠️ Scanned PDF OCR fallback failed for {filename}: {ocr_err}")
 
                 if not is_valid:
                     if err_code == "LEGACY_BINARY":
@@ -3398,16 +3516,13 @@ async def process_whatsapp_document(
                                 "📷 *Image-Only Slides Detected*\n\n"
                                 f"*{filename}* contains image photos with no selectable digital text "
                                 f"({empty_p} of {tot_p} slides, ~{pct:.0f}%, have no readable text).\n\n"
-                                "Ranviar searches and quizzes you directly on selectable digital text. "
                                 "Please export slides with selectable digital text or notes! 💡🔍"
                             )
                         else:
                             msg = (
-                                "📷 *Scanned Image / Non-Text Document Detected*\n\n"
-                                f"*{filename}* contains scanned images with no readable digital text "
-                                f"({empty_p} of {tot_p} pages, ~{pct:.0f}%, are image-only photos/scans).\n\n"
-                                "Ranviar searches and quizzes you directly on selectable digital text. "
-                                "Please run an OCR tool (e.g. Adobe Scan, CamScanner OCR, or Google Drive OCR) or export slides with selectable digital text! 💡🔍"
+                                "📷 *Scanned Image With No Legible Text*\n\n"
+                                f"*{filename}* was scanned, but the text is too blurry or low-resolution for OCR transcription.\n\n"
+                                "💡 *Tip:* Try taking a sharper, higher-contrast photo/scan of the handout and re-upload! 🔍📄"
                             )
                     else:
                         msg = (
@@ -4573,109 +4688,38 @@ Examples:
         return None
 
 async def send_subject_book_menu(sender_phone: str, level: str, subject: str) -> bool:
-    """Sends the interactive book selection menu for a subject using the Live Checklist Dropdown UI."""
-    user_doc = await users_col.find_one({"user_id": sender_phone}) if users_col is not None else None
-    preferred_books = user_doc.get("preferred_books_list", []) if user_doc else []
-    
+    """
+    Sends the numbered textbook selection list for a subject (Option A fast numbered reply).
+    Allows students to reply with numbers (e.g. '1, 2' or '1, 3'), 'ALL', or 'SKIP' in one message.
+    """
     all_books = AVAILABLE_BOOKS.get(subject, [])
     if not all_books:
-        body_text = f"No textbooks currently indexed for *{subject}*."
-        await send_whatsapp_interactive_list(
-            sender_phone, 
-            body_text, 
-            "Select Option", 
-            [{"id": "SKIP_SUBJECT", "title": "⏭️ Skip this subject", "description": "Continue to next subject"}]
-        )
-    elif len(all_books) == 1:
-        # Single-book subject: clean 1-tap selection with friendly name
-        single_book = all_books[0]
-        disp_name = BOOK_DISPLAY_NAMES.get(single_book, single_book)
-        body_text = f"Select your preferred textbook for *{subject}*:"
-        options = [
-            {"id": single_book, "title": disp_name[:24].strip(), "description": f"Select {disp_name}"[:72]},
-            {"id": "SKIP_SUBJECT", "title": "⏭️ Skip / None", "description": f"Skip {subject} for now"}
-        ]
-        await send_whatsapp_interactive_list(sender_phone, body_text, "Select Textbook", options)
-    else:
-        # Multi-book subject: Live Checklist Dropdown with Select All and Done buttons
-        selected_for_subject = [b for b in all_books if b in preferred_books]
-        
-        # Build visual checklist lines
-        checklist_lines = []
-        for b in all_books:
-            b_display = BOOK_DISPLAY_NAMES.get(b, b.split(":")[0])[:38]
-            if b in selected_for_subject:
-                checklist_lines.append(f"• [✓] *{b_display}*")
-            else:
-                checklist_lines.append(f"• [  ] {b_display}")
-        checklist_str = "\n".join(checklist_lines)
-        
-        body_text = (
-            f"📚 *{subject} Textbooks* ({len(selected_for_subject)}/{len(all_books)} Selected):\n"
-            f"{checklist_str}\n\n"
-            "👉 Tap books to add them, tap *Select All* to take all of them, or tap *Done* to continue!"
-        )
-        
-        options = []
-        # Option 1: Done & Next Subject (Always available so students can proceed anytime)
-        if selected_for_subject:
-            options.append({
-                "id": f"FINISH_SUBJECT_{subject}",
-                "title": "✅ Done & Next Subject",
-                "description": f"Proceed with {len(selected_for_subject)} selected textbook(s)"
-            })
-        else:
-            options.append({
-                "id": f"FINISH_SUBJECT_{subject}",
-                "title": "⏭️ Skip & Next Subject",
-                "description": f"Continue without selecting any {subject} books"
-            })
+        return await send_next_subject_menu(sender_phone, level, subject)
 
-        # Option 2: Select All / Deselect All
-        if len(selected_for_subject) < len(all_books):
-            options.append({
-                "id": f"SELECT_ALL_{subject}",
-                "title": f"✨ Select All ({len(all_books)} books)"[:24],
-                "description": f"Select all {subject} textbooks in 1 tap"
-            })
-        else:
-            options.append({
-                "id": f"CLEAR_ALL_{subject}",
-                "title": "🔄 Deselect All",
-                "description": f"Unselect all {subject} books"
-            })
-            
-        # Individual books: Add / Remove
-        for b in all_books:
-            disp_name = BOOK_DISPLAY_NAMES.get(b, b)
-            short_name = disp_name[:18].strip()
-            if b in selected_for_subject:
-                options.append({
-                    "id": f"TOGGLE_{b}",
-                    "title": f"❌ {short_name}"[:24].strip(),
-                    "description": f"Remove {disp_name}"[:72].strip()
-                })
-            else:
-                options.append({
-                    "id": f"TOGGLE_{b}",
-                    "title": f"➕ {short_name}"[:24].strip(),
-                    "description": f"Add {disp_name}"[:72].strip()
-                })
-                
-        # If no book selected yet, offer skip option
-        if not selected_for_subject:
-            options.append({
-                "id": "SKIP_SUBJECT",
-                "title": "⏭️ Skip this subject",
-                "description": "Do not select any textbook for this subject"
-            })
-            
-        await send_whatsapp_interactive_list(sender_phone, body_text, "Select / Toggle", options)
-        
-    await users_col.update_one(
-        {"user_id": sender_phone}, 
-        {"$set": {"onboarding_step": f"ASK_BOOK_{subject}"}}
-    )
+    lines = [
+        f"📚 *{subject} Textbooks* ({level}):\n",
+        f"Select your preferred textbook(s) for *{subject}*:\n"
+    ]
+    for idx, b in enumerate(all_books, 1):
+        disp = BOOK_DISPLAY_NAMES.get(b, b)
+        lines.append(f"*{idx}.* {disp}")
+
+    lines.append("\n👉 *How to choose:*")
+    if len(all_books) > 1:
+        lines.append("• Reply with numbers (e.g. *1, 2* or *1, 3*)")
+        lines.append(f"• Reply *ALL* to select all {len(all_books)} textbooks")
+    else:
+        lines.append("• Reply *1* or *ALL* to select it")
+    lines.append("• Reply *SKIP* to skip this subject")
+
+    body_msg = "\n".join(lines)
+    await send_whatsapp_cloud_msg(sender_phone, body_msg)
+
+    if users_col is not None:
+        await users_col.update_one(
+            {"user_id": sender_phone}, 
+            {"$set": {"onboarding_step": f"ASK_BOOK_{subject}"}}
+        )
     return True
 
 async def send_next_subject_menu(sender_phone: str, level: str, current_subject: str = None) -> bool:
@@ -4712,7 +4756,9 @@ async def complete_onboarding(sender_phone: str):
             "onboarding_step": "COMPLETED",
             "is_onboarded": True,
             "has_completed_onboarding": True,
-            "is_updating": False
+            "is_updating": False,
+            "ranviar_v2_migrated": True,
+            "library_version": "v2_expanded_37_books"
         }}
     )
     
@@ -4847,7 +4893,8 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             )
             return True
         if user_msg not in ["200L", "300L", "400L", "500L", "600L"]:
-            if is_existing_user:
+            is_migrated = bool(user_doc and user_doc.get("ranviar_v2_migrated") is True)
+            if is_existing_user and is_migrated:
                 # Student initiated an update but does not want to continue (e.g. asked a medical question or typed a command)
                 await users_col.update_one(
                     {"user_id": sender_phone},
@@ -4855,8 +4902,13 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
                 )
                 return False # Let normal RAG or command execution process this message!
             else:
-                # Brand new user in initial onboarding: MUST complete the flow!
-                await send_whatsapp_cloud_msg(sender_phone, "Please use the menu button to select your level.")
+                # Must complete the level selection to unlock the 37-book library
+                await send_whatsapp_interactive_list(
+                    sender_phone, 
+                    "Please select your medical class/level to configure your Ranviar textbooks:",
+                    "Select Level",
+                    ["200L", "300L", "400L", "500L", "600L"]
+                )
                 return True
             
         new_level = user_msg
@@ -4872,110 +4924,95 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             await complete_onboarding(sender_phone)
         return True
         
-    # 4. Extract Books (Dynamic Subject Loop with Live Checklist Dropdown)
+    # 4. Extract Books (Option A: Fast Numbered Reply Loop: '1, 2', 'ALL', 'SKIP')
     if step.startswith("ASK_BOOK_"):
         current_subject = step.replace("ASK_BOOK_", "")
         all_subject_books = AVAILABLE_BOOKS.get(current_subject, [])
+        msg_clean = user_msg.strip()
+        msg_lower = msg_clean.lower()
         
         user_doc = await users_col.find_one({"user_id": sender_phone})
-        preferred_books = user_doc.get("preferred_books_list", []) if user_doc else []
+        is_migrated = bool(user_doc and user_doc.get("ranviar_v2_migrated") is True)
         
-        # A. Finish / Skip / Next Subject
-        is_finish = (
-            user_msg in [
-                "SKIP_SUBJECT", "Skip (None available yet)", "⏭️ Skip this subject",
-                f"FINISH_SUBJECT_{current_subject}", "✅ Finish & Next Subject",
-                f"DONE_SUBJECT_{current_subject}", "➡️ Next Subject"
-            ] or
-            user_msg.startswith("FINISH_SUBJECT_") or
-            user_msg.startswith("DONE_SUBJECT_")
-        )
-        
-        if is_finish:
+        # 1. Skip Subject
+        if msg_lower in ["skip", "none", "skip subject", "skip_subject", "⏭️ skip this subject", "0"]:
+            print(f"⏭️ User {sender_phone} skipped subject '{current_subject}'")
             has_more = await send_next_subject_menu(sender_phone, level, current_subject)
             if not has_more:
                 await complete_onboarding(sender_phone)
             return True
 
-        # Handle Select All in 1 tap
-        if user_msg == f"SELECT_ALL_{current_subject}" or user_msg.startswith(f"SELECT_ALL_{current_subject}") or "Select All" in user_msg:
+        # 2. Select All Textbooks
+        if msg_lower in ["all", "select all", "all books", "everything", "take all", "1 2 3 4 5 6 7"]:
+            print(f"✨ User {sender_phone} selected ALL books for '{current_subject}'")
             await users_col.update_one(
                 {"user_id": sender_phone},
                 {"$addToSet": {"preferred_books_list": {"$each": all_subject_books}}}
             )
-            await send_subject_book_menu(sender_phone, level, current_subject)
-            return True
-
-        # Handle Deselect All in 1 tap
-        if user_msg == f"CLEAR_ALL_{current_subject}" or user_msg.startswith(f"CLEAR_ALL_{current_subject}") or "Deselect All" in user_msg:
-            await users_col.update_one(
-                {"user_id": sender_phone},
-                {"$pull": {"preferred_books_list": {"$in": all_subject_books}}}
-            )
-            await send_subject_book_menu(sender_phone, level, current_subject)
-            return True
-            
-        # B. Handle Toggle / Book Selection
-        raw_book = user_msg
-        if raw_book.startswith("TOGGLE_"):
-            raw_book = raw_book.replace("TOGGLE_", "", 1)
-            
-        matched_book = None
-        for b in all_subject_books:
-            if raw_book == b or raw_book == b[:24].strip() or raw_book.endswith(b[:20]) or b.startswith(raw_book):
-                matched_book = b
-                break
-                
-        if not matched_book:
-            for b in [bk for books in AVAILABLE_BOOKS.values() for bk in books]:
-                if raw_book == b or raw_book == b[:24].strip() or b.startswith(raw_book):
-                    matched_book = b
-                    break
-                    
-        if not matched_book:
-            if is_existing_user:
-                # Student initiated an update but does not want to continue (e.g. asked a medical question)
-                await users_col.update_one(
-                    {"user_id": sender_phone},
-                    {"$set": {"onboarding_step": "COMPLETED", "is_updating": False}}
-                )
-                return False # Let normal RAG or command execution process this message!
-            else:
-                # Brand new user in initial onboarding: MUST complete the flow!
-                await send_whatsapp_cloud_msg(
-                    sender_phone, 
-                    "Please use the menu button to select/toggle your textbook, or tap Finish."
-                )
-                return True
-            
-        # Single-book subject: 1-tap select & auto-advance
-        if len(all_subject_books) <= 1:
-            if matched_book not in preferred_books:
-                await users_col.update_one(
-                    {"user_id": sender_phone},
-                    {"$push": {"preferred_books_list": matched_book}}
-                )
             has_more = await send_next_subject_menu(sender_phone, level, current_subject)
             if not has_more:
                 await complete_onboarding(sender_phone)
             return True
-            
-        # Multi-book subject: Toggle selection
-        if matched_book in preferred_books:
-            # Remove it (toggle off)
+
+        # 3. Parse Numbers (e.g. '1, 2' or '1, 3' or '1' or '2 3')
+        found_nums = [int(n) for n in re.findall(r'\b\d+\b', user_msg)]
+        valid_books = []
+        if found_nums:
+            for num in found_nums:
+                idx = num - 1
+                if 0 <= idx < len(all_subject_books):
+                    b = all_subject_books[idx]
+                    if b not in valid_books:
+                        valid_books.append(b)
+
+        if valid_books:
+            print(f"📚 User {sender_phone} selected {len(valid_books)} book(s) for '{current_subject}': {valid_books}")
             await users_col.update_one(
                 {"user_id": sender_phone},
-                {"$pull": {"preferred_books_list": matched_book}}
+                {"$addToSet": {"preferred_books_list": {"$each": valid_books}}}
             )
-        else:
-            # Add it (toggle on)
+            has_more = await send_next_subject_menu(sender_phone, level, current_subject)
+            if not has_more:
+                await complete_onboarding(sender_phone)
+            return True
+
+        # 4. Fallback for text matching (book titles or legacy buttons)
+        raw_book = user_msg
+        if raw_book.startswith("TOGGLE_"):
+            raw_book = raw_book.replace("TOGGLE_", "", 1)
+        matched_book = None
+        for b in all_subject_books:
+            if raw_book == b or raw_book == b[:24].strip() or raw_book.lower() in b.lower() or b.lower().startswith(raw_book.lower()):
+                matched_book = b
+                break
+
+        if matched_book:
             await users_col.update_one(
                 {"user_id": sender_phone},
-                {"$push": {"preferred_books_list": matched_book}}
+                {"$addToSet": {"preferred_books_list": matched_book}}
             )
-            
-        # Re-send updated checklist menu for the same subject
-        await send_subject_book_menu(sender_phone, level, current_subject)
+            has_more = await send_next_subject_menu(sender_phone, level, current_subject)
+            if not has_more:
+                await complete_onboarding(sender_phone)
+            return True
+
+        # If user is fully migrated and sent an unrelated medical question or command, gracefully allow escape
+        if is_migrated and not user_doc.get("requires_curriculum_setup"):
+            if user_msg.startswith("/") or len(user_msg.split()) >= 4:
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$set": {"onboarding_step": "COMPLETED", "is_updating": False}}
+                )
+                return False
+
+        # Otherwise, guide the student with the exact reply format
+        hint_msg = (
+            f"👉 *How to choose textbooks for {current_subject}:*\n\n"
+            f"• Reply with numbers: e.g. *1, 2* or *1, 3* (between 1 and {len(all_subject_books)})\n"
+            f"• Reply *ALL* to select all textbooks\n"
+            f"• Reply *SKIP* to continue to the next subject"
+        )
+        await send_whatsapp_cloud_msg(sender_phone, hint_msg)
         return True
         
 async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list = None, context_text: str = "", explanation_text: str = ""):
@@ -5294,6 +5331,56 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             await send_whatsapp_cloud_msg(sender_phone, study_prompt)
             return
 
+        # ── FORCED RANVIAR V2 UPGRADE & BROADCAST INTERCEPTOR ────────────────
+        # Every existing student must be informed of the Ranviar rebrand, new superpowers
+        # (150MB docs, 60-doc vault, permanent storage, images/ECGs, voice notes, scanned PDFs),
+        # and prompted to select their level and textbooks from scratch.
+        is_migrated = bool(user_doc and user_doc.get("ranviar_v2_migrated") is True)
+        current_step = str(user_doc.get("onboarding_step") or "") if user_doc else ""
+
+        if user_doc and not is_migrated:
+            # If student is already actively answering level or textbook selection, let handle_onboarding handle it!
+            if current_step == "ASK_LEVEL" or current_step.startswith("ASK_BOOK_"):
+                pass
+            else:
+                print(f"📣 [V2 UPGRADE INTERCEPT] Intercepting user {sender_phone} to deliver Ranviar upgrade announcement & textbook setup")
+                upgrade_announcement = (
+                    "🧠⚡ *Welcome to Ranviar (formerly NEURA AI)!* ⚡🧠\n\n"
+                    "We have upgraded our platform with major clinical study features and expanded our medical library to **37 official textbooks**!\n\n"
+                    "Kindly do the needful: take a moment to select your class level and textbooks from scratch to configure your new study engine. 🩺📚\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
+                    "🚀 *What's New in Ranviar:*\n\n"
+                    "• 📄 *Document Vault (Up to 150MB & 60 Documents)*\n"
+                    "  Send your lecture slides, notes, handouts, or PDFs — *now including scanned PDFs and image-based lecture slides*! "
+                    "There is *no need of sending a particular document more than once* as when it is sent it is stored and indexed in your database already.\n\n"
+                    "• 🔬 *Medical Vision (Pictures & Diagnostic Scans)*\n"
+                    "  Send photos of ECG strips, histology slides, radiology films (X-rays, CT, MRI), and exam MCQs for instant in-depth breakdowns.\n\n"
+                    "• 🎙️ *Voice Notes*\n"
+                    "  Ask clinical questions on the go with WhatsApp audio voice notes.\n\n"
+                    "• 📚 *Expanded 37-Textbook Curriculum*\n"
+                    "  Full official coverage for all medical levels (200L to 600L) with fast numbered replies (*1, 2*, *ALL*, *SKIP*)!\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    "👉 *Please select your medical class/level below to configure your textbooks:*"
+                )
+                await send_whatsapp_cloud_msg(sender_phone, upgrade_announcement)
+                await send_whatsapp_interactive_list(
+                    sender_phone,
+                    "Select your medical class/level:",
+                    "Select Level",
+                    ["200L", "300L", "400L", "500L", "600L"]
+                )
+                if users_col is not None:
+                    await users_col.update_one(
+                        {"user_id": sender_phone},
+                        {"$set": {
+                            "onboarding_step": "ASK_LEVEL",
+                            "is_updating": True,
+                            "preferred_books_list": [],
+                            "ranviar_v2_migrated": False
+                        }}
+                    )
+                return
+
         # Check for profile and wallet commands first
         msg_lower = user_msg.strip().lower()
         if (msg_lower.startswith("/") or msg_lower in [
@@ -5428,7 +5515,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                             [{"id": "/menu", "title": "📋 Main Menu"}]
                         )
                     else:
-                        lines = [f"📂 *Your Personal Study Vault ({len(custom_docs)}/15 Documents Used)*\n"]
+                        lines = [f"📂 *Your Personal Study Vault ({len(custom_docs)}/60 Documents Used)*\n"]
                         for i, d in enumerate(custom_docs, 1):
                             lines.append(f"{i}. *{d.get('title', d.get('filename'))}*\n   📑 {d.get('page_count', '?')} pages ({d.get('chunk_count', '?')} chunks) • _{d.get('category', 'Medical')}_")
                         lines.append("\n💡 *Tips:*\n• Ask me questions about any of these documents anytime!\n• Tap *Delete a Doc* below to select and remove a file.")
@@ -5500,7 +5587,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                                 sender_phone,
                                 f"🗑️ *All Documents Cleared*\n\n"
                                 f"Cleared all {len(custom_docs)} documents from your personal study vault.\n"
-                                f"Your study vault is now completely reset (0/15 documents used)."
+                                f"Your study vault is now completely reset (0/60 documents used)."
                             )
                         except Exception as all_err:
                             print(f"⚠️ Error clearing all docs: {all_err}")
@@ -5570,7 +5657,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         sender_phone,
                         f"🗑️ *Document Deleted*\n\n"
                         f"*{target_title}* has been removed from your study vault.\n\n"
-                        f"📊 *Vault Capacity:* {rem_count}/15 documents used.\n"
+                        f"📊 *Vault Capacity:* {rem_count}/60 documents used.\n"
                         f"💡 You can upload a new PDF anytime using the 📎 attachment button!"
                     )
                     return
@@ -5643,9 +5730,15 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     if target_level not in ["200L", "300L", "400L", "500L", "600L"]:
                         target_level = "400L"
 
+                    # Reset preferred books list so the student configures their textbooks fresh from scratch
                     await users_col.update_one(
                         {"user_id": sender_phone},
-                        {"$set": {"is_updating": True, "is_onboarded": True, "has_completed_onboarding": True}}
+                        {"$set": {
+                            "is_updating": True, 
+                            "is_onboarded": True, 
+                            "has_completed_onboarding": True,
+                            "preferred_books_list": []
+                        }}
                     )
                     has_subjects = await send_next_subject_menu(sender_phone, target_level)
                     if not has_subjects:
