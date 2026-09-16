@@ -608,12 +608,13 @@ async def register_whatsapp_chat_commands():
 
 @app.on_event("startup")
 async def upgrade_curriculum_for_all_users():
-    """Resets all existing users so they re-select their level and textbooks from the expanded 37-textbook library."""
+    """Resets all existing users so they re-select their level and textbooks from scratch via Style B."""
     if users_col is None:
         return
     try:
+        # Match all students in the database who have not yet completed the Style B textbook update
         res = await users_col.update_many(
-            {"library_version": {"$ne": "v2_expanded_37_books"}},
+            {"ranviar_v2_migrated": {"$ne": True}},
             {
                 "$set": {
                     "preferred_books_list": [],
@@ -621,12 +622,12 @@ async def upgrade_curriculum_for_all_users():
                     "requires_curriculum_setup": True,
                     "is_onboarded": False,
                     "has_completed_onboarding": False,
-                    "library_version": "v2_expanded_37_books"
+                    "ranviar_v2_migrated": False
                 }
             }
         )
         if res.modified_count > 0:
-            print(f"📚 [LIBRARY UPGRADE] Successfully reset {res.modified_count} users to select from the 37-textbook library!")
+            print(f"📚 [LIBRARY UPGRADE] Successfully reset {res.modified_count} users to select textbooks from scratch via Style B!")
     except Exception as e:
         print(f"⚠️ Error upgrading curriculum for users: {e}")
 
@@ -4763,7 +4764,7 @@ async def complete_onboarding(sender_phone: str):
     )
     
     if preferred_books:
-        books_summary = "\n".join(f"• {b}" for b in preferred_books)
+        books_summary = "\n".join(f"• {BOOK_DISPLAY_NAMES.get(b, b)}" for b in preferred_books)
     else:
         books_summary = "• None selected (searching general medical knowledge)"
         
@@ -5447,7 +5448,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         reminders_status = "Enabled 🔔"
 
                     print(f"👤 [/profile for {sender_phone}] Loaded {len(preferred_books_list)} books from MongoDB: {preferred_books_list}")
-                    books_str = "\n  - ".join(preferred_books_list) if preferred_books_list else "None selected"
+                    books_str = "\n  - ".join(BOOK_DISPLAY_NAMES.get(b, b) for b in preferred_books_list) if preferred_books_list else "None selected"
                     profile_card = (
                         f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Study Streak: 🔥 {streak_count} Days\n• Reminders: {reminders_status}\n• Books:\n  - {books_str}"
                     )
