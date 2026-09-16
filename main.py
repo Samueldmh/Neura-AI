@@ -614,7 +614,7 @@ async def upgrade_curriculum_for_all_users():
     try:
         # Match all students in the database who have not yet completed the Style B textbook update
         res = await users_col.update_many(
-            {"ranviar_v2_migrated": {"$ne": True}},
+            {"ranviar_v3_migrated": {"$ne": True}},
             {
                 "$set": {
                     "preferred_books_list": [],
@@ -622,6 +622,7 @@ async def upgrade_curriculum_for_all_users():
                     "requires_curriculum_setup": True,
                     "is_onboarded": False,
                     "has_completed_onboarding": False,
+                    "ranviar_v3_migrated": False,
                     "ranviar_v2_migrated": False
                 }
             }
@@ -4758,6 +4759,7 @@ async def complete_onboarding(sender_phone: str):
             "is_onboarded": True,
             "has_completed_onboarding": True,
             "is_updating": False,
+            "ranviar_v3_migrated": True,
             "ranviar_v2_migrated": True,
             "library_version": "v2_expanded_37_books"
         }}
@@ -4887,7 +4889,7 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             )
             return True
         if user_msg not in ["200L", "300L", "400L", "500L", "600L"]:
-            is_migrated = bool(user_doc and user_doc.get("ranviar_v2_migrated") is True)
+            is_migrated = bool(user_doc and user_doc.get("ranviar_v3_migrated") is True)
             if is_existing_user and is_migrated:
                 # Student initiated an update but does not want to continue (e.g. asked a medical question or typed a command)
                 await users_col.update_one(
@@ -4926,7 +4928,7 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
         msg_lower = msg_clean.lower()
         
         user_doc = await users_col.find_one({"user_id": sender_phone})
-        is_migrated = bool(user_doc and user_doc.get("ranviar_v2_migrated") is True)
+        is_migrated = bool(user_doc and user_doc.get("ranviar_v3_migrated") is True)
         
         # 1. Skip Subject
         if msg_lower in ["skip", "none", "skip subject", "skip_subject", "⏭️ skip this subject", "0"]:
@@ -5329,7 +5331,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Every existing student must be informed of the Ranviar rebrand, new superpowers
         # (150MB docs, 60-doc vault, permanent storage, images/ECGs, voice notes, scanned PDFs),
         # and prompted to select their level and textbooks from scratch.
-        is_migrated = bool(user_doc and user_doc.get("ranviar_v2_migrated") is True)
+        is_migrated = bool(user_doc and user_doc.get("ranviar_v3_migrated") is True)
         current_step = str(user_doc.get("onboarding_step") or "") if user_doc else ""
 
         if user_doc and not is_migrated:
@@ -5370,6 +5372,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                             "onboarding_step": "ASK_LEVEL",
                             "is_updating": True,
                             "preferred_books_list": [],
+                            "ranviar_v3_migrated": False,
                             "ranviar_v2_migrated": False
                         }}
                     )
