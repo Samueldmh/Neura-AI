@@ -62,13 +62,13 @@ from concurrent.futures import ThreadPoolExecutor
 # 1. CONFIGURATION & ENVIRONMENT VARIABLES (v2.0 Webhook)
 # ==========================================
 QDRANT_URL = os.getenv("QDRANT_URL", "https://76ce5d85-4701-4671-8c3f-02bcc741b078.us-west-1-0.aws.cloud.qdrant.io")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZDliOTdhZjYtOTYyOS00YzMxLWJlNTktYTBiZWRkNmQ3NjlhIn0.Oa7xD5-T58Q-r-Az1waWwtwwLVTDi7HgzmtLLJE7cJw")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
 FLUTTERWAVE_SECRET_KEY = os.getenv("FLUTTERWAVE_SECRET_KEY", "")
-FLUTTERWAVE_SECRET_HASH = os.getenv("FLUTTERWAVE_SECRET_HASH", "")
+FLUTTERWAVE_SECRET_HASH = os.getenv("FLUTTERWAVE_SECRET_HASH", "neura_flw_hash_2026")
 BASE_URL = os.getenv("BASE_URL", "https://neura-ai-qtux.onrender.com")
 
 # Modal.com Serverless Ingestion Worker — set this to the deployed URL after `modal deploy modal_worker.py`
@@ -76,9 +76,9 @@ BASE_URL = os.getenv("BASE_URL", "https://neura-ai-qtux.onrender.com")
 MODAL_ENDPOINT = os.getenv("MODAL_ENDPOINT", "")
 
 # Official Meta WhatsApp Cloud API credentials
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAM3F01f3nYBSKwpMPZAU2Nhgdvr7b4481UQ2sCTosr3Hu6UIL3U5BTBiN8I5932PfnEx6GzDWiUfwMYiFok4eZCaMrLPNhhMvnAQ27fVsxxqpxIvES3SYhSi6speeab3FaBq8anZCoPVXS2f9LXA7b7ZA2kWrZBRA8zmBv03cBe2yTR3OWAAhgEh0lEk3ULqfAZDZD")
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "1150180661520951")
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "neura_ai_webhook_secret_2026")
 META_APP_SECRET = os.getenv("META_APP_SECRET", os.getenv("APP_SECRET", ""))
 
 COLLECTION_NAME = "neura_medical_knowledge"
@@ -283,7 +283,7 @@ broadcasts_col = db.broadcasts if db is not None else None
 chat_logs_col = db.chat_logs if db is not None else None
 youtube_video_cache_col = db.youtube_video_cache if db is not None else None
 
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neura2026admin")
 ADMIN_SESSIONS = set()
 
 async def log_user_chat_message(user_id: str, role: str, content: str, msg_type: str = "text", metadata: dict = None):
@@ -5503,11 +5503,11 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 return
 
             if msg_lower.startswith("/broadcast ") or msg_lower.startswith("broadcast "):
-                admin_phones = [p.strip() for p in os.getenv("ADMIN_PHONES", "").split(",") if p.strip()]
-                single_admin = os.getenv("ADMIN_PHONE", "").strip()
+                admin_phones = [p.strip() for p in os.getenv("ADMIN_PHONES", "2348109839187,2349021292141").split(",") if p.strip()]
+                single_admin = os.getenv("ADMIN_PHONE", "2348109839187").strip()
                 if single_admin and single_admin not in admin_phones:
                     admin_phones.append(single_admin)
-                admin_pass = os.getenv("ADMIN_PASSWORD", "").strip()
+                admin_pass = os.getenv("ADMIN_PASSWORD", "neura2026admin").strip()
 
                 parts = user_msg.split()
                 is_authorized = False
