@@ -261,27 +261,30 @@ def render_capabilities_card(student_name: str = "Doc") -> str:
     clean_name = student_name.strip() if student_name else "Doc"
     lines = [
         f"⚡ *What Ranviar Can Do For You, {clean_name}!* 🩺📖\n",
-        "Here is everything you can do with me directly on WhatsApp:\n"
+        "Here is what you can do with me directly on WhatsApp:\n"
     ]
     for cap in BOT_CAPABILITIES.values():
-        lines.append(f"• *{cap['name']}*:\n  {cap['summary']}\n  👉 *How to use*: {cap['how_to_use']}\n")
-    
+        name = cap.get("name", "")
+        summary = cap.get("summary", "")
+        cmds = cap.get("commands", [])
+        cmd_hint = f" ({', '.join(cmds)})" if cmds else ""
+        lines.append(f"• *{name}*{cmd_hint}:\n  {summary}\n")
+
     lines.append("Feel free to drop a document, send a photo, record a voice note, or ask a medical question anytime! 🚀")
     return "\n".join(lines)
 
 def render_limitations_card(student_name: str = "Doc") -> str:
     """Returns a clear, transparent limitations card for 'What can't you do?' / 'What are your limits?'."""
     clean_name = student_name.strip() if student_name else "Doc"
-    lines = [
-        f"🛡️ *Ranviar's Scope & Boundaries* 🩺\n",
-        f"Hello *{clean_name}*! To maintain the highest standard of academic excellence and clinical safety, "
-        f"here is what I cannot do:\n"
-    ]
-    for lim in BOT_LIMITATIONS:
-        lines.append(f"• *{lim['title']}*:\n  {lim['rule']}\n")
-    
-    lines.append("Whenever you're ready, let's dive back into your medical studies! 📚💡")
-    return "\n".join(lines)
+    return (
+        f"🛡️ *Ranviar's Scope & Boundaries* 🩺\n\n"
+        f"Hello *{clean_name}*! To maintain academic excellence and clinical safety, here is what I cannot do:\n\n"
+        "• 🚫 *Non-Medical Topics*: Strictly focused on medical education—no finance, crypto, or tech coding.\n"
+        "• 🚫 *Prescription & Clinical Care*: Academic study tool only; not for emergency triage or patient management.\n"
+        "• 🚫 *File Limits*: Uploads capped at 150MB per file and 60 documents per vault.\n"
+        "• 🚫 *Audio Transcripts*: Voice notes must be under 2 minutes for optimal precision.\n\n"
+        "Whenever you're ready, let's dive back into your medical studies! 📚💡"
+    )
 
 def is_self_awareness_query(user_msg: str) -> Optional[str]:
     """

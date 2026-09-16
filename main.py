@@ -1673,15 +1673,25 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url
     return all_success
 
 async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_text: str, options: list):
-    """Sends an Interactive List Message (max 10 options)"""
+    """Sends an Interactive List Message (max 10 options) with fail-safe character limit handling and plain text fallback."""
     body_text = format_whatsapp_text(body_text)
+    if not body_text:
+        return False
+
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
         "Content-Type": "application/json"
     }
-    
-    # WhatsApp requires list items to be under 24 chars for ID and title (usually). We will truncate safely.
+
+    # Meta WhatsApp Cloud API limits interactive body text strictly to 1024 characters.
+    if len(body_text) > 1020:
+        await send_whatsapp_cloud_msg(to_number, body_text)
+        if not options:
+            return True
+        short_prompt = "👉 *Please choose from the options below:*"
+        return await send_whatsapp_interactive_list(to_number, short_prompt, button_text, options)
+
     rows = []
     for opt in options[:10]: # Max 10 options per list
         if isinstance(opt, dict):
@@ -1697,7 +1707,7 @@ async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_
                 "id": str(opt)[:200],
                 "title": str(opt)[:24].strip()
             })
-        
+
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -1719,34 +1729,73 @@ async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_
             }
         }
     }
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        res = await client.post(url, headers=headers, json=payload)
-        print(f"Meta Graph API List Send Status {res.status_code}: {res.text}")
-        if res.status_code == 200:
-            try:
-                asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text, msg_type="interactive_list"))
-            except Exception:
-                pass
+
+    status_ok = False
+    res = None
+    try:
+        res = await shared_http_client.post(url, headers=headers, json=payload)
+        status_ok = (res.status_code == 200)
+    except Exception:
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                res = await client.post(url, headers=headers, json=payload)
+                status_ok = (res.status_code == 200)
+        except Exception:
+            status_ok = False
+
+    status_code = res.status_code if res is not None else 'ERR'
+    resp_text = getattr(res, 'text', '') if res is not None else ''
+    print(f"Meta Graph API List Send Status {status_code}: {resp_text}")
+
+    if status_ok:
+        try:
+            asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text, msg_type="interactive_list"))
+        except Exception:
+            pass
+        return True
+    else:
+        # CRITICAL FAILSAFE FALLBACK: Fall back to formatted plain text so student is never stuck!
+        print(f"⚠️ Interactive list rejected by Meta ({status_code}). Falling back to plain text delivery!")
+        opt_lines = []
+        for opt in options[:10]:
+            title = opt.get("title", opt.get("id", "")) if isinstance(opt, dict) else str(opt)
+            opt_lines.append(f"• *{title}*")
+        fallback_body = f"{body_text}\n\n" + "\n".join(opt_lines) + "\n\n_(Reply with your choice above)_"
+        return await send_whatsapp_cloud_msg(to_number, fallback_body)
 
 async def send_whatsapp_interactive_button(to_number: str, body_text: str, buttons: list):
-    """Sends an Interactive Button Message (max 3 buttons)"""
+    """Sends an Interactive Button Message (max 3 buttons) with fail-safe character limit handling and plain text fallback."""
     body_text = format_whatsapp_text(body_text)
+    if not body_text:
+        return False
+
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
         "Content-Type": "application/json"
     }
-    
+
+    # Meta WhatsApp Cloud API limits interactive body text strictly to 1024 characters.
+    # If the message exceeds 1024 characters:
+    # 1. Send the full comprehensive text via standard chunked cloud message first.
+    # 2. Send the buttons with a short prompt (e.g. "👉 Choose an option below:") so buttons are still displayed!
+    if len(body_text) > 1020:
+        await send_whatsapp_cloud_msg(to_number, body_text)
+        if not buttons:
+            return True
+        short_prompt = "👉 *Quick Actions:*"
+        return await send_whatsapp_interactive_button(to_number, short_prompt, buttons)
+
     action_buttons = []
     for btn in buttons[:3]:
         action_buttons.append({
             "type": "reply",
             "reply": {
-                "id": btn.get("id", btn.get("title"))[:256],
-                "title": btn.get("title")[:20]
+                "id": str(btn.get("id", btn.get("title")))[:256],
+                "title": str(btn.get("title"))[:20]
             }
         })
-        
+
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -1762,24 +1811,56 @@ async def send_whatsapp_interactive_button(to_number: str, body_text: str, butto
             }
         }
     }
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        res = await client.post(url, headers=headers, json=payload)
-        print(f"Meta Graph API Button Send Status {res.status_code}: {res.text}")
-        if res.status_code == 200:
-            try:
-                btn_summary = " [Options: " + ", ".join(str(b.get("title", "")) for b in buttons) + "]"
-                asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text + btn_summary, msg_type="interactive_button"))
-            except Exception:
-                pass
+
+    status_ok = False
+    res = None
+    try:
+        res = await shared_http_client.post(url, headers=headers, json=payload)
+        status_ok = (res.status_code == 200)
+    except Exception:
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                res = await client.post(url, headers=headers, json=payload)
+                status_ok = (res.status_code == 200)
+        except Exception:
+            status_ok = False
+
+    status_code = res.status_code if res is not None else 'ERR'
+    resp_text = getattr(res, 'text', '') if res is not None else ''
+    print(f"Meta Graph API Button Send Status {status_code}: {resp_text}")
+
+    if status_ok:
+        try:
+            btn_summary = " [Options: " + ", ".join(str(b.get("title", "")) for b in buttons) + "]"
+            asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text + btn_summary, msg_type="interactive_button"))
+        except Exception:
+            pass
+        return True
+    else:
+        # CRITICAL FAILSAFE FALLBACK: If Meta rejected the interactive button payload for ANY reason,
+        # never leave the student with an undelivered message! Deliver as formatted plain text!
+        print(f"⚠️ Interactive button rejected by Meta ({status_code}). Falling back to plain text delivery!")
+        button_options_text = "\n".join(f"• *{b.get('title', b.get('id', ''))}*" for b in buttons[:3])
+        fallback_body = f"{body_text}\n\n👉 *Options:*\n{button_options_text}"
+        return await send_whatsapp_cloud_msg(to_number, fallback_body)
 
 async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_label: str, url_target: str):
-    """Sends an Interactive CTA URL Button that opens directly in WhatsApp's in-app webview"""
+    """Sends an Interactive CTA URL Button that opens directly in WhatsApp's in-app webview, with fail-safe fallback."""
     body_text = format_whatsapp_text(body_text)
+    if not body_text:
+        return False
+
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
         "Content-Type": "application/json"
     }
+
+    if len(body_text) > 1020:
+        await send_whatsapp_cloud_msg(to_number, body_text)
+        short_prompt = "👉 *Tap the button below to proceed:*"
+        return await send_whatsapp_cta_url_button(to_number, short_prompt, button_label, url_target)
+
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -1799,14 +1880,36 @@ async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_la
             }
         }
     }
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        res = await client.post(url, headers=headers, json=payload)
-        print(f"Meta CTA URL Button Send Status {res.status_code}: {res.text}")
-        if res.status_code == 200:
-            try:
-                asyncio.create_task(log_user_chat_message(to_number, "assistant", f"{body_text} [Link: {button_label} -> {url_target}]", msg_type="cta_button"))
-            except Exception:
-                pass
+
+    status_ok = False
+    res = None
+    try:
+        res = await shared_http_client.post(url, headers=headers, json=payload)
+        status_ok = (res.status_code == 200)
+    except Exception:
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                res = await client.post(url, headers=headers, json=payload)
+                status_ok = (res.status_code == 200)
+        except Exception:
+            status_ok = False
+
+    status_code = res.status_code if res is not None else 'ERR'
+    resp_text = getattr(res, 'text', '') if res is not None else ''
+    print(f"Meta CTA URL Button Send Status {status_code}: {resp_text}")
+
+    if status_ok:
+        try:
+            asyncio.create_task(log_user_chat_message(to_number, "assistant", f"{body_text} [Link: {button_label} -> {url_target}]", msg_type="cta_button"))
+        except Exception:
+            pass
+        return True
+    else:
+        # Fallback to plain text with hyperlink
+        print(f"⚠️ CTA button rejected by Meta ({status_code}). Falling back to plain text delivery!")
+        fallback_body = f"{body_text}\n\n👉 *{button_label}*: {url_target}"
+        return await send_whatsapp_cloud_msg(to_number, fallback_body)
+
 
 async def mark_message_as_read(message_id: str):
     """Marks incoming message as read and activates WhatsApp native floating typing indicator bubble (<50ms)"""

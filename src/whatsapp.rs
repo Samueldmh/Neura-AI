@@ -363,7 +363,12 @@ pub async fn send_whatsapp_interactive_list(
         })
         .collect();
 
-    let button_label = button_text.chars().take(20).collect::<String>();
+    let (body_to_send, prompt_label) = if sanitized_body.len() > 1020 {
+        send_whatsapp_cloud_msg(http, config, to_number, &sanitized_body).await;
+        ("👉 *Please choose from the options below:*".to_string(), button_label)
+    } else {
+        (sanitized_body.clone(), button_label)
+    };
 
     let payload = json!({
         "messaging_product": "whatsapp",
@@ -373,10 +378,10 @@ pub async fn send_whatsapp_interactive_list(
         "interactive": {
             "type": "list",
             "body": {
-                "text": sanitized_body
+                "text": body_to_send
             },
             "action": {
-                "button": button_label,
+                "button": prompt_label,
                 "sections": [
                     {
                         "title": "Available Options",
@@ -387,14 +392,26 @@ pub async fn send_whatsapp_interactive_list(
         }
     });
 
-    if let Err(e) = http
+    let res = http
         .post(&url)
         .bearer_auth(config.whatsapp_token.trim())
         .json(&payload)
         .send()
-        .await
-    {
-        error!("Failed to send interactive list: {}", e);
+        .await;
+
+    let is_ok = match &res {
+        Ok(r) => r.status().is_success(),
+        Err(_) => false,
+    };
+
+    if !is_ok {
+        error!("Interactive list rejected by Meta. Falling back to plain text delivery.");
+        let mut fallback = sanitized_body;
+        fallback.push_str("\n\n👉 *Options:*");
+        for opt in options.iter().take(10) {
+            fallback.push_str(&format!("\n• *{}*", opt.title.trim()));
+        }
+        send_whatsapp_cloud_msg(http, config, to_number, &fallback).await;
     }
 }
 
@@ -425,6 +442,13 @@ pub async fn send_whatsapp_interactive_button(
         })
         .collect();
 
+    let body_to_send = if sanitized_body.len() > 1020 {
+        send_whatsapp_cloud_msg(http, config, to_number, &sanitized_body).await;
+        "👉 *Quick Actions:*".to_string()
+    } else {
+        sanitized_body.clone()
+    };
+
     let payload = json!({
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -433,7 +457,7 @@ pub async fn send_whatsapp_interactive_button(
         "interactive": {
             "type": "button",
             "body": {
-                "text": sanitized_body
+                "text": body_to_send
             },
             "action": {
                 "buttons": button_objs
@@ -441,14 +465,26 @@ pub async fn send_whatsapp_interactive_button(
         }
     });
 
-    if let Err(e) = http
+    let res = http
         .post(&url)
         .bearer_auth(config.whatsapp_token.trim())
         .json(&payload)
         .send()
-        .await
-    {
-        error!("Failed to send interactive button: {}", e);
+        .await;
+
+    let is_ok = match &res {
+        Ok(r) => r.status().is_success(),
+        Err(_) => false,
+    };
+
+    if !is_ok {
+        error!("Interactive button rejected by Meta. Falling back to plain text delivery.");
+        let mut fallback = sanitized_body;
+        fallback.push_str("\n\n👉 *Options:*");
+        for b in buttons.iter().take(3) {
+            fallback.push_str(&format!("\n• *{}*", b.title.trim()));
+        }
+        send_whatsapp_cloud_msg(http, config, to_number, &fallback).await;
     }
 }
 
