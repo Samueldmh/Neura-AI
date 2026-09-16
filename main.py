@@ -68,7 +68,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
 FLUTTERWAVE_SECRET_KEY = os.getenv("FLUTTERWAVE_SECRET_KEY", "")
-FLUTTERWAVE_SECRET_HASH = os.getenv("FLUTTERWAVE_SECRET_HASH", "neura_flw_hash_2026")
+FLUTTERWAVE_SECRET_HASH = os.getenv("FLUTTERWAVE_SECRET_HASH", "")
 BASE_URL = os.getenv("BASE_URL", "https://neura-ai-qtux.onrender.com")
 
 # Modal.com Serverless Ingestion Worker — set this to the deployed URL after `modal deploy modal_worker.py`
@@ -76,9 +76,10 @@ BASE_URL = os.getenv("BASE_URL", "https://neura-ai-qtux.onrender.com")
 MODAL_ENDPOINT = os.getenv("MODAL_ENDPOINT", "")
 
 # Official Meta WhatsApp Cloud API credentials
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAM3F01f3nYBSKwpMPZAU2Nhgdvr7b4481UQ2sCTosr3Hu6UIL3U5BTBiN8I5932PfnEx6GzDWiUfwMYiFok4eZCaMrLPNhhMvnAQ27fVsxxqpxIvES3SYhSi6speeab3FaBq8anZCoPVXS2f9LXA7b7ZA2kWrZBRA8zmBv03cBe2yTR3OWAAhgEh0lEk3ULqfAZDZD")
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "1150180661520951")
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "neura_ai_webhook_secret_2026")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
+META_APP_SECRET = os.getenv("META_APP_SECRET", os.getenv("APP_SECRET", ""))
 
 COLLECTION_NAME = "neura_medical_knowledge"
 
@@ -192,7 +193,9 @@ import time
 embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", threads=1)
 qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=40))
-embedding_pool = ThreadPoolExecutor(max_workers=4)
+query_embedding_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="query_embed")
+bulk_embedding_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bulk_embed")
+embedding_pool = query_embedding_pool  # Backward compatibility
 
 # User-level sequential locks to prevent race conditions on simultaneous actions from the same user
 _user_locks: dict[str, asyncio.Lock] = {}
@@ -280,7 +283,7 @@ broadcasts_col = db.broadcasts if db is not None else None
 chat_logs_col = db.chat_logs if db is not None else None
 youtube_video_cache_col = db.youtube_video_cache if db is not None else None
 
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neura2026admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_SESSIONS = set()
 
 async def log_user_chat_message(user_id: str, role: str, content: str, msg_type: str = "text", metadata: dict = None):
@@ -1150,7 +1153,7 @@ async def call_groq_chat(prompt: str, model: str = "groq/compound-mini", tempera
         "Authorization": f"Bearer {groq_key.strip()}",
         "Content-Type": "application/json"
     }
-    candidate_models = [model, "groq/compound-mini", "llama-3.3-70b-versatile", "qwen/qwen3.6-27b"]
+    candidate_models = [model, "groq/compound-mini", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
     seen = set()
     candidate_models = [m for m in candidate_models if not (m in seen or seen.add(m))]
 
@@ -1543,6 +1546,55 @@ def format_whatsapp_text(text: str) -> str:
 
     return text.strip()
 
+def split_into_whatsapp_chunks(text: str, max_chars: int = 3500) -> list[str]:
+    """Splits text into chunks <= max_chars respecting paragraphs, newlines, and sentences."""
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    def break_down(unit: str) -> list[str]:
+        if len(unit) <= max_chars:
+            return [unit]
+        lines = unit.split("\n")
+        if len(lines) > 1:
+            sub = []
+            for line in lines:
+                sub.extend(break_down(line))
+            return sub
+        sentences = re.split(r'(?<=[.!?])\s+', unit)
+        if len(sentences) > 1:
+            sub = []
+            for s in sentences:
+                sub.extend(break_down(s))
+            return sub
+        return [unit[i:i + max_chars] for i in range(0, len(unit), max_chars)]
+
+    raw_paras = text.split("\n\n")
+    atomic_pieces = []
+    for p in raw_paras:
+        if p.strip():
+            atomic_pieces.extend(break_down(p.strip()))
+
+    chunks = []
+    current = ""
+    for piece in atomic_pieces:
+        if not piece:
+            continue
+        if not current:
+            current = piece
+        elif len(current) + len(piece) + 2 <= max_chars:
+            current += "\n\n" + piece
+        elif len(current) + len(piece) + 1 <= max_chars:
+            current += "\n" + piece
+        else:
+            chunks.append(current)
+            current = piece
+    if current:
+        chunks.append(current)
+
+    return chunks or [text]
+
 async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url: bool = False):
     """Sends a text response directly to the student via Meta WhatsApp Cloud API. Automatically chunks messages exceeding Meta's 4000 char limit."""
     message_text = format_whatsapp_text(message_text)
@@ -1555,22 +1607,8 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url
         "Content-Type": "application/json"
     }
 
-    # Meta WhatsApp text messages cap at 4096 chars. Split into ~3500 char chunks by paragraph.
-    chunks = []
-    if len(message_text) > 3500:
-        paragraphs = message_text.split("\n\n")
-        current_chunk = ""
-        for p in paragraphs:
-            if len(current_chunk) + len(p) + 2 <= 3500:
-                current_chunk += ("\n\n" if current_chunk else "") + p
-            else:
-                if current_chunk:
-                    chunks.append(current_chunk)
-                current_chunk = p
-        if current_chunk:
-            chunks.append(current_chunk)
-    else:
-        chunks = [message_text]
+    # Meta WhatsApp text messages cap at 4096 chars. Safely chunk into <=3500 char messages.
+    chunks = split_into_whatsapp_chunks(message_text, max_chars=3500)
 
     all_success = True
     for chunk in chunks:
@@ -2530,6 +2568,7 @@ def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool,
             pages_data = []
             total_words = 0
             empty_pages = 0
+            empty_page_indices = []
             text_pages = 0
             
             for idx, p in enumerate(reader.pages):
@@ -2541,6 +2580,7 @@ def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool,
                     pages_data.append((idx + 1, txt))
                 else:
                     empty_pages += 1
+                    empty_page_indices.append(idx)
             
             empty_ratio = empty_pages / page_count
             avg_words = total_words / max(page_count, 1)
@@ -3038,9 +3078,9 @@ async def _embed_and_upsert_chunk_slice(
         batch_slice = chunk_items[batch_start:batch_start + batch_size]
         batch_texts = [item["text"] for item in batch_slice]
         
-        # Embed synchronously inside ThreadPoolExecutor to keep event loop responsive
+        # Embed synchronously inside bulk ThreadPoolExecutor to prevent blocking student chat queries
         embeddings = await loop.run_in_executor(
-            embedding_pool,
+            bulk_embedding_pool,
             lambda b=batch_texts: list(embedder.embed(b))
         )
         
@@ -4428,7 +4468,8 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list, stu
         f"RETRIEVED TEXTBOOK CONTEXT SNIPPETS:\n{combined_context_summary}"
     )
     payload = {
-        "model": DEFAULT_MODEL,
+        "model": FRONTDESK_MODEL,
+        "models": [FRONTDESK_MODEL, FALLBACK_MODEL],
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_payload_text}
@@ -4437,7 +4478,6 @@ async def evaluate_retrieval_adequacy(user_msg: str, retrieved_points: list, stu
         "max_tokens": 500,
         "reasoning": get_reasoning_config(user_msg, is_micro=True),
         "provider": {
-            "order": DEFAULT_PROVIDER_ORDER,
             "allow_fallbacks": True
         }
     }
@@ -4583,7 +4623,7 @@ async def search_qdrant(query_text: str, limit: int = 8, preferred_books: list =
     try:
         loop = asyncio.get_running_loop()
         t_embed_start = time.perf_counter()
-        query_vector = await loop.run_in_executor(embedding_pool, get_embedding_sync, query_text)
+        query_vector = await loop.run_in_executor(query_embedding_pool, get_embedding_sync, query_text)
         dt_embed = time.perf_counter() - t_embed_start
 
         # Prepare user documents search task if user_id is provided
@@ -5400,25 +5440,66 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 await send_commands_menu(sender_phone)
                 return
 
+            if msg_lower in ["/wallet", "wallet", "/balance", "balance", "/deposit", "deposit", "💳 wallet"]:
+                name_val = "Student"
+                if users_col is not None:
+                    ud = await users_col.find_one({"user_id": sender_phone})
+                    if ud:
+                        name_val = ud.get("name", "Student")
+                wallet_card = (
+                    f"💳 *Ranviar Student Access*\n\n"
+                    f"Hello *{name_val}*! 👋\n\n"
+                    f"• Status: *Active Student Beta (Sponsored)* 🎓\n"
+                    f"• Medical Queries: *Unlimited Study Access*\n"
+                    f"• Study Vault: *60 Documents / 150MB Limit*\n\n"
+                    f"During this public beta period, all core AI medical queries, clinical explanations, diagram analyses, and document searches are provided completely free of charge to medical students.\n\n"
+                    f"Keep studying and protecting your streak! 🔥"
+                )
+                wallet_buttons = [
+                    {"id": "/menu", "title": "📋 Menu"},
+                    {"id": "/profile", "title": "👤 Profile"},
+                    {"id": "/documents", "title": "📂 My Vault"}
+                ]
+                await send_whatsapp_interactive_button(sender_phone, wallet_card, wallet_buttons)
+                return
+
             if msg_lower.startswith("/broadcast ") or msg_lower.startswith("broadcast "):
-                admin_phones = [p.strip() for p in os.getenv("ADMIN_PHONES", "2348109839187,2349021292141").split(",")]
-                if sender_phone in admin_phones or sender_phone == os.getenv("ADMIN_PHONE", "2348109839187"):
-                    parts = user_msg.split(" ", 1)
-                    broadcast_text = parts[1].strip() if len(parts) > 1 else ""
-                    if broadcast_text:
-                        await send_whatsapp_cloud_msg(sender_phone, "📣 *Broadcasting Started!*\n\nDelivering your announcement to all registered students in the background...")
-                        asyncio.create_task(execute_broadcast_task(
-                            broadcast_id=str(uuid.uuid4()),
-                            message=broadcast_text,
-                            target_level="ALL",
-                            template_name="neura_announcement",
-                            mode="smart",
-                            admin_notify_phone=sender_phone
-                        ))
-                        return
+                admin_phones = [p.strip() for p in os.getenv("ADMIN_PHONES", "").split(",") if p.strip()]
+                single_admin = os.getenv("ADMIN_PHONE", "").strip()
+                if single_admin and single_admin not in admin_phones:
+                    admin_phones.append(single_admin)
+                admin_pass = os.getenv("ADMIN_PASSWORD", "").strip()
+
+                parts = user_msg.split()
+                is_authorized = False
+                broadcast_text = ""
+
+                # Support /broadcast <admin_password> <message> OR /broadcast <message> if sender is recognized admin
+                if len(parts) >= 2:
+                    if admin_pass and parts[1] == admin_pass:
+                        is_authorized = True
+                        broadcast_text = " ".join(parts[2:]).strip()
+                    elif sender_phone in admin_phones:
+                        is_authorized = True
+                        broadcast_text = " ".join(parts[1:]).strip()
+
+                if not is_authorized or not broadcast_text:
+                    if admin_pass:
+                        await send_whatsapp_cloud_msg(sender_phone, "⚠️ Usage: */broadcast [admin_password] [your announcement text]*")
                     else:
-                        await send_whatsapp_cloud_msg(sender_phone, "⚠️ Usage: */broadcast [your announcement text]*")
-                        return
+                        await send_whatsapp_cloud_msg(sender_phone, "⚠️ Usage: */broadcast [your announcement text]* (authorized admin phone required)")
+                    return
+
+                await send_whatsapp_cloud_msg(sender_phone, "📣 *Broadcasting Started!*\n\nDelivering your announcement to all registered students in the background...")
+                asyncio.create_task(execute_broadcast_task(
+                    broadcast_id=str(uuid.uuid4()),
+                    message=broadcast_text,
+                    target_level="ALL",
+                    template_name="neura_announcement",
+                    mode="smart",
+                    admin_notify_phone=sender_phone
+                ))
+                return
 
             if users_col is not None:
                 if msg_lower == "/reset":
@@ -6000,8 +6081,15 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] Condenser finished in {dt_condense:.1f}ms: '{user_msg}' ➡️ '{standalone_question}'")
 
         # ⚡ Step 0: Instant In-Memory Cache Check (<1ms lookup for repeat high-yield questions)
+        # Bypassed if student has private uploaded documents in their vault (ensures personal notes are always searched)
+        user_has_vault_docs = bool(
+            user_doc and (
+                user_doc.get("custom_documents") or 
+                user_doc.get("total_uploaded_docs", 0) > 0
+            )
+        )
         is_followup = (standalone_question.strip().lower() != user_msg.strip().lower()) or is_tagged_reply
-        if intent != "QUIZ" and not is_followup:
+        if intent != "QUIZ" and not is_followup and not user_has_vault_docs:
             cached_answer, cached_context = TOPIC_CACHE.get(search_term, preferred_books=preferred_books_list)
             if cached_answer:
                 clean_topic = clean_medical_topic_title(search_term)
@@ -6244,8 +6332,14 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         ai_lower = ai_answer.lower()
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
 
-        # Save in 24-hour LRU Cache for instant 0.05s delivery for other students
-        if not is_not_covered and len(ai_answer) > 100:
+        # 🛡️ Strict Privacy Guard: NEVER cache answers derived from a student's private vault documents
+        has_user_doc_context = any(
+            getattr(p, 'payload', {}).get('is_user_doc') is True
+            for p in search_res if hasattr(p, 'payload') and isinstance(p.payload, dict)
+        )
+
+        # Save in 24-hour LRU Cache for instant 0.05s delivery for other students (curriculum textbooks only)
+        if not is_not_covered and len(ai_answer) > 100 and not has_user_doc_context:
             TOPIC_CACHE.set(search_term, ai_answer, formatted_context, preferred_books=preferred_books_list)
 
         # [DISABLED] Automatic follow-up Practice MCQs button per user request
@@ -6459,10 +6553,29 @@ async def verify_webhook(request: Request):
 
 @app.post("/webhook")
 async def handle_whatsapp_webhook(request: Request):
-    """Incoming WhatsApp Message Webhook Endpoint from Meta"""
+    """Incoming WhatsApp Message Webhook Endpoint from Meta with HMAC verification & multi-message batching."""
     try:
-        body = await request.json()
+        raw_body = await request.body()
+
+        # 🛡️ Step 0: Meta Webhook Signature Verification (X-Hub-Signature-256)
+        meta_secret = os.getenv("META_APP_SECRET", os.getenv("APP_SECRET", "")).strip()
+        if meta_secret:
+            sig_header = request.headers.get("X-Hub-Signature-256", "")
+            if not sig_header or not sig_header.startswith("sha256="):
+                print("❌ Meta Webhook Rejected: Missing or malformed X-Hub-Signature-256")
+                return Response(content="Missing or invalid signature", status_code=403)
+            expected_sig = sig_header[len("sha256="):]
+            computed_sig = hmac.new(meta_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(computed_sig, expected_sig):
+                print("❌ Meta Webhook Rejected: Signature mismatch")
+                return Response(content="Invalid signature", status_code=403)
+
+        body = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         print(f"📩 Webhook Payload: {json.dumps(body)}")
+
+        # Extract and accumulate tasks for all batched messages
+        bg_tasks = BackgroundTasks()
+        tasks_count = 0
 
         # Extract message payload
         entries = body.get("entry", [])
@@ -6495,20 +6608,19 @@ async def handle_whatsapp_webhook(request: Request):
 
                     if text_body:
                         print(f"📩 Received msg ({msg_type}) from {sender_phone} (Tagged Reply: {is_tagged_reply}): '{text_body}'")
-                        # Process in background task to respond to Meta immediately (prevents timeout)
-                        task = BackgroundTask(process_whatsapp_message, sender_phone, text_body, is_tagged_reply)
-                        return Response(content=json.dumps({"status": "processing"}), media_type="application/json", background=task)
+                        bg_tasks.add_task(process_whatsapp_message, sender_phone, text_body, is_tagged_reply)
+                        tasks_count += 1
                     elif msg_type in ("audio", "voice"):
                         audio_obj = msg.get("audio", {}) or msg.get("voice", {})
                         media_id = audio_obj.get("id")
                         if media_id:
                             print(f"🎙️ Received Voice Note from {sender_phone} (Media ID: {media_id})")
-                            task = BackgroundTask(process_whatsapp_audio, sender_phone, media_id, is_tagged_reply)
-                            return Response(content=json.dumps({"status": "processing_audio"}), media_type="application/json", background=task)
+                            bg_tasks.add_task(process_whatsapp_audio, sender_phone, media_id, is_tagged_reply)
+                            tasks_count += 1
                         else:
                             print(f"⚠️ Voice note from {sender_phone} missing media_id")
-                            task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read voice note. Please try recording again! 🎙️")
-                            return Response(content=json.dumps({"status": "missing_media_id"}), media_type="application/json", background=task)
+                            bg_tasks.add_task(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read voice note. Please try recording again! 🎙️")
+                            tasks_count += 1
                     elif msg_type == "document":
                         doc_obj = msg.get("document", {})
                         media_id = doc_obj.get("id")
@@ -6533,12 +6645,12 @@ async def handle_whatsapp_webhook(request: Request):
                             filename = raw_filename
                         if media_id:
                             print(f"📄 Received Document from {sender_phone} (Filename: {filename}, Media ID: {media_id}, Caption: '{caption}')")
-                            task = BackgroundTask(process_whatsapp_document, sender_phone, media_id, filename, caption, mime_type)
-                            return Response(content=json.dumps({"status": "processing_document"}), media_type="application/json", background=task)
+                            bg_tasks.add_task(process_whatsapp_document, sender_phone, media_id, filename, caption, mime_type)
+                            tasks_count += 1
                         else:
                             print(f"⚠️ Document from {sender_phone} missing media_id")
-                            task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read the uploaded document. Please try uploading again! 📄")
-                            return Response(content=json.dumps({"status": "missing_media_id"}), media_type="application/json", background=task)
+                            bg_tasks.add_task(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read the uploaded document. Please try uploading again! 📄")
+                            tasks_count += 1
                     elif msg_type == "image":
                         img_obj = msg.get("image", {})
                         media_id = img_obj.get("id")
@@ -6546,17 +6658,19 @@ async def handle_whatsapp_webhook(request: Request):
                         mime_type = img_obj.get("mime_type", "image/jpeg")
                         if media_id:
                             print(f"🖼️ Received Image from {sender_phone} (Media ID: {media_id}, Caption: '{caption}')")
-                            task = BackgroundTask(process_whatsapp_image, sender_phone, media_id, caption, mime_type, is_tagged_reply)
-                            return Response(content=json.dumps({"status": "processing_image"}), media_type="application/json", background=task)
+                            bg_tasks.add_task(process_whatsapp_image, sender_phone, media_id, caption, mime_type, is_tagged_reply)
+                            tasks_count += 1
                         else:
                             print(f"⚠️ Image from {sender_phone} missing media_id")
-                            task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read the image. Please try uploading again! 🖼️")
-                            return Response(content=json.dumps({"status": "missing_media_id"}), media_type="application/json", background=task)
+                            bg_tasks.add_task(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read the image. Please try uploading again! 🖼️")
+                            tasks_count += 1
                     else:
                         print(f"⚠️ Received unsupported message type '{msg_type}' from {sender_phone}")
-                        task = BackgroundTask(send_whatsapp_cloud_msg, sender_phone, "I can read text, voice notes, images/ECGs/slides, and PDF medical documents! Please send your materials. 🤖🎙️📸📚")
-                        return Response(content=json.dumps({"status": "unsupported_media"}), media_type="application/json", background=task)
+                        bg_tasks.add_task(send_whatsapp_cloud_msg, sender_phone, "I can read text, voice notes, images/ECGs/slides, and PDF medical documents! Please send your materials. 🤖🎙️📸📚")
+                        tasks_count += 1
 
+        if tasks_count > 0:
+            return Response(content=json.dumps({"status": "processing", "tasks": tasks_count}), media_type="application/json", background=bg_tasks)
         return Response(content=json.dumps({"status": "ignored"}), media_type="application/json")
     except Exception as e:
         print(f"Error handling webhook: {e}")

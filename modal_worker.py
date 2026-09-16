@@ -41,7 +41,7 @@ import modal
 # GATEKEEPER MODEL CONFIGURATION
 # ---------------------------------------------------------------------------
 GATEKEEPER_OPENROUTER_MODELS = ["google/gemini-2.5-flash-lite", "openai/gpt-4o-mini"]
-GATEKEEPER_GROQ_MODELS = ["groq/compound-mini", "llama-3.3-70b-versatile", "qwen/qwen3.6-27b"]
+GATEKEEPER_GROQ_MODELS = ["groq/compound-mini", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 CANDIDATE_MODELS = GATEKEEPER_OPENROUTER_MODELS + GATEKEEPER_GROQ_MODELS
 
 # ── Character-based text chunking with delimiter boundary detection ────────
