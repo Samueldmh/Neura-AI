@@ -58,6 +58,21 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from bot_capabilities import (
+    BOT_IDENTITY,
+    BOT_CAPABILITIES,
+    BOT_LIMITATIONS,
+    register_capability,
+    get_identity_prompt,
+    get_capabilities_prompt,
+    get_limitations_prompt,
+    get_full_self_awareness_prompt_snippet,
+    render_identity_card,
+    render_capabilities_card,
+    render_limitations_card,
+    is_self_awareness_query,
+)
+
 # ==========================================
 # 1. CONFIGURATION & ENVIRONMENT VARIABLES (v2.0 Webhook)
 # ==========================================
@@ -836,12 +851,16 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
     if any(re.search(pat, msg_clean) for pat in conversational_fast_patterns) and not any(ind in msg_clean for ind in KNOWN_MED_INDICATORS):
         return "CONVERSATIONAL"
 
+    # 2.3 Self-Awareness & Capability Introspection Fast-Path (<0.01ms)
+    sa_type = is_self_awareness_query(msg_clean)
+    if sa_type and not any(ind in msg_clean for ind in KNOWN_MED_INDICATORS):
+        return "PLATFORM_META"
+
     greeting_patterns = [
         r"\b(hi|hello|hey|heya|yo|sup|wassup|what'?s\s*up|good\s*(morning|afternoon|evening|day)|greetings)\b",
         r"\b(how\s*far|wetin\s*dey|how\s*body|how\s*you\s*dey|how\s*things|kedu|bawo|sannu)\b",
         r"\b(boss\s*man|senior\s*man|chief|my\s*guy|boss)\b",
         r"\b(how\s*(are\s*you|r\s*u|is\s*it\s*going|you\s*doing|are\s*you\s*doing|everything))\b",
-        r"\b(who\s*are\s*you|what\s*is\s*ranviar(\s*ai)?|what\s*can\s*you\s*do|introduce\s*yourself)\b",
         r"\b(hallo|wie\s*geht'?s|guten\s*tag|servus|moin|bonjour|salut|cava|comment\s*ca\s*va|hola|buenos\s*dias)\b"
     ]
     if any(re.search(pat, msg_clean) for pat in greeting_patterns) and len(msg_clean.split()) <= 4:
@@ -5470,6 +5489,37 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 await send_whatsapp_interactive_button(sender_phone, wallet_card, wallet_buttons)
                 return
 
+            # Direct Self-Awareness Queries (Identity, Capabilities, Limitations)
+            sa_query_type = is_self_awareness_query(user_msg)
+            if sa_query_type and not any(ind in msg_lower for ind in ["stemi", "infarction", "arrhythmia", "ischemia", "fracture", "pathophysiology"]):
+                name_val = "Doc"
+                if users_col is not None:
+                    ud = await users_col.find_one({"user_id": sender_phone})
+                    if ud:
+                        name_val = ud.get("name", "Doc")
+                
+                if sa_query_type == "IDENTITY":
+                    card_content = render_identity_card(name_val)
+                    buttons = [
+                        {"id": "what_can_you_do", "title": "⚡ What Can You Do?"},
+                        {"id": "/menu", "title": "📋 Main Menu"}
+                    ]
+                elif sa_query_type == "CAPABILITIES":
+                    card_content = render_capabilities_card(name_val)
+                    buttons = [
+                        {"id": "/documents", "title": "📂 My Vault"},
+                        {"id": "/curriculum", "title": "📚 My Textbooks"},
+                        {"id": "/menu", "title": "📋 Main Menu"}
+                    ]
+                else:  # LIMITATIONS
+                    card_content = render_limitations_card(name_val)
+                    buttons = [
+                        {"id": "what_can_you_do", "title": "⚡ What Can You Do?"},
+                        {"id": "/menu", "title": "📋 Main Menu"}
+                    ]
+                await send_whatsapp_interactive_button(sender_phone, card_content, buttons)
+                return
+
             # Direct inquiry about accepting files, documents, pictures, images, PDFs, slides, or voice notes
             is_media_capability_query = bool(
                 re.search(r'\b(accept|take|support|read|see|process)\s+(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|voice\s*notes?|attachments?)\b', msg_lower) or
@@ -5979,7 +6029,32 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 return
 
         if intent == "PLATFORM_META":
-            # Check if this is specifically asking if we accept files, pictures, documents, etc.
+            # 1. Direct Self-Awareness Introspection (Identity, Capabilities, Limitations)
+            sa_query_type = is_self_awareness_query(user_msg)
+            if sa_query_type and not any(ind in user_msg.lower() for ind in ["stemi", "infarction", "arrhythmia", "ischemia", "fracture", "pathophysiology"]):
+                if sa_query_type == "IDENTITY":
+                    card_content = render_identity_card(name)
+                    buttons = [
+                        {"id": "what_can_you_do", "title": "⚡ What Can You Do?"},
+                        {"id": "/menu", "title": "📋 Main Menu"}
+                    ]
+                elif sa_query_type == "CAPABILITIES":
+                    card_content = render_capabilities_card(name)
+                    buttons = [
+                        {"id": "/documents", "title": "📂 My Vault"},
+                        {"id": "/curriculum", "title": "📚 My Textbooks"},
+                        {"id": "/menu", "title": "📋 Main Menu"}
+                    ]
+                else:  # LIMITATIONS
+                    card_content = render_limitations_card(name)
+                    buttons = [
+                        {"id": "what_can_you_do", "title": "⚡ What Can You Do?"},
+                        {"id": "/menu", "title": "📋 Main Menu"}
+                    ]
+                await send_whatsapp_interactive_button(sender_phone, card_content, buttons)
+                return
+
+            # 2. Check if this is specifically asking if we accept files, pictures, documents, etc.
             is_media_query = bool(
                 re.search(r'\b(accept|take|support|read|see|process)\s+(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|voice\s*notes?|attachments?)\b', user_msg.lower()) or
                 re.search(r'\b(can\s+(i|you)\s+(send|upload|give|drop|share|accept|read|see|view|process)\s+(you\s+)?(files?|pictures?|photos?|images?|documents?|pdfs?|slides?|handouts?|voice\s*notes?|audio|attachments?))\b', user_msg.lower()) or
@@ -6008,15 +6083,11 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 
             platform_system = (
                 f"You are Ranviar, the AI medical study companion for Nigerian MBBS students chatting with {name} on WhatsApp.\n"
-                "The student is asking a question about the Ranviar platform, beta testing, privacy, feedback, or app features.\n"
+                "The student is asking a question about the Ranviar platform, capabilities, limitations, beta testing, privacy, feedback, or app features.\n"
                 "GUIDELINES:\n"
                 "- Answer directly, warmly, and naturally in 1 to 3 short sentences.\n"
-                "- FILE, PICTURE, AND MEDIA CAPABILITIES: You FULLY accept and process files, documents, pictures, and voice notes! If asked whether you accept files or pictures, always confirm enthusiastically ('Yes! 🩺📸📄') and explain:\n"
-                "  1. Documents & PDFs: Students can send lecture notes, slides, or PDF handouts up to 150MB (even scanned documents with AI OCR!) via paperclip 📎 -> Document. They are stored in their personal study vault (up to 60 docs), so they never need to send a document more than once!\n"
-                "  2. Pictures & Images: Students can send photos of histology slides, pathology specimens, ECG strips, chest X-rays, or textbook diagrams directly via camera 📷 or gallery. You analyze them with medical vision AI!\n"
-                "  3. Voice Notes: Students can send WhatsApp voice notes anytime; you listen, transcribe, and break down medical concepts.\n"
+                f"{get_full_self_awareness_prompt_snippet()}\n"
                 "- If asked what 'anonymous beta feedback' means, explain simply: 'Anonymous beta feedback just means any bug reports, impressions, or suggestions you share are completely confidential and never linked to your name or phone number—so you can be 100% honest with us! 😊'\n"
-                "- If asked who created you or what Ranviar is, explain that Ranviar is an AI study co-pilot built specifically for Nigerian MBBS medical students, grounded in accredited curriculum textbooks.\n"
                 "- If asked about commands or wallet, mention they can type /commands to explore features.\n"
                 "- STRICT PROHIBITION: Under NO circumstances output a medical textbook lecture, headers, bulleted chapters, Senior Exam Tips, or YouTube video cards. Output pure natural conversational WhatsApp chat."
             )
@@ -6074,8 +6145,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 f"You are Ranviar, a brilliant, warm, and empathetic senior medical colleague (like a trusted senior resident or sharp study buddy) chatting with {name}, a {level} MBBS medical student on WhatsApp.\n"
                 "PERSONA & VOICE GUIDELINES:\n"
                 "- Sound like an authentic, supportive human colleague texting on WhatsApp, NOT an AI bot, search engine, or robot.\n"
-                "- FILE & PICTURE CAPABILITIES: You FULLY accept files, documents (PDFs up to 150MB, slides, handouts saved in their vault up to 60 docs), pictures/photos (histology, ECGs, pathology, X-rays), and voice notes! If asked whether you accept files or pictures, always confirm enthusiastically and tell them to send them right away!\n"
-                "- CREATOR / SAMUEL QUESTIONS: If asked who created you, who made you, or if Samuel made you ('Is it Samuel that made you?'): Acknowledge warmly, proudly, and directly! Yes, Samuel is the visionary developer and founder who engineered and trained Ranviar specifically to help Nigerian MBBS students conquer their medical training.\n"
+                f"{get_full_self_awareness_prompt_snippet()}\n"
                 "- If the student is checking in ('are you there', 'u there', emojis like 🥺), respond with genuine warmth and reassurance (e.g. 'Always right here with you! 😊 Taking a breather, or are we diving into something new?').\n"
                 "- If the student is exhausted, stressed, or venting about ward rounds / med school, validate their feelings with real empathy and encouragement (e.g. 'Ward rounds can be brutal, Doc. Grab some water and take a quick break—you've got this!').\n"
                 "- If they ask general study advice ('how do I study pharm', 'tips for 300L'), give practical, high-yield guidance in a peer-to-peer tone.\n"
