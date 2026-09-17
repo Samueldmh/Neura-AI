@@ -696,13 +696,14 @@ class LRUTopicCache:
         self.maxsize = maxsize
         self.ttl = ttl_seconds
 
-    def _make_key(self, query: str, preferred_books: list = None) -> str:
+    def _make_key(self, query: str, preferred_books: list = None, user_id: str = None) -> str:
         clean_q = re.sub(r'[^\w\s]', '', query.strip().lower())
         books_key = "_".join(sorted([b.lower()[:12] for b in (preferred_books or []) if b and not b.startswith("Skip")]))
-        return f"{clean_q}::{books_key}"
+        user_prefix = f"user_{user_id}::" if user_id else ""
+        return f"{user_prefix}{clean_q}::{books_key}"
 
-    def get(self, query: str, preferred_books: list = None):
-        key = self._make_key(query, preferred_books)
+    def get(self, query: str, preferred_books: list = None, user_id: str = None):
+        key = self._make_key(query, preferred_books, user_id=user_id)
         if key in self.cache:
             entry = self.cache[key]
             if time.time() - entry["timestamp"] < self.ttl:
@@ -712,10 +713,10 @@ class LRUTopicCache:
                 del self.cache[key]
         return None, None
 
-    def set(self, query: str, answer: str, context: str = "", preferred_books: list = None):
+    def set(self, query: str, answer: str, context: str = "", preferred_books: list = None, user_id: str = None):
         if not answer or len(answer) < 50:
             return
-        key = self._make_key(query, preferred_books)
+        key = self._make_key(query, preferred_books, user_id=user_id)
         if key in self.cache:
             self.cache.move_to_end(key)
         elif len(self.cache) >= self.maxsize:
@@ -742,6 +743,7 @@ Your job is to *teach* the concept, not repeat the textbook.
 
 Rules:
 - Never copy sentences from the reference material verbatim — always explain in your own words
+- Never cite fabricated figure or table numbers (e.g. 'Figure X-Y', 'Figure 12.8') from reference books. Always explain directly in your own words.
 - Start with a short, human reaction to the question before the explanation (not a template greeting — vary it)
 - Use analogies or clinical framing where it helps understanding
 - Keep it conversational: short paragraphs, plain language, like a sharp senior student explaining it to a junior
