@@ -1913,6 +1913,107 @@ async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_la
         return await send_whatsapp_cloud_msg(to_number, fallback_body)
 
 
+async def send_whatsapp_contact_card(to_number: str) -> bool:
+    """Sends Ranviar's official vCard contact card so students can save Ranviar in 1 tap.
+    Once saved to contacts, WhatsApp immediately displays 'Ranviar Medical AI' on the student's chat list.
+    """
+    if not to_number or not WHATSAPP_TOKEN:
+        return False
+
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": "contacts",
+        "contacts": [{
+            "name": {
+                "formatted_name": "Ranviar Medical AI",
+                "first_name": "Ranviar",
+                "last_name": "Medical AI"
+            },
+            "org": {
+                "company": "Ranviar",
+                "department": "MBBS Medical Education",
+                "title": "Clinical Study Co-Pilot"
+            },
+            "phones": [{
+                "phone": "+2349021292141",
+                "type": "WORK",
+                "wa_id": "2349021292141"
+            }],
+            "urls": [{
+                "url": "https://ranviar.org",
+                "type": "WORK"
+            }]
+        }]
+    }
+
+    status_ok = False
+    res = None
+    try:
+        res = await shared_http_client.post(url, headers=headers, json=payload)
+        status_ok = (res.status_code == 200)
+    except Exception:
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                res = await client.post(url, headers=headers, json=payload)
+                status_ok = (res.status_code == 200)
+        except Exception:
+            status_ok = False
+
+    status_code = res.status_code if res is not None else 'ERR'
+    resp_text = getattr(res, 'text', '') if res is not None else ''
+    print(f"Meta Contact Card Send Status {status_code}: {resp_text}")
+
+    if status_ok:
+        try:
+            asyncio.create_task(log_user_chat_message(to_number, "assistant", "📇 [Ranviar Contact Card]", msg_type="contact_card"))
+        except Exception:
+            pass
+        return True
+    return False
+
+
+async def check_and_send_contact_card(sender_phone: str, user_doc: dict = None) -> bool:
+    """Delivers the Ranviar WhatsApp Contact Card exactly once to each student.
+    Ensures existing users receive the contact card on their very next chat message so they can
+    save 'Ranviar' in 1 tap, replacing the phone number with Ranviar's name on their chat list.
+    """
+    if not sender_phone or users_col is None:
+        return False
+    try:
+        if user_doc is None:
+            user_doc = await users_col.find_one({"user_id": sender_phone})
+
+        # If user has already received the contact card, do not resend
+        if user_doc and user_doc.get("contact_card_sent") is True:
+            return False
+
+        # Mark in DB immediately to prevent concurrent duplicates
+        await users_col.update_one(
+            {"user_id": sender_phone},
+            {"$set": {"contact_card_sent": True}},
+            upsert=True
+        )
+        if user_doc is not None:
+            user_doc["contact_card_sent"] = True
+
+        tip_msg = (
+            "📌 *Tip:* Tap the card below to save *Ranviar* to your contacts so my name appears clearly on your chat list! 🩺⚡"
+        )
+        await send_whatsapp_cloud_msg(sender_phone, tip_msg)
+        await send_whatsapp_contact_card(sender_phone)
+        return True
+    except Exception as e:
+        print(f"⚠️ Failed to deliver contact card to {sender_phone}: {e}")
+        return False
+
+
 async def mark_message_as_read(message_id: str):
     """Marks incoming message as read and activates WhatsApp native floating typing indicator bubble (<50ms)"""
     if not message_id or not WHATSAPP_TOKEN:
@@ -2457,6 +2558,8 @@ async def process_whatsapp_image(
             if user_doc:
                 student_name = user_doc.get("name", "Doctor")
                 class_level = user_doc.get("level", "MBBS")
+                if not user_doc.get("contact_card_sent"):
+                    await check_and_send_contact_card(sender_phone, user_doc)
         except Exception:
             pass
 
@@ -3487,6 +3590,8 @@ async def process_whatsapp_document(
                 try:
                     ud = await users_col.find_one({"user_id": sender_phone})
                     if ud:
+                        if not ud.get("contact_card_sent"):
+                            await check_and_send_contact_card(sender_phone, ud)
                         custom_docs = ud.get("custom_documents", [])
                         existing_filenames = {d.get("filename") for d in custom_docs if isinstance(d, dict)}
                         
@@ -4968,7 +5073,7 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
     if not user_doc or not user_doc.get("onboarding_step"):
         await users_col.update_one(
             {"user_id": sender_phone},
-            {"$set": {"onboarding_step": "ASK_NAME"}},
+            {"$set": {"onboarding_step": "ASK_NAME", "contact_card_sent": True}},
             upsert=True
         )
         welcome_msg = (
@@ -4977,6 +5082,11 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             "To get started, what is your first name?"
         )
         await send_whatsapp_cloud_msg(sender_phone, welcome_msg)
+        tip_msg = (
+            "📌 *Tip:* Tap the card below to save *Ranviar* to your contacts so my name appears clearly on your chat list! 🩺⚡"
+        )
+        await send_whatsapp_cloud_msg(sender_phone, tip_msg)
+        await send_whatsapp_contact_card(sender_phone)
         return True
         
     step = str(user_doc.get("onboarding_step") or "")
@@ -5476,6 +5586,10 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Update daily study streak and activity timestamp
         streak = await update_user_study_streak(sender_phone)
         print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] User profile loaded: '{name}' ({level}), Streak: {streak}d")
+
+        # Deliver 1-tap Ranviar Contact Card to existing users on their next chat message
+        if user_doc and not user_doc.get("contact_card_sent"):
+            await check_and_send_contact_card(sender_phone, user_doc)
 
         # Check if user has an active document upload mid-flight (< 5 minutes old)
         active_upload = user_doc.get("active_upload") if user_doc else None
