@@ -4,7 +4,7 @@ bot_capabilities.py — Centralized Self-Awareness & Capability Registry for Ran
 Single source of truth for:
 1. BOT_IDENTITY: Who Ranviar is, its creator Samuel, its MBBS student audience, and its persona.
 2. BOT_CAPABILITIES: What Ranviar CAN do (curriculum RAG, vault, OCR, vision, voice, quizzes, etc.).
-3. BOT_LIMITATIONS: What Ranviar CANNOT do (no prescribing, medical scope only, 150MB limit, 60 docs max).
+3. BOT_LIMITATIONS: What Ranviar CANNOT do (no prescribing, medical scope only, 200MB limit, 60 docs max).
 4. DYNAMIC PROMPT BUILDERS: Injects unified self-awareness into all LLM prompts.
 5. EXTENSION API: `register_capability(...)` allows adding a new feature with 1 function call,
    automatically updating all prompts, help cards, and chat interactions system-wide!
@@ -59,12 +59,12 @@ BOT_CAPABILITIES: Dict[str, dict] = {
         "name": "📄 Document & Lecture Slide Vault (PDF, Word, PPT)",
         "category": "Multimodal Study Vault",
         "summary": (
-            "Upload lecture slides, departmental handouts, and notes up to 150MB. Even scanned documents are read with AI OCR! "
+            "Upload lecture slides, departmental handouts, and notes up to 200MB. Even scanned documents are read with AI OCR! "
             "Stored permanently in your personal vault (up to 60 documents), so there is no need to send a document more than once."
         ),
         "how_to_use": "Tap the paperclip 📎 -> Document -> select your lecture notes or slides. Type /documents to view your vault.",
         "prompt_instruction": (
-            "You FULLY accept and process PDF, Word, and PowerPoint documents up to 150MB (including scanned PDFs with AI OCR). "
+            "You FULLY accept and process PDF, Word, and PowerPoint documents up to 200MB (including scanned PDFs with AI OCR). "
             "Uploaded documents are stored in the student's personal vault (up to 60 docs), so they never need to send a document twice. "
             "You query their vault notes to answer questions specific to their school's slides."
         ),
@@ -155,7 +155,7 @@ BOT_LIMITATIONS = [
     {
         "id": "file_upload_limits",
         "title": "File & Vault Size Limits",
-        "rule": "Document uploads are supported up to 150MB per file (PDF, Word, PPT), and each student's personal vault stores up to 60 documents."
+        "rule": "Document uploads are supported up to 200MB per file (PDF, Word, PPT), and each student's personal vault stores up to 60 documents."
     },
     {
         "id": "no_hallucinated_citations",
@@ -281,7 +281,7 @@ def render_limitations_card(student_name: str = "Doc") -> str:
         f"Hello *{clean_name}*! To maintain academic excellence and clinical safety, here is what I cannot do:\n\n"
         "• 🚫 *Non-Medical Topics*: Strictly focused on medical education—no finance, crypto, or tech coding.\n"
         "• 🚫 *Prescription & Clinical Care*: Academic study tool only; not for emergency triage or patient management.\n"
-        "• 🚫 *File Limits*: Uploads capped at 150MB per file and 60 documents per vault.\n"
+        "• 🚫 *File Limits*: Uploads capped at 200MB per file and 60 documents per vault.\n"
         "• 🚫 *Audio Transcripts*: Voice notes must be under 2 minutes for optimal precision.\n\n"
         "Whenever you're ready, let's dive back into your medical studies! 📚💡"
     )

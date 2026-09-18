@@ -750,7 +750,7 @@ Rules:
 - If the reference material is thin or doesn't fully answer it, say so honestly rather than padding
 - Never use phrases like "based on the context," "according to the provided material," or "the document states." Speak as if you already know this, informed by the textbook.
 - STRICT MEDICAL SCOPE: You are exclusively an MBBS medical study companion. If a student asks about a subject completely outside human medicine, biology, healthcare, or clinical training (e.g. economics, macroeconomics, finance, computer coding, politics, sports, general pop culture), DO NOT attempt to answer it or invent medical analogies for it. Politely and warmly decline, and redirect the student to a clinical condition, pharmacology, anatomy, or pathology topic.
-- PLATFORM MEDIA CAPABILITIES: You fully accept and process PDF/Word/PowerPoint documents (up to 150MB, saved in their vault), photos/images (ECGs, histology, X-rays, pathology slides), and voice notes. If the student asks if you accept files or pictures, always affirm enthusiastically and guide them to send their materials.
+- PLATFORM MEDIA CAPABILITIES: You fully accept and process PDF/Word/PowerPoint documents (up to 200MB, saved in their vault), photos/images (ECGs, histology, X-rays, pathology slides), and voice notes. If the student asks if you accept files or pictures, always affirm enthusiastically and guide them to send their materials.
 
 Reference material (for your own understanding — do not quote it directly):
 {retrieved_chunks}
@@ -2960,10 +2960,11 @@ def extract_docx_pages_from_bytes(docx_bytes: bytes, filename: str) -> tuple[boo
 
 
 # ── SCANNED PDF HIGH-PRECISION VISION OCR ENGINE ──────────────────────────
-async def transcribe_scanned_pdf_pages(pdf_bytes: bytes, scanned_indices: list[int], max_pages: int = 40) -> list[tuple[int, str]]:
+async def transcribe_scanned_pdf_pages(pdf_bytes: bytes, scanned_indices: list[int], max_pages: int = 60) -> list[tuple[int, str]]:
     """
     Renders scanned PDF pages lacking extractable text into JPEG images via PyMuPDF,
-    and runs high-precision OCR transcription via OpenRouter Gemini 2.5 Flash Vision.
+    and runs high-precision OCR transcription via OpenRouter Gemini 2.5 Flash Vision
+    with automatic fallbacks to Gemini Flash 1.5 and Llama 3.2 Vision.
     """
     if not fitz or not pdf_bytes or not OPENROUTER_API_KEY:
         return []
@@ -2971,14 +2972,20 @@ async def transcribe_scanned_pdf_pages(pdf_bytes: bytes, scanned_indices: list[i
     target_indices = scanned_indices[:max_pages]
     print(f"🔍 [SCANNED PDF OCR] Initiating vision transcription for {len(target_indices)} page(s): {target_indices}")
     
-    ocr_semaphore = asyncio.Semaphore(4)
+    ocr_semaphore = asyncio.Semaphore(5)
 
     async def _ocr_single_page(page_idx: int, img_jpeg: bytes) -> tuple[int, str]:
         async with ocr_semaphore:
             try:
                 b64_img = base64.b64encode(img_jpeg).decode("utf-8")
+                vision_models = [
+                    "google/gemini-2.5-flash",
+                    "google/gemini-flash-1.5",
+                    "meta-llama/llama-3.2-11b-vision-instruct"
+                ]
                 payload = {
-                    "model": "google/gemini-2.5-flash",
+                    "model": vision_models[0],
+                    "models": vision_models,
                     "messages": [
                         {
                             "role": "user",
@@ -3002,10 +3009,12 @@ async def transcribe_scanned_pdf_pages(pdf_bytes: bytes, scanned_indices: list[i
                     "temperature": 0.1
                 }
                 headers = {
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json"
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://ranviar.org",
+                    "X-Title": "Ranviar Scanned PDF OCR"
                 }
-                async with httpx.AsyncClient(timeout=45.0) as client:
+                async with httpx.AsyncClient(timeout=50.0) as client:
                     resp = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
                     if resp.status_code == 200:
                         data = resp.json()
@@ -3024,7 +3033,7 @@ async def transcribe_scanned_pdf_pages(pdf_bytes: bytes, scanned_indices: list[i
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             for idx in target_indices:
                 if 0 <= idx < len(doc):
-                    pix = doc[idx].get_pixmap(dpi=120)
+                    pix = doc[idx].get_pixmap(dpi=150)
                     rendered.append((idx, pix.tobytes("jpeg")))
             doc.close()
         except Exception as err:
@@ -3601,12 +3610,12 @@ async def process_whatsapp_document(
                             await send_whatsapp_cloud_msg(sender_phone, msg)
                             return
 
-                        # Tier 1b: File size sanity check (150MB limit)
+                        # Tier 1b: File size sanity check (200MB limit)
                         file_size_mb = len(doc_bytes) / (1024 * 1024)
-                        if file_size_mb > 150.0:
+                        if file_size_mb > 200.0:
                             msg = (
                                 "⚠️ *File Size Limit Exceeded*\n\n"
-                                f"Your document is *{file_size_mb:.1f} MB*. Personal study uploads on Ranviar must be under *150 MB*.\n\n"
+                                f"Your document is *{file_size_mb:.1f} MB*. Personal study uploads on Ranviar must be under *200 MB*.\n\n"
                                 "💡 *Tip:* Try splitting very large textbook PDFs into individual modules or chapters!"
                             )
                             await send_whatsapp_cloud_msg(sender_phone, msg)
@@ -3627,39 +3636,38 @@ async def process_whatsapp_document(
                             filename,
                             mime_type
                         )
+
+                        # ── Scanned PDF Fallback: Run AI Vision OCR on scanned/image-based pages ──
+                        if not is_valid and err_code == "SCANNED_IMAGE" and (fname_lower.endswith(".pdf") or "pdf" in mime_type) and doc_bytes:
+                            try:
+                                empty_indices = stats.get("empty_page_indices", [])
+                                if not empty_indices and stats.get("page_count", 0) > 0:
+                                    empty_indices = list(range(stats.get("page_count", 1)))
+                                
+                                ocr_ack = (
+                                    f"🔍 *Reading Scanned Handout: {filename}*\n\n"
+                                    "I detected scanned/photocopied pages in your document. Transcribing all medical text, diagrams, and clinical tables with AI Vision OCR now... ⏳📑"
+                                )
+                                await send_whatsapp_cloud_msg(sender_phone, ocr_ack)
+                                
+                                ocr_pages = await transcribe_scanned_pdf_pages(doc_bytes, empty_indices, max_pages=60)
+                                if ocr_pages:
+                                    # Combine digital pages and OCR pages
+                                    existing_pg_map = {p[0]: p[1] for p in pages_data}
+                                    for pg_num, pg_txt in ocr_pages:
+                                        existing_pg_map[pg_num] = pg_txt
+                                    pages_data = sorted(existing_pg_map.items(), key=lambda x: x[0])
+                                    is_valid = True
+                                    err_code = "OK"
+                                    stats["is_scanned_ocr"] = True
+                                    stats["total_words"] = sum(len(txt.split()) for _, txt in pages_data)
+                                    print(f"✅ [SCANNED PDF RECOVERED] {filename} recovered with {len(pages_data)} pages and {stats['total_words']} words!")
+                            except Exception as ocr_err:
+                                print(f"⚠️ Scanned PDF OCR fallback failed for {filename}: {ocr_err}")
                 finally:
                     if doc_bytes is not None:
                         del doc_bytes
                     gc.collect()
-
-                if not is_valid:
-                    # ── Scanned PDF Fallback: Run AI Vision OCR on scanned/image-based pages ──
-                    if err_code == "SCANNED_IMAGE" and (fname_lower.endswith(".pdf") or "pdf" in mime_type) and doc_bytes:
-                        try:
-                            empty_indices = stats.get("empty_page_indices", [])
-                            if not empty_indices and stats.get("page_count", 0) > 0:
-                                empty_indices = list(range(stats.get("page_count", 1)))
-                            
-                            ocr_ack = (
-                                f"🔍 *Reading Scanned Handout: {filename}*\n\n"
-                                "I detected scanned/photocopied pages in your document. Transcribing all medical text, diagrams, and clinical tables with AI Vision OCR now... ⏳📑"
-                            )
-                            await send_whatsapp_cloud_msg(sender_phone, ocr_ack)
-                            
-                            ocr_pages = await transcribe_scanned_pdf_pages(doc_bytes, empty_indices, max_pages=40)
-                            if ocr_pages:
-                                # Combine digital pages and OCR pages
-                                existing_pg_map = {p[0]: p[1] for p in pages_data}
-                                for pg_num, pg_txt in ocr_pages:
-                                    existing_pg_map[pg_num] = pg_txt
-                                pages_data = sorted(existing_pg_map.items(), key=lambda x: x[0])
-                                is_valid = True
-                                err_code = "OK"
-                                stats["is_scanned_ocr"] = True
-                                stats["total_words"] = sum(len(txt.split()) for _, txt in pages_data)
-                                print(f"✅ [SCANNED PDF RECOVERED] {filename} recovered with {len(pages_data)} pages and {stats['total_words']} words!")
-                        except Exception as ocr_err:
-                            print(f"⚠️ Scanned PDF OCR fallback failed for {filename}: {ocr_err}")
 
                 if not is_valid:
                     if err_code == "LEGACY_BINARY":
@@ -5517,7 +5525,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     "Kindly do the needful: take a moment to select your class level and textbooks from scratch to configure your new study engine. 🩺📚\n\n"
                     "━━━━━━━━━━━━━━━━━━━━━\n"
                     "🚀 *What's New in Ranviar:*\n\n"
-                    "• 📄 *Document Vault (Up to 150MB & 60 Documents)*\n"
+                    "• 📄 *Document Vault (Up to 200MB & 60 Documents)*\n"
                     "  Send your lecture slides, notes, handouts, or PDFs — *now including scanned PDFs and image-based lecture slides*! "
                     "There is *no need of sending a particular document more than once* as when it is sent it is stored and indexed in your database already.\n\n"
                     "• 🔬 *Medical Vision (Pictures & Diagnostic Scans)*\n"
@@ -5582,7 +5590,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     f"Hello *{name_val}*! 👋\n\n"
                     f"• Status: *Active Student Beta (Sponsored)* 🎓\n"
                     f"• Medical Queries: *Unlimited Study Access*\n"
-                    f"• Study Vault: *60 Documents / 150MB Limit*\n\n"
+                    f"• Study Vault: *60 Documents / 200MB Limit*\n\n"
                     f"During this public beta period, all core AI medical queries, clinical explanations, diagram analyses, and document searches are provided completely free of charge to medical students.\n\n"
                     f"Keep studying and protecting your streak! 🔥"
                 )
@@ -5643,7 +5651,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     f"🩺 *Yes, Ranviar Fully Accepts Files & Pictures!* 📸📄\n\n"
                     f"Hello *{name_val}*! You can send your study materials directly into this chat on WhatsApp:\n\n"
                     f"• 📄 *Documents & Lecture Slides (PDF, Word, PPT)*:\n"
-                    f"  Tap the paperclip 📎 -> *Document* -> select your lecture notes or slides (up to *150MB*). Even scanned documents are read with AI OCR! Once uploaded, they are stored in your personal vault (up to 60 docs), so there is *no need to send a document more than once*.\n\n"
+                    f"  Tap the paperclip 📎 -> *Document* -> select your lecture notes or slides (up to *200MB*). Even scanned documents are read with AI OCR! Once uploaded, they are stored in your personal vault (up to 60 docs), so there is *no need to send a document more than once*.\n\n"
                     f"• 📸 *Pictures & Clinical Images*:\n"
                     f"  Send photos of histology slides, pathology specimens, ECG strips, chest X-rays, textbook diagrams, or clinical cases directly from your camera 📷 or gallery. I will analyze them with medical vision AI!\n\n"
                     f"• 🎙️ *Voice Notes*:\n"
@@ -6172,7 +6180,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     f"🩺 *Yes, Ranviar Fully Accepts Files & Pictures!* 📸📄\n\n"
                     f"Hello *{name}*! You can send your study materials directly into this chat on WhatsApp:\n\n"
                     f"• 📄 *Documents & Lecture Slides (PDF, Word, PPT)*:\n"
-                    f"  Tap the paperclip 📎 -> *Document* -> select your lecture notes or slides (up to *150MB*). Even scanned documents are read with AI OCR! Once uploaded, they are stored in your personal vault (up to 60 docs), so there is *no need to send a document more than once*.\n\n"
+                    f"  Tap the paperclip 📎 -> *Document* -> select your lecture notes or slides (up to *200MB*). Even scanned documents are read with AI OCR! Once uploaded, they are stored in your personal vault (up to 60 docs), so there is *no need to send a document more than once*.\n\n"
                     f"• 📸 *Pictures & Clinical Images*:\n"
                     f"  Send photos of histology slides, pathology specimens, ECG strips, chest X-rays, textbook diagrams, or clinical cases directly from your camera 📷 or gallery. I will analyze them with medical vision AI!\n\n"
                     f"• 🎙️ *Voice Notes*:\n"

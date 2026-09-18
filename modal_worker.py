@@ -723,12 +723,12 @@ async def ingest(request: dict) -> dict:
                 "I couldn't retrieve your document from WhatsApp. Please try sending it again! 📄")
             return {"ok": False, "error": "download_failed"}
 
-        # Step 2: File size check (150 MB limit)
+        # Step 2: File size check (200 MB limit)
         mb = len(raw) / (1024 * 1024)
-        if mb > 150.0:
+        if mb > 200.0:
             await wa_send(sender_phone,
                 f"⚠️ *File Too Large*\n\n"
-                f"Your document is *{mb:.1f} MB*. Please keep uploads under *150 MB*.\n\n"
+                f"Your document is *{mb:.1f} MB*. Please keep uploads under *200 MB*.\n\n"
                 "💡 Tip: Split large slide decks into individual lecture modules!")
             return {"ok": False, "error": "too_large"}
 
