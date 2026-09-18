@@ -98,9 +98,9 @@ def extract_pdf(raw: bytes, fname: str):
         if page_count == 0:
             doc.close()
             return False, "EMPTY_PAGES", [], {"error": "PDF contains 0 pages."}
-        if page_count > 200:
+        if page_count > 500:
             doc.close()
-            return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 200).", "page_count": page_count}
+            return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 500).", "page_count": page_count}
 
         pages_data = []
         total_words = 0
@@ -143,8 +143,8 @@ def extract_pdf(raw: bytes, fname: str):
         page_count = len(reader.pages)
         if page_count == 0:
             return False, "EMPTY_PAGES", [], {"error": "PDF contains 0 pages."}
-        if page_count > 200:
-            return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 200).", "page_count": page_count}
+        if page_count > 500:
+            return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 500).", "page_count": page_count}
 
         pages_data = []
         total_words = 0
@@ -191,8 +191,8 @@ def extract_pptx(raw: bytes, fname: str):
         slide_count = len(prs.slides)
         if slide_count == 0:
             return False, "EMPTY_DOCUMENT", [], {"error": "Presentation contains 0 slides."}
-        if slide_count > 200:
-            return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 200).", "page_count": slide_count}
+        if slide_count > 500:
+            return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 500).", "page_count": slide_count}
 
         for s_idx, slide in enumerate(prs.slides, 1):
             slide_texts = []
@@ -232,8 +232,8 @@ def extract_pptx(raw: bytes, fname: str):
                     return False, "EMPTY_DOCUMENT", [], {"error": "No slide XMLs found in PPTX archive."}
                 slide_files.sort(key=lambda x: int(re.search(r'\d+', os.path.basename(x)).group()) if re.search(r'\d+', os.path.basename(x)) else 0)
                 slide_count = len(slide_files)
-                if slide_count > 200:
-                    return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 200).", "page_count": slide_count}
+                if slide_count > 500:
+                    return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 500).", "page_count": slide_count}
 
                 total_words = 0
                 empty_pages = 0
@@ -355,8 +355,8 @@ def extract_docx(raw: bytes, fname: str):
         "page_count": page_count, "total_words": total_words, "empty_pages": 0,
         "empty_pct": 0.0, "doc_type": "word"
     }
-    if page_count > 200:
-        return False, "TOO_MANY_PAGES", [], {"error": f"Word document exceeds 200 virtual pages ({page_count} pages).", "page_count": page_count}
+    if page_count > 500:
+        return False, "TOO_MANY_PAGES", [], {"error": f"Word document exceeds 500 virtual pages ({page_count} pages).", "page_count": page_count}
     if total_words < 15:
         return False, "SCANNED_IMAGE", [], {"error": "Document contains almost no readable text."}
 
@@ -757,7 +757,7 @@ async def ingest(request: dict) -> dict:
                     "Remove the password and try again! 🔑"
                 ),
                 "TOO_MANY_PAGES": (
-                    f"📑 *Document Too Large*\n\n*{filename}* has *{stats.get('page_count')} {unit}* — max is 200.\n\n"
+                    f"📑 *Document Too Large*\n\n*{filename}* has *{stats.get('page_count')} {unit}* — max is 500.\n\n"
                     "💡 Upload individual lecture modules or chapters for best results!"
                 ),
             }

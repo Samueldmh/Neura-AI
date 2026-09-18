@@ -2743,9 +2743,9 @@ def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool,
             if page_count == 0:
                 doc.close()
                 return False, "EMPTY_PAGES", [], {"error": "PDF contains 0 pages."}
-            if page_count > 200:
+            if page_count > 500:
                 doc.close()
-                return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 200).", "page_count": page_count}
+                return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 500).", "page_count": page_count}
             
             pages_data = []
             total_words = 0
@@ -2796,8 +2796,8 @@ def extract_pdf_pages_from_bytes(pdf_bytes: bytes, filename: str) -> tuple[bool,
             page_count = len(reader.pages)
             if page_count == 0:
                 return False, "EMPTY_PAGES", [], {"error": "PDF contains 0 pages."}
-            if page_count > 200:
-                return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 200).", "page_count": page_count}
+            if page_count > 500:
+                return False, "TOO_MANY_PAGES", [], {"error": f"Document has {page_count} pages (limit is 500).", "page_count": page_count}
             
             pages_data = []
             total_words = 0
@@ -2858,8 +2858,8 @@ def extract_pptx_pages_from_bytes(pptx_bytes: bytes, filename: str) -> tuple[boo
                 slide_count = len(prs.slides)
                 if slide_count == 0:
                     return False, "EMPTY_DOCUMENT", [], {"error": "Presentation contains 0 slides."}
-                if slide_count > 200:
-                    return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 200).", "page_count": slide_count}
+                if slide_count > 500:
+                    return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 500).", "page_count": slide_count}
 
                 for s_idx, slide in enumerate(prs.slides, 1):
                     slide_texts = []
@@ -2900,8 +2900,8 @@ def extract_pptx_pages_from_bytes(pptx_bytes: bytes, filename: str) -> tuple[boo
                 
                 slide_files.sort(key=lambda x: int(re.search(r'\d+', os.path.basename(x)).group()) if re.search(r'\d+', os.path.basename(x)) else 0)
                 slide_count = len(slide_files)
-                if slide_count > 200:
-                    return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 200).", "page_count": slide_count}
+                if slide_count > 500:
+                    return False, "TOO_MANY_PAGES", [], {"error": f"Presentation has {slide_count} slides (limit is 500).", "page_count": slide_count}
 
                 total_words = 0
                 empty_pages = 0
@@ -3049,8 +3049,8 @@ def extract_docx_pages_from_bytes(docx_bytes: bytes, filename: str) -> tuple[boo
             "doc_type": "word"
         }
 
-        if page_count > 200:
-            return False, "TOO_MANY_PAGES", [], {"error": f"Word document exceeds 200 virtual pages ({page_count} pages).", "page_count": page_count}
+        if page_count > 500:
+            return False, "TOO_MANY_PAGES", [], {"error": f"Word document exceeds 500 virtual pages ({page_count} pages).", "page_count": page_count}
 
         if total_words < 15:
             return False, "SCANNED_IMAGE", [], {"error": "Document contains almost no readable text."}
@@ -3156,6 +3156,127 @@ async def transcribe_scanned_pdf_pages(pdf_bytes: bytes, scanned_indices: list[i
 
     print(f"✅ [SCANNED PDF OCR] Successfully transcribed {len(extracted_pages)}/{len(target_indices)} scanned page(s).")
     return extracted_pages
+
+
+def extract_pptx_slide_images(pptx_bytes: bytes, max_slides: int = 60) -> list[tuple[int, bytes]]:
+    """Extracts the primary image bytes for each slide in a PPTX presentation.
+    Returns [(slide_number, image_bytes), ...] for slides containing images.
+    """
+    images_by_slide = []
+    if pptx is not None:
+        try:
+            prs = pptx.Presentation(io.BytesIO(pptx_bytes))
+            for s_idx, slide in enumerate(prs.slides, 1):
+                if s_idx > max_slides:
+                    break
+                slide_img_bytes = None
+                largest_size = 0
+
+                def _find_images(shape_collection):
+                    nonlocal slide_img_bytes, largest_size
+                    for shape in shape_collection:
+                        if hasattr(shape, "image") and shape.image and shape.image.blob:
+                            blob = shape.image.blob
+                            if len(blob) > largest_size:
+                                largest_size = len(blob)
+                                slide_img_bytes = blob
+                        elif hasattr(shape, "shapes"):
+                            _find_images(shape.shapes)
+
+                _find_images(slide.shapes)
+                if slide_img_bytes:
+                    images_by_slide.append((s_idx, slide_img_bytes))
+        except Exception as e:
+            print(f"⚠️ python-pptx slide image extraction error: {e}")
+
+    # Fallback to pure-Python zipfile extraction if python-pptx didn't find images
+    if not images_by_slide:
+        try:
+            import zipfile
+            with zipfile.ZipFile(io.BytesIO(pptx_bytes)) as zf:
+                media_files = [f for f in zf.namelist() if f.startswith("ppt/media/")]
+                media_files.sort(key=lambda x: int(re.search(r'\d+', os.path.basename(x)).group()) if re.search(r'\d+', os.path.basename(x)) else 0)
+                for idx, mf in enumerate(media_files[:max_slides], 1):
+                    images_by_slide.append((idx, zf.read(mf)))
+        except Exception as ze:
+            print(f"⚠️ zipfile slide image extraction error: {ze}")
+
+    return images_by_slide
+
+
+async def transcribe_image_slides(slide_images: list[tuple[int, bytes]]) -> list[tuple[int, str]]:
+    """Transcribes slide images using Gemini 2.5 Flash Vision OCR via OpenRouter.
+    Returns [(slide_number, text), ...].
+    """
+    if not slide_images or not OPENROUTER_API_KEY:
+        return []
+
+    print(f"🔍 [PPTX SLIDE OCR] Transcribing {len(slide_images)} image slide(s)...")
+    ocr_semaphore = asyncio.Semaphore(5)
+
+    async def _ocr_single_slide(slide_num: int, img_bytes: bytes) -> tuple[int, str]:
+        async with ocr_semaphore:
+            try:
+                b64_img = base64.b64encode(img_bytes).decode("utf-8")
+                vision_models = [
+                    "google/gemini-2.5-flash",
+                    "google/gemini-flash-1.5",
+                    "meta-llama/llama-3.2-11b-vision-instruct"
+                ]
+                payload = {
+                    "model": vision_models[0],
+                    "models": vision_models,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "You are an expert medical document OCR engine. Transcribe all readable medical text, "
+                                        "slide titles, bullet points, clinical notes, anatomical labels, pathways, tables, and drug names "
+                                        "from this lecture slide verbatim. Output ONLY the extracted text with clean line breaks, "
+                                        "without conversational preamble, markdown meta-text, or commentary."
+                                    )
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}
+                                }
+                            ]
+                        }
+                    ],
+                    "temperature": 0.1
+                }
+                headers = {
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://ranviar.org",
+                    "X-Title": "Ranviar Presentation Slide OCR"
+                }
+                async with httpx.AsyncClient(timeout=50.0) as client:
+                    resp = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        txt = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                        return (slide_num, txt)
+                    else:
+                        print(f"⚠️ Slide {slide_num} OCR failed: HTTP {resp.status_code} {resp.text[:150]}")
+            except Exception as e:
+                print(f"⚠️ Slide {slide_num} OCR exception: {e}")
+            return (slide_num, "")
+
+    tasks = [_ocr_single_slide(s_num, b) for s_num, b in slide_images]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    extracted_slides = []
+    for r in results:
+        if isinstance(r, tuple) and len(r) == 2 and r[1] and len(r[1].split()) >= 6:
+            extracted_slides.append(r)
+
+    print(f"✅ [PPTX SLIDE OCR] Successfully transcribed {len(extracted_slides)}/{len(slide_images)} image slide(s).")
+    return extracted_slides
+
 
 def extract_document_pages_from_bytes(file_bytes: bytes, filename: str, mime_type: str = "") -> tuple[bool, str, list[tuple[int, str]], dict]:
     """
@@ -3742,20 +3863,32 @@ async def process_whatsapp_document(
                             mime_type
                         )
 
-                        # ── Scanned PDF Fallback: Run AI Vision OCR on scanned/image-based pages ──
-                        if not is_valid and err_code == "SCANNED_IMAGE" and (fname_lower.endswith(".pdf") or "pdf" in mime_type) and doc_bytes:
+                        # ── Scanned PDF & Image-Based Presentation Slides Fallback: Run AI Vision OCR ──
+                        is_pdf = fname_lower.endswith(".pdf") or "pdf" in mime_type
+                        is_presentation = fname_lower.endswith((".pptx", ".ppt")) or "presentation" in mime_type or "powerpoint" in mime_type
+
+                        if not is_valid and err_code == "SCANNED_IMAGE" and (is_pdf or is_presentation) and doc_bytes:
                             try:
-                                empty_indices = stats.get("empty_page_indices", [])
-                                if not empty_indices and stats.get("page_count", 0) > 0:
-                                    empty_indices = list(range(stats.get("page_count", 1)))
-                                
-                                ocr_ack = (
-                                    f"🔍 *Reading Scanned Handout: {filename}*\n\n"
-                                    "I detected scanned/photocopied pages in your document. Transcribing all medical text, diagrams, and clinical tables with AI Vision OCR now... ⏳📑"
-                                )
-                                await send_whatsapp_cloud_msg(sender_phone, ocr_ack)
-                                
-                                ocr_pages = await transcribe_scanned_pdf_pages(doc_bytes, empty_indices, max_pages=60)
+                                if is_presentation:
+                                    ocr_ack = (
+                                        f"🔍 *Reading Image-Based Slides: {filename}*\n\n"
+                                        "I detected image-only lecture slides in your presentation. Transcribing all medical text, diagrams, and clinical tables with AI Vision OCR now... ⏳📑"
+                                    )
+                                    await send_whatsapp_cloud_msg(sender_phone, ocr_ack)
+                                    slide_imgs = await loop.run_in_executor(None, extract_pptx_slide_images, doc_bytes, 60)
+                                    ocr_pages = await transcribe_image_slides(slide_imgs)
+                                else:
+                                    empty_indices = stats.get("empty_page_indices", [])
+                                    if not empty_indices and stats.get("page_count", 0) > 0:
+                                        empty_indices = list(range(stats.get("page_count", 1)))
+                                    
+                                    ocr_ack = (
+                                        f"🔍 *Reading Scanned Handout: {filename}*\n\n"
+                                        "I detected scanned/photocopied pages in your document. Transcribing all medical text, diagrams, and clinical tables with AI Vision OCR now... ⏳📑"
+                                    )
+                                    await send_whatsapp_cloud_msg(sender_phone, ocr_ack)
+                                    ocr_pages = await transcribe_scanned_pdf_pages(doc_bytes, empty_indices, max_pages=60)
+
                                 if ocr_pages:
                                     # Combine digital pages and OCR pages
                                     existing_pg_map = {p[0]: p[1] for p in pages_data}
@@ -3766,9 +3899,9 @@ async def process_whatsapp_document(
                                     err_code = "OK"
                                     stats["is_scanned_ocr"] = True
                                     stats["total_words"] = sum(len(txt.split()) for _, txt in pages_data)
-                                    print(f"✅ [SCANNED PDF RECOVERED] {filename} recovered with {len(pages_data)} pages and {stats['total_words']} words!")
+                                    print(f"✅ [SCANNED RECOVERED] {filename} recovered with {len(pages_data)} pages/slides and {stats['total_words']} words!")
                             except Exception as ocr_err:
-                                print(f"⚠️ Scanned PDF OCR fallback failed for {filename}: {ocr_err}")
+                                print(f"⚠️ Scanned document OCR fallback failed for {filename}: {ocr_err}")
                 finally:
                     if doc_bytes is not None:
                         del doc_bytes
@@ -3790,7 +3923,7 @@ async def process_whatsapp_document(
                     elif err_code == "TOO_MANY_PAGES":
                         msg = (
                             f"📑 *Document Too Large*\n\n"
-                            f"*{filename}* has *{stats.get('page_count')} {unit_label}*. Personal study uploads are currently limited to *200 {unit_label}* per file.\n\n"
+                            f"*{filename}* has *{stats.get('page_count')} {unit_label}*. Personal study uploads are currently limited to *500 {unit_label}* per file.\n\n"
                             "💡 *Tip:* Upload individual lecture modules or chapters for optimal results!"
                         )
                     elif err_code == "SCANNED_IMAGE":
@@ -3799,10 +3932,9 @@ async def process_whatsapp_document(
                         pct = stats.get("empty_pct", 0)
                         if is_presentation:
                             msg = (
-                                "📷 *Image-Only Slides Detected*\n\n"
-                                f"*{filename}* contains image photos with no selectable digital text "
-                                f"({empty_p} of {tot_p} slides, ~{pct:.0f}%, have no readable text).\n\n"
-                                "Please export slides with selectable digital text or notes! 💡🔍"
+                                "📷 *Image-Only Slides With No Readable Text*\n\n"
+                                f"*{filename}* contains image slides, but the text is too blurry or low-resolution for OCR transcription.\n\n"
+                                "💡 *Tip:* Please export slides with higher resolution or selectable digital text! 🔍📊"
                             )
                         else:
                             msg = (
