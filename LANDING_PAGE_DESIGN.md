@@ -9,7 +9,7 @@
 ### Slide 1: The Reality
 # Medical school is overwhelming.
 Every semester, medical students are expected to absorb over 5,000 pages of dense textbooks. 
-Heavy bags. 10-hour hospital ward rounds. Lecturers sharing 49MB scanned slide decks late at night. 
+Heavy bags. Long hospital days. Lecturers sharing scanned slide decks late at night. 
 
 And when students turn to generic AI chatbots? 
 They get hallucinated drug doses, fabricated textbook citations, and answers that don't match the school's syllabus.
@@ -33,10 +33,10 @@ Just open WhatsApp, send a message, and start learning.
 # Meet Ranviar.
 ### Your 24/7 Personal AI Medical Co-Pilot.
 
-Ranviar combines three revolutionary breakthroughs into one seamless WhatsApp chat:
+Ranviar combines three breakthroughs into one seamless WhatsApp chat:
 1. **An Accredited 37-Textbook Medical Library.**
-2. **A Personal Multimodal Vault that reads up to 500-page slide decks and scanned handouts.**
-3. **An AI Clinical Vision Eye for ECGs, histology, and X-rays.**
+2. **A Study Vault that reads your lecture slides, PDFs, and scanned handouts.**
+3. **It can read and analyze images.**
 
 It's fast. It's grounded in real medicine. And it lives right where you already chat.
 
@@ -59,39 +59,31 @@ Ask any clinical question. Ranviar breaks down the pathophysiology, diagnostic c
 
 ---
 
-### Slide 5: Feature 02 — The 500-Page Study Vault
-# Your lecturer's 49MB slides? Handled.
-Most chatbots choke the moment you send a lecture document. 
-
-Ranviar introduces the **Multimodal Personal Vault**:
-- Send PowerPoint slides (`.pptx`), PDFs, or Word documents up to **200 MB** and **500 slides/pages**.
-- **Integrated AI Vision OCR**: Even if your lecturer's slides are 60 photocopied pictures with no selectable text, Ranviar transcribes and understands every single slide.
-- **Permanent Memory**: Ranviar remembers your uploaded slides. You can ask questions about your school's specific curriculum weeks later.
+### Slide 5: Feature 02 — Lecture Slides & Handouts
+# Send your lecture slides and handouts.
+Drop your lecture slides, PDFs, or notes straight into WhatsApp:
+- **Integrated AI Vision OCR**: Even if your lecturer's slides or handouts are scanned images or photocopies, Ranviar reads and transcribes every page.
+- **Permanent Memory**: Ranviar remembers your uploaded slides so you can ask questions from your own school's material anytime.
 
 > **Just drop the file into WhatsApp. Ranviar does the rest.**
 
 ---
 
-### Slide 6: Feature 03 — Clinical Vision
-# An eye for clinical diagnosis.
-Medicine is visual. You can't learn it from text alone.
-
-Whenever you're in the lab, clinic, or library:
-- **Snap an ECG strip**: Ranviar analyzes rate, rhythm, axis, ST deviations, and arrhythmias.
-- **Snap a Histology slide**: Ranviar identifies tissue structures, cellular changes, and hallmark pathology.
-- **Snap a Chest X-ray**: Ranviar highlights consolidations, effusions, and cardiomegaly.
-- **Snap an Exam MCQ**: Ranviar explains which option is correct and exactly why the others are wrong.
+### Slide 6: Feature 03 — Image Reading
+# It can read images.
+Snap or send any medical photo into the chat:
+- **ECG strips**: Ranviar analyzes rate, rhythm, axis, ST deviations, and arrhythmias.
+- **Histology slides**: Ranviar identifies tissue structures, cellular changes, and hallmark pathology.
+- **Chest X-rays**: Ranviar highlights consolidations, effusions, and cardiomegaly.
+- **Exam MCQs**: Snap a photo of a question to get an instant breakdown of the correct choice and why the distractors are wrong.
 
 ---
 
-### Slide 7: Feature 04 — Hands-Free Voice Notes
-# Tired of typing after ward rounds? Just talk.
-After standing on your feet for an 8-hour surgical rotation, the last thing you want to do is type on a keyboard.
+### Slide 7: Feature 04 — Voice Notes & Audio
+# Send audio anytime.
+You don't even have to type.
 
-With Ranviar, just hold the WhatsApp microphone button and speak:
-> *"Ranviar, explain how to differentiate between nephrotic syndrome and nephritic syndrome in pediatric patients."*
-
-Ranviar listens to your voice, understands medical terminology, and replies with structured, high-yield clinical answers.
+Hold the WhatsApp microphone button, send a voice note with your question, and Ranviar listens, understands, and replies with clear, structured clinical answers.
 
 ---
 
@@ -116,7 +108,7 @@ Type `/quiz` anytime:
 ┌─────────────────┐           ┌─────────────────┐           ┌─────────────────┐
 │  Open WhatsApp  │    ───>   │ Pick Your Level │    ───>   │  Start Learning │
 │  Message Ranviar│           │  200L to 600L   │           │ Ask, upload, or │
-│  with one tap.  │           │  MBBS syllabus  │           │   send voice.   │
+│  with one tap.  │           │  MBBS syllabus  │           │   send audio.   │
 └─────────────────┘           └─────────────────┘           └─────────────────┘
 ```
 
@@ -152,7 +144,7 @@ Ranviar was born out of a shared obsession: to give every medical student an unf
 
 ### 👨‍💻 Samuel
 ### The Developer
-> The engineer who built Ranviar from the ground up. Architected the high-performance dual-engine backend, the multi-stage textbook search, the 500-page multimodal slide vault, the Gemini Vision OCR integration, and the WhatsApp Cloud infrastructure.
+> The engineer who built Ranviar from the ground up. Architected the high-performance dual-engine backend, the multi-stage textbook search, the multimodal slide vault, the Gemini Vision OCR integration, and the WhatsApp Cloud infrastructure.
 
 ---
 
