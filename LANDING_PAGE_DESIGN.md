@@ -162,4 +162,3 @@ No bulky bags. No unverified chatbots. No friction.
 
 ### Start studying with Ranviar on WhatsApp today.
 **[ 💬 Chat with Ranviar on WhatsApp ]**
-*Official Website: ranviar.org*
