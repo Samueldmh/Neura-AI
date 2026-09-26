@@ -3603,17 +3603,8 @@ async def index_user_medical_document(
                 except Exception as mongo_err:
                     print(f"⚠️ Error recording partial uploaded doc in MongoDB: {mongo_err}")
 
-            # Send Early Search WhatsApp notice
-            stage1_max_page = max(c["page_number"] for c in stage1_chunks)
-            early_msg = (
-                f"⚡ *Early Search Active: {clean_title}*\n\n"
-                f"The first {len(stage1_chunks)} study chunks (~{unit_label} 1–{stage1_max_page}) are indexed and searchable right now! 🔍\n\n"
-                f"I'm quietly indexing the remaining {len(all_chunks) - len(stage1_chunks)} chunks in the background... ⏳"
-            )
-            try:
-                await send_whatsapp_cloud_msg(sender_phone, early_msg)
-            except Exception as e:
-                print(f"⚠️ Error sending early search notice: {e}")
+            # Early search is active internally — no intermediate WhatsApp message sent
+            print(f"⚡ [EARLY SEARCH ACTIVE] {clean_title}: {len(stage1_chunks)} chunks ready (pages 1–{stage1_max_page})")
 
             # Stage 2: Embed and upsert remaining chunks in background
             stage2_chunks = all_chunks[STAGE1_THRESHOLD:]
@@ -3715,7 +3706,21 @@ async def process_whatsapp_document(
                             await check_and_send_contact_card(sender_phone, ud)
                         custom_docs = ud.get("custom_documents", [])
                         existing_filenames = {d.get("filename") for d in custom_docs if isinstance(d, dict)}
-                        
+
+                        # Block duplicate uploads — same filename already in vault
+                        if filename in existing_filenames:
+                            existing_title = next(
+                                (d.get("title") or filename for d in custom_docs if isinstance(d, dict) and d.get("filename") == filename),
+                                filename
+                            )
+                            msg = (
+                                f"📂 *Already in Your Vault*\n\n"
+                                f"*{existing_title}* is already saved in your personal study vault.\n\n"
+                                "You can ask questions about it anytime! 🩺📚"
+                            )
+                            await send_whatsapp_cloud_msg(sender_phone, msg)
+                            return
+
                         # Quota: 60 documents max per personal study vault
                         if filename not in existing_filenames and len(custom_docs) >= 60:
                             msg = (
@@ -3763,13 +3768,8 @@ async def process_whatsapp_document(
                 except Exception as e:
                     print(f"⚠️ Error setting active_upload queue flag: {e}")
 
-            # Send immediate queue acknowledgment to student
-            queue_ack_msg = (
-                f"📥 *Received: {filename}*\n\n"
-                "Your document is in the queue for indexing into your personal study vault! ⏳\n\n"
-                "You can keep studying or asking questions in the meantime — I'll notify you as soon as it's ready."
-            )
-            await send_whatsapp_cloud_msg(sender_phone, queue_ack_msg)
+            # Suppress intermediate queue message — only final success card will be shown
+            print(f"📥 [DOCUMENT QUEUED] '{filename}' for {sender_phone} (dispatch_id={dispatch_id})")
 
             # ── Modal Serverless Dispatch ──────────────────────────────────────────
             # If MODAL_ENDPOINT is configured, hand off ALL heavy work to Modal.
@@ -3870,23 +3870,16 @@ async def process_whatsapp_document(
                         if not is_valid and err_code == "SCANNED_IMAGE" and (is_pdf or is_presentation) and doc_bytes:
                             try:
                                 if is_presentation:
-                                    ocr_ack = (
-                                        f"🔍 *Reading Image-Based Slides: {filename}*\n\n"
-                                        "I detected image-only lecture slides in your presentation. Transcribing all medical text, diagrams, and clinical tables with AI Vision OCR now... ⏳📑"
-                                    )
-                                    await send_whatsapp_cloud_msg(sender_phone, ocr_ack)
+                                    # Run OCR silently — success card will be the only user-facing message
+                                    print(f"🔍 [OCR] Image-based PPTX detected: {filename}. Running Vision OCR...")
                                     slide_imgs = await loop.run_in_executor(None, extract_pptx_slide_images, doc_bytes, 60)
                                     ocr_pages = await transcribe_image_slides(slide_imgs)
                                 else:
                                     empty_indices = stats.get("empty_page_indices", [])
                                     if not empty_indices and stats.get("page_count", 0) > 0:
                                         empty_indices = list(range(stats.get("page_count", 1)))
-                                    
-                                    ocr_ack = (
-                                        f"🔍 *Reading Scanned Handout: {filename}*\n\n"
-                                        "I detected scanned/photocopied pages in your document. Transcribing all medical text, diagrams, and clinical tables with AI Vision OCR now... ⏳📑"
-                                    )
-                                    await send_whatsapp_cloud_msg(sender_phone, ocr_ack)
+                                    # Run OCR silently — success card will be the only user-facing message
+                                    print(f"🔍 [OCR] Scanned PDF detected: {filename}. Running Vision OCR on {len(empty_indices)} pages...")
                                     ocr_pages = await transcribe_scanned_pdf_pages(doc_bytes, empty_indices, max_pages=60)
 
                                 if ocr_pages:
@@ -4007,12 +4000,7 @@ async def process_whatsapp_document(
                     clean_title = gatekeeper_res.get("title") or os.path.splitext(filename)[0].replace("_", " ").title()
                     category = gatekeeper_res.get("category", "General Medicine")
                     
-                    progress_msg = (
-                        f"{doc_icon} *Medical Document Verified: {clean_title}*\n\n"
-                        f"Indexing {len(pages_data)} {unit_label} into your personal study vault... ⏳"
-                    )
-                    await send_whatsapp_cloud_msg(sender_phone, progress_msg)
-
+                    # Tier 3: Index silently — only success card will be sent at the end
                     success, chunk_count, err_msg = await index_user_medical_document(
                         sender_phone=sender_phone,
                         filename=filename,

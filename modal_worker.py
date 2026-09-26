@@ -804,9 +804,8 @@ async def ingest(request: dict) -> dict:
             print(f"[MODAL] Aborting before gatekeeper notification: dispatch {dispatch_id} superseded by active lease")
             return {"ok": False, "error": "superseded_by_local"}
 
-        await wa_send(sender_phone,
-            f"{icon} *Medical Document Verified: {title}*\n\n"
-            f"Indexing {len(pages)} {unit} into your personal study vault... ⏳")
+        # Index silently — only success card will be the user-facing message
+        print(f"[MODAL] Verified medical document: {title} ({len(pages)} {unit}). Indexing now...")
 
         # Step 6: Chunk all pages using character-based chunking with boundary splitting
         chunks = []
@@ -879,13 +878,8 @@ async def ingest(request: dict) -> dict:
                     )
                 except Exception as me:
                     print(f"[MONGO stage1] {me}")
-            try:
-                await wa_send(sender_phone,
-                    f"⚡ *Early Search Active: {title}*\n\n"
-                    f"First {n1} study chunks (~{unit} 1–{mx}) are searchable right now! 🔍\n\n"
-                    f"Indexing {len(chunks) - n1} more chunks in the background... ⏳")
-            except Exception:
-                pass
+            # Early search active internally — no intermediate WhatsApp message
+            print(f"[MODAL] Stage 1 indexed: {n1} chunks (pages 1-{mx}). Continuing Stage 2...")
 
             # Stage 2: remaining chunks
             if not await is_dispatch_active():
