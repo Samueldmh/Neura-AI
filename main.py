@@ -750,7 +750,7 @@ Rules:
 - If the reference material is thin or doesn't fully answer it, say so honestly rather than padding
 - Never use phrases like "based on the context," "according to the provided material," or "the document states." Speak as if you already know this, informed by the textbook.
 - STRICT MEDICAL SCOPE: You are exclusively an MBBS medical study companion. If a student asks about a subject completely outside human medicine, biology, healthcare, or clinical training (e.g. economics, macroeconomics, finance, computer coding, politics, sports, general pop culture), DO NOT attempt to answer it or invent medical analogies for it. Politely and warmly decline, and redirect the student to a clinical condition, pharmacology, anatomy, or pathology topic.
-- PLATFORM MEDIA CAPABILITIES: You fully accept and process PDF/Word/PowerPoint documents (up to 200MB, saved in their vault), photos/images (ECGs, histology, X-rays, pathology slides), and voice notes. If the student asks if you accept files or pictures, always affirm enthusiastically and guide them to send their materials.
+- PLATFORM MEDIA CAPABILITIES: You fully accept and process PDF/Word/PowerPoint documents (up to 70MB, saved in their vault), photos/images (ECGs, histology, X-rays, pathology slides), and voice notes. If the student asks if you accept files or pictures, always affirm enthusiastically and guide them to send their materials.
 
 Reference material (for your own understanding — do not quote it directly):
 {retrieved_chunks}
@@ -3836,12 +3836,12 @@ async def process_whatsapp_document(
                             await send_whatsapp_cloud_msg(sender_phone, msg)
                             return
 
-                        # Tier 1b: File size sanity check (200MB limit)
+                        # Tier 1b: File size sanity check (70MB limit)
                         file_size_mb = len(doc_bytes) / (1024 * 1024)
-                        if file_size_mb > 200.0:
+                        if file_size_mb > 70.0:
                             msg = (
                                 "⚠️ *File Size Limit Exceeded*\n\n"
-                                f"Your document is *{file_size_mb:.1f} MB*. Personal study uploads on Ranviar must be under *200 MB*.\n\n"
+                                f"Your document is *{file_size_mb:.1f} MB*. Personal study uploads on Ranviar must be under *70 MB*.\n\n"
                                 "💡 *Tip:* Try splitting very large textbook PDFs into individual modules or chapters!"
                             )
                             await send_whatsapp_cloud_msg(sender_phone, msg)
@@ -5771,7 +5771,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     "Kindly do the needful: take a moment to select your class level and textbooks from scratch to configure your new study engine. 🩺📚\n\n"
                     "━━━━━━━━━━━━━━━━━━━━━\n"
                     "🚀 *What's New in Ranviar:*\n\n"
-                    "• 📄 *Document Vault (Up to 200MB & 60 Documents)*\n"
+                    "• 📄 *Document Vault (Up to 70MB & 60 Documents)*\n"
                     "  Send your lecture slides, notes, handouts, or PDFs — *now including scanned PDFs and image-based lecture slides*! "
                     "There is *no need of sending a particular document more than once* as when it is sent it is stored and indexed in your database already.\n\n"
                     "• 🔬 *Medical Vision (Pictures & Diagnostic Scans)*\n"
@@ -5836,7 +5836,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     f"Hello *{name_val}*! 👋\n\n"
                     f"• Status: *Active Student Beta (Sponsored)* 🎓\n"
                     f"• Medical Queries: *Unlimited Study Access*\n"
-                    f"• Study Vault: *60 Documents / 200MB Limit*\n\n"
+                    f"• Study Vault: *60 Documents / 70MB Limit*\n\n"
                     f"During this public beta period, all core AI medical queries, clinical explanations, diagram analyses, and document searches are provided completely free of charge to medical students.\n\n"
                     f"Keep studying and protecting your streak! 🔥"
                 )
@@ -5897,7 +5897,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     f"🩺 *Yes, Ranviar Fully Accepts Files & Pictures!* 📸📄\n\n"
                     f"Hello *{name_val}*! You can send your study materials directly into this chat on WhatsApp:\n\n"
                     f"• 📄 *Documents & Lecture Slides (PDF, Word, PPT)*:\n"
-                    f"  Tap the paperclip 📎 -> *Document* -> select your lecture notes or slides (up to *200MB*). Even scanned documents are read with AI OCR! Once uploaded, they are stored in your personal vault (up to 60 docs), so there is *no need to send a document more than once*.\n\n"
+                    f"  Tap the paperclip 📎 -> *Document* -> select your lecture notes or slides (up to *70MB*). Even scanned documents are read with AI OCR! Once uploaded, they are stored in your personal vault (up to 60 docs), so there is *no need to send a document more than once*.\n\n"
                     f"• 📸 *Pictures & Clinical Images*:\n"
                     f"  Send photos of histology slides, pathology specimens, ECG strips, chest X-rays, textbook diagrams, or clinical cases directly from your camera 📷 or gallery. I will analyze them with medical vision AI!\n\n"
                     f"• 🎙️ *Voice Notes*:\n"
@@ -6426,7 +6426,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     f"🩺 *Yes, Ranviar Fully Accepts Files & Pictures!* 📸📄\n\n"
                     f"Hello *{name}*! You can send your study materials directly into this chat on WhatsApp:\n\n"
                     f"• 📄 *Documents & Lecture Slides (PDF, Word, PPT)*:\n"
-                    f"  Tap the paperclip 📎 -> *Document* -> select your lecture notes or slides (up to *200MB*). Even scanned documents are read with AI OCR! Once uploaded, they are stored in your personal vault (up to 60 docs), so there is *no need to send a document more than once*.\n\n"
+                    f"  Tap the paperclip 📎 -> *Document* -> select your lecture notes or slides (up to *70MB*). Even scanned documents are read with AI OCR! Once uploaded, they are stored in your personal vault (up to 60 docs), so there is *no need to send a document more than once*.\n\n"
                     f"• 📸 *Pictures & Clinical Images*:\n"
                     f"  Send photos of histology slides, pathology specimens, ECG strips, chest X-rays, textbook diagrams, or clinical cases directly from your camera 📷 or gallery. I will analyze them with medical vision AI!\n\n"
                     f"• 🎙️ *Voice Notes*:\n"
