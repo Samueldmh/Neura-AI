@@ -237,6 +237,30 @@ LARGE_DOC_SEMAPHORE = asyncio.Semaphore(1)       # Heavy lane: 1 large document 
 MEDIA_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)  # Fast download & extraction guard (prevents RAM spikes)
 DOC_INGESTION_SEMAPHORE = SMALL_DOC_SEMAPHORE    # Backward compatibility alias
 
+# ── Webhook Deduplication ────────────────────────────────────────────────────
+# Meta retries failed webhooks. Without dedup, a slow response causes every
+# message to be processed 3–5 times during launch traffic spikes.
+# Uses a bounded LRU-style deque (max 2000 IDs) to stay RAM-safe on free tier.
+from collections import deque
+_PROCESSED_MSG_IDS: set = set()
+_PROCESSED_MSG_IDS_QUEUE: deque = deque(maxlen=2000)  # evicts oldest on overflow
+
+def _is_duplicate_webhook(msg_id: str) -> bool:
+    """Returns True if this msg_id was already processed. Thread/async-safe for single-process."""
+    if msg_id in _PROCESSED_MSG_IDS:
+        return True
+    _PROCESSED_MSG_IDS.add(msg_id)
+    _PROCESSED_MSG_IDS_QUEUE.append(msg_id)
+    # Evict from set when deque overflows (deque auto-pops oldest)
+    if len(_PROCESSED_MSG_IDS) > 2000:
+        # Remove the oldest item that was evicted from the deque
+        try:
+            oldest = next(iter(_PROCESSED_MSG_IDS - set(_PROCESSED_MSG_IDS_QUEUE)))
+            _PROCESSED_MSG_IDS.discard(oldest)
+        except StopIteration:
+            pass
+    return False
+
 # Lightweight in-memory query vector cache (<1MB RAM for 500 common curriculum topics)
 QUERY_VECTOR_CACHE = OrderedDict()
 MAX_VECTOR_CACHE = 500
@@ -649,6 +673,10 @@ async def upgrade_curriculum_for_all_users():
             print(f"📚 [LIBRARY UPGRADE] Successfully reset {res.modified_count} users to select textbooks from scratch via Style B!")
     except Exception as e:
         print(f"⚠️ Error upgrading curriculum for users: {e}")
+
+    # Launch keep-alive self-ping to prevent Render free-tier cold starts
+    asyncio.create_task(_self_ping_keep_alive())
+    print("🏓 [KEEP-ALIVE] Self-ping task started (every 4 minutes)")
 
 async def startup_event():
     try:
@@ -6868,6 +6896,34 @@ def root():
         "billing": "Flutterwave In-App WebView + Dynamic Token Multiplier"
     }
 
+@app.get("/health")
+@app.head("/health")
+async def health_check():
+    """Health check endpoint — used by UptimeRobot and the self-ping keep-alive task."""
+    mongo_ok = users_col is not None
+    return {
+        "status": "healthy",
+        "mongo": "connected" if mongo_ok else "disconnected",
+        "dedup_cache_size": len(_PROCESSED_MSG_IDS),
+        "ts": int(time.time())
+    }
+
+async def _self_ping_keep_alive():
+    """
+    Pings this server's /health endpoint every 4 minutes.
+    Keeps Render's free-tier dyno from sleeping between messages,
+    which would cause a 30–60 second cold-start delay on the next webhook.
+    """
+    await asyncio.sleep(30)  # wait for server to fully start first
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{BASE_URL}/health")
+                print(f"🏓 [KEEP-ALIVE] Self-ping → {resp.status_code}")
+        except Exception as e:
+            print(f"⚠️ [KEEP-ALIVE] Self-ping failed: {e}")
+        await asyncio.sleep(240)  # 4-minute interval
+
 @app.post("/webhook/flutterwave")
 async def flutterwave_webhook(request: Request):
     """Flutterwave Webhook Endpoint to credit student wallets upon successful charge"""
@@ -7076,13 +7132,18 @@ async def handle_whatsapp_webhook(request: Request):
                     sender_phone = msg.get("from")
                     msg_type = msg.get("type")
                     msg_id = msg.get("id")
-                    
+
+                    # ── Deduplication: skip Meta webhook retries ──────────────
+                    if msg_id and _is_duplicate_webhook(msg_id):
+                        print(f"🔁 [DEDUP] Skipping already-processed msg_id={msg_id} from {sender_phone}")
+                        continue
+
                     if msg_id:
                         asyncio.create_task(mark_message_as_read(msg_id))
-                    
+
                     context_obj = msg.get("context", {})
                     is_tagged_reply = bool(context_obj.get("id"))
-                    
+
                     text_body = ""
                     if msg_type == "text":
                         text_body = msg.get("text", {}).get("body", "")
