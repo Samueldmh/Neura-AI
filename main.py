@@ -654,9 +654,13 @@ async def upgrade_curriculum_for_all_users():
     if users_col is None:
         return
     try:
-        # Match all students in the database who have not yet completed the Style B textbook update
+        # Match all students who have completed onboarding but not yet migrated to v3 library
+        # Explicitly exclude brand-new users (no is_onboarded flag) to prevent disrupting fresh onboarding
         res = await users_col.update_many(
-            {"ranviar_v3_migrated": {"$ne": True}},
+            {
+                "ranviar_v3_migrated": {"$ne": True},
+                "is_onboarded": True   # Only reset users who previously completed onboarding
+            },
             {
                 "$set": {
                     "preferred_books_list": [],
@@ -5769,13 +5773,24 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             return
 
         # ── FORCED RANVIAR V2 UPGRADE & BROADCAST INTERCEPTOR ────────────────
-        # Every existing student must be informed of the Ranviar rebrand, new superpowers
-        # (150MB docs, 60-doc vault, permanent storage, images/ECGs, voice notes, scanned PDFs),
-        # and prompted to select their level and textbooks from scratch.
+        # Every EXISTING student must configure their textbooks for the new 37-book library.
+        # New users (no prior activity, in ASK_NAME) are EXCLUDED — they go through fresh onboarding.
         is_migrated = bool(user_doc and user_doc.get("ranviar_v3_migrated") is True)
         current_step = str(user_doc.get("onboarding_step") or "") if user_doc else ""
 
-        if user_doc and not is_migrated:
+        # Determine if this is a genuinely new user still in the name-collection phase
+        is_brand_new_user = (
+            not user_doc or                           # no doc yet
+            current_step == "ASK_NAME" or             # collecting name right now
+            current_step == "" or                     # no step at all
+            (
+                not user_doc.get("is_onboarded") and
+                not user_doc.get("has_completed_onboarding") and
+                int(user_doc.get("total_queries_count", 0)) == 0
+            )
+        )
+
+        if user_doc and not is_migrated and not is_brand_new_user:
             # If student is already actively answering level or textbook selection, let handle_onboarding handle it!
             if current_step == "ASK_LEVEL" or current_step.startswith("ASK_BOOK_"):
                 pass
