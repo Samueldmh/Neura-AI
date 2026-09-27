@@ -96,6 +96,26 @@ PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "1150180661520951")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "neura_ai_webhook_secret_2026")
 META_APP_SECRET = os.getenv("META_APP_SECRET", os.getenv("APP_SECRET", ""))
 
+# ── Dev Mode ──────────────────────────────────────────────────────────────────
+# When DEV_MODE=true, only phone numbers listed in DEV_TESTER_PHONES can use the bot.
+# Set DEV_MODE=false (or leave unset) on the production Render service.
+# Set DEV_MODE=true on the dev Render service — only Samuel (and any listed testers) get through.
+#
+# On the PRODUCTION service: DEV_MODE is unset/false → all users served normally.
+# On the DEV service:        DEV_MODE=true, DEV_TESTER_PHONES=2349021292141 → only Samuel gets through.
+DEV_MODE = os.getenv("DEV_MODE", "false").strip().lower() == "true"
+_raw_tester_phones = os.getenv("DEV_TESTER_PHONES", "").strip()
+DEV_TESTER_PHONES: set = {
+    p.strip().lstrip("+").replace(" ", "")
+    for p in _raw_tester_phones.split(",")
+    if p.strip()
+}
+
+def is_dev_tester(phone: str) -> bool:
+    """Returns True if this phone number is an authorised dev tester."""
+    clean = phone.strip().lstrip("+").replace(" ", "")
+    return clean in DEV_TESTER_PHONES
+
 COLLECTION_NAME = "neura_medical_knowledge"
 
 CURRICULUM = {
@@ -7151,6 +7171,14 @@ async def handle_whatsapp_webhook(request: Request):
                     # ── Deduplication: skip Meta webhook retries ──────────────
                     if msg_id and _is_duplicate_webhook(msg_id):
                         print(f"🔁 [DEDUP] Skipping already-processed msg_id={msg_id} from {sender_phone}")
+                        continue
+
+                    # ── Dev Mode Gate ─────────────────────────────────────────
+                    # When running the dev Render service, only authorised testers
+                    # (DEV_TESTER_PHONES) can interact with the bot.
+                    # All other users are silently ignored — they stay on production.
+                    if DEV_MODE and sender_phone and not is_dev_tester(sender_phone):
+                        print(f"🔒 [DEV MODE] Blocked non-tester {sender_phone} — dev service only")
                         continue
 
                     if msg_id:
