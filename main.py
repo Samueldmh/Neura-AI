@@ -5308,7 +5308,52 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
         user_doc.get("is_updating") is True or
         int(user_doc.get("total_queries_count", 0)) > 0
     )
-    
+
+    # ── Name Re-ask (for students whose stored name is corrupted) ────────────
+    # A past bug saved AI answers as student names. When such a student next
+    # messages us, we ask for their name once, then answer their original question.
+    if user_doc.get("name_reask_active"):
+        pending_q = user_doc.get("name_reask_pending_msg") or ""
+        extracted = await extract_name_with_llm(user_msg)
+        if extracted:
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$set": {"name": extracted}, "$unset": {"name_reask_active": "", "name_reask_pending_msg": ""}}
+            )
+            print(f"✅ [NAME RE-ASK] {sender_phone} name recovered: {extracted}")
+            if pending_q:
+                await send_whatsapp_cloud_msg(sender_phone, f"Thanks, *{extracted}*! ✅ Now, back to your question 👇")
+                # Runs after this message releases the user lock
+                asyncio.create_task(process_whatsapp_message(sender_phone, pending_q))
+            else:
+                await send_whatsapp_cloud_msg(sender_phone, f"Thanks, *{extracted}*! ✅ What are we studying today? 🧠")
+            return True
+        # Not a name — stop asking (clears the corrupted name) and handle this message normally
+        await users_col.update_one(
+            {"user_id": sender_phone},
+            {"$set": {"name": "Student"}, "$unset": {"name_reask_active": "", "name_reask_pending_msg": ""}}
+        )
+        print(f"ℹ️ [NAME RE-ASK] {sender_phone} skipped giving a name; reset to 'Student'")
+        return False
+
+    raw_name = user_doc.get("name")
+    has_corrupted_name = bool(raw_name) and raw_name != "Student" and _clean_and_validate_name(str(raw_name)) is None
+    if (
+        step == "COMPLETED"
+        and has_corrupted_name
+        and is_dev_tester(sender_phone)   # DEV GATE — remove when merging to production
+        and not user_msg.strip().startswith("/")
+    ):
+        await users_col.update_one(
+            {"user_id": sender_phone},
+            {"$set": {"name_reask_active": True, "name_reask_pending_msg": user_msg[:2000]}}
+        )
+        await send_whatsapp_cloud_msg(
+            sender_phone,
+            "Quick one before I answer — I don't have your name saved properly. What's your first name? 😊"
+        )
+        return True
+
     if step == "COMPLETED":
         # Block users from reusing old menu selections or level buttons after completing setup
         all_book_options = [b for books in AVAILABLE_BOOKS.values() for b in books] + [
@@ -5889,6 +5934,16 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         }}
                     )
                 return
+
+        # ── DEV-ONLY: simulate a corrupted name to test the name re-ask flow ──
+        if user_msg.strip().lower() == "/devbreakname" and is_dev_tester(sender_phone) and users_col is not None:
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$set": {"name": "The axilla, also known as the armpit, is a complex region that contains various anatomical structures.\n**Boundaries:**"},
+                 "$unset": {"name_reask_active": "", "name_reask_pending_msg": ""}}
+            )
+            await send_whatsapp_cloud_msg(sender_phone, "🧪 Dev: your name is now corrupted. Send any medical question to test the re-ask flow.")
+            return
 
         # Check for profile and wallet commands first
         msg_lower = user_msg.strip().lower()
