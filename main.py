@@ -5128,9 +5128,44 @@ async def multi_search_qdrant(search_terms: list, preferred_books: list = None, 
     print(f"📚 Multi-search returned {len(all_results)} unique chunks from {len(search_terms)} keyword(s) with filter {preferred_books}")
     return all_results
 
+_NAME_ALLOWED_RE = re.compile(r"^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'\-]*(?: [A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'\-]*){0,2}$")
+
+def _clean_and_validate_name(raw: str):
+    """Returns a clean name (1-3 words, letters only, <=30 chars) or None if it doesn't look like a name."""
+    if not raw:
+        return None
+    candidate = raw.strip().strip(".,!?\"'*_`").strip()
+    if not candidate or "\n" in candidate or len(candidate) > 30:
+        return None
+    if candidate.upper() == "NONE":
+        return None
+    if not _NAME_ALLOWED_RE.match(candidate):
+        return None
+    return " ".join(w.capitalize() if w.islower() else w for w in candidate.split())
+
 async def extract_name_with_llm(user_msg: str) -> str:
+    msg = (user_msg or "").strip()
+    if not msg:
+        return None
+
+    # Fast path: a plain 1-2 word name ("Samuel", "Ada Obi") needs no LLM call
+    _NOT_NAMES = {
+        "hi", "hello", "hey", "hy", "hii", "yo", "sup", "good", "morning", "afternoon", "evening",
+        "yes", "no", "ok", "okay", "start", "menu", "help", "thanks", "thank", "you", "why",
+        "what", "who", "how", "test", "student", "doctor", "sir", "ma", "bro", "nothing", "none",
+    }
+    direct = _clean_and_validate_name(msg)
+    if direct and len(msg.split()) <= 2 and not any(w.lower() in _NOT_NAMES for w in msg.split()):
+        return direct
+
+    # Long messages or questions are not name replies — never send them to the LLM,
+    # otherwise it answers the question and the answer gets stored as the name.
+    if len(msg) > 80 or len(msg.split()) > 8 or "?" in msg:
+        return None
+
     prompt = """Extract the person's first name from this message. 
 If they just say a greeting, or "why do you need it", or if it is random gibberish (e.g., "asdfgh"), or if there is clearly no name, return NONE.
+If the message is a question or a medical/academic topic, return NONE. Never answer the message.
 Return ONLY the name, nothing else.
 Examples:
 - "I am Samuel" -> Samuel
@@ -5138,11 +5173,12 @@ Examples:
 - "Hi my name is John" -> John
 - "Why do you want to know?" -> NONE
 - "Hello" -> NONE
+- "anatomy of the axilla" -> NONE
 - "dhjdsf" -> NONE"""
     try:
-        res = await call_openrouter_llm(prompt, user_msg)
-        return res.strip() if res.strip().upper() != "NONE" else None
-    except:
+        res = await call_openrouter_llm(prompt, msg)
+        return _clean_and_validate_name(res or "")
+    except Exception:
         return None
 
 async def send_subject_book_menu(sender_phone: str, level: str, subject: str) -> bool:
@@ -5741,7 +5777,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         if users_col is not None:
             user_doc = await users_col.find_one({"user_id": sender_phone})
             if user_doc:
-                name = user_doc.get("name", "Student")
+                name = _clean_and_validate_name(str(user_doc.get("name") or "")) or "Student"
                 level = user_doc.get("level", "Unknown Level")
                 preferred_books_list = list(user_doc.get("preferred_books_list", []))
 
@@ -7603,7 +7639,7 @@ async def admin_students(request: Request):
         books_list = list(u.get("preferred_books_list", []))
         students.append({
             "user_id": uid,
-            "name": u.get("name", "Student"),
+            "name": _clean_and_validate_name(str(u.get("name") or "")) or ("Student" if not u.get("name") or u.get("name") == "Student" else "⚠️ Invalid name"),
             "level": u.get("level", "Unset"),
             "study_streak_days": int(u.get("study_streak_days", 1)),
             "total_queries_count": int(u.get("total_queries_count", 0)),
