@@ -5341,7 +5341,6 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
     if (
         step == "COMPLETED"
         and has_corrupted_name
-        and is_dev_tester(sender_phone)   # DEV GATE — remove when merging to production
         and not user_msg.strip().startswith("/")
     ):
         await users_col.update_one(
