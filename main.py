@@ -4,6 +4,9 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 import os
+# Prevent glibc heap fragmentation on Linux (Render 512MB RAM ceiling)
+os.environ["MALLOC_ARENA_MAX"] = "2"
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -228,8 +231,8 @@ import time
 embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", threads=1)
 qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 shared_http_client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=40))
-query_embedding_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="query_embed")
-bulk_embedding_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bulk_embed")
+query_embedding_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="query_embed")
+bulk_embedding_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bulk_embed")
 embedding_pool = query_embedding_pool  # Backward compatibility
 
 # User-level sequential locks to prevent race conditions on simultaneous actions from the same user
@@ -248,13 +251,12 @@ def get_user_doc_lock(user_id: str) -> asyncio.Lock:
         _user_doc_locks[user_id] = asyncio.Lock()
     return _user_doc_locks[user_id]
 
-# Document Ingestion Dual-Lane Architecture:
-# Prevents large textbooks (>30 pages) from monopolizing workers and blocking quick lecture slides (<=30 pages).
-# Concurrency Budget: 2 small + 1 large = 3 concurrent heavy vector/Qdrant operations (Render RAM safe).
+# Document Ingestion Architecture:
+# Strictly restricted to 1 concurrent heavy extraction/download at a time to stay within Render 512MB RAM ceiling.
 SIZE_THRESHOLD_PAGES = 30
-SMALL_DOC_SEMAPHORE = asyncio.Semaphore(2)       # Express lane: up to 2 concurrent quick slide decks / handouts (<=30 pages)
-LARGE_DOC_SEMAPHORE = asyncio.Semaphore(1)       # Heavy lane: 1 large document / textbook chapter (>30 pages)
-MEDIA_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)  # Fast download & extraction guard (prevents RAM spikes)
+SMALL_DOC_SEMAPHORE = asyncio.Semaphore(1)       # 1 concurrent slide deck / handout
+LARGE_DOC_SEMAPHORE = asyncio.Semaphore(1)       # 1 concurrent large document
+MEDIA_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(1)  # 1 concurrent file download (prevents multi-70MB spikes)
 DOC_INGESTION_SEMAPHORE = SMALL_DOC_SEMAPHORE    # Backward compatibility alias
 
 # ── Webhook Deduplication ────────────────────────────────────────────────────
@@ -3181,30 +3183,40 @@ async def transcribe_scanned_pdf_pages(pdf_bytes: bytes, scanned_indices: list[i
                 print(f"⚠️ OCR exception on page {page_idx + 1}: {e}")
             return (page_idx + 1, "")
 
-    # Extract pixmaps in thread to avoid blocking loop
-    def _render_pixmaps():
-        rendered = []
-        try:
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            for idx in target_indices:
-                if 0 <= idx < len(doc):
-                    pix = doc[idx].get_pixmap(dpi=150)
-                    rendered.append((idx, pix.tobytes("jpeg")))
-            doc.close()
-        except Exception as err:
-            print(f"⚠️ Error rendering pixmaps for OCR: {err}")
-        return rendered
-
-    loop = asyncio.get_running_loop()
-    rendered_pages = await loop.run_in_executor(None, _render_pixmaps)
-
-    tasks = [_ocr_single_page(idx, jpeg) for idx, jpeg in rendered_pages]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
     extracted_pages = []
-    for r in results:
-        if isinstance(r, tuple) and len(r) == 2 and r[1] and len(r[1].split()) >= 6:
-            extracted_pages.append(r)
+    # Stream in micro-batches of 2 pages at 105 DPI to strictly cap memory under 20MB
+    BATCH_PAGES = 2
+    loop = asyncio.get_running_loop()
+
+    for b_start in range(0, len(target_indices), BATCH_PAGES):
+        sub_indices = target_indices[b_start:b_start + BATCH_PAGES]
+
+        def _render_sub_batch(indices):
+            batch_rendered = []
+            try:
+                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                for idx in indices:
+                    if 0 <= idx < len(doc):
+                        pix = doc[idx].get_pixmap(dpi=105)
+                        batch_rendered.append((idx, pix.tobytes("jpeg")))
+                        del pix
+                doc.close()
+            except Exception as err:
+                print(f"⚠️ Error rendering pixmaps batch for OCR: {err}")
+            return batch_rendered
+
+        batch_rendered = await loop.run_in_executor(None, _render_sub_batch, sub_indices)
+        if not batch_rendered:
+            continue
+
+        tasks = [_ocr_single_page(idx, jpeg) for idx, jpeg in batch_rendered]
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+        del batch_rendered
+
+        for r in batch_results:
+            if isinstance(r, tuple) and len(r) == 2 and r[1] and len(r[1].split()) >= 6:
+                extracted_pages.append(r)
+        gc.collect()
 
     print(f"✅ [SCANNED PDF OCR] Successfully transcribed {len(extracted_pages)}/{len(target_indices)} scanned page(s).")
     return extracted_pages
@@ -3318,13 +3330,17 @@ async def transcribe_image_slides(slide_images: list[tuple[int, bytes]]) -> list
                 print(f"⚠️ Slide {slide_num} OCR exception: {e}")
             return (slide_num, "")
 
-    tasks = [_ocr_single_slide(s_num, b) for s_num, b in slide_images]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
     extracted_slides = []
-    for r in results:
-        if isinstance(r, tuple) and len(r) == 2 and r[1] and len(r[1].split()) >= 6:
-            extracted_slides.append(r)
+    # Stream in micro-batches of 3 slides to keep base64 memory under 15MB
+    BATCH_SLIDES = 3
+    for b_start in range(0, len(slide_images), BATCH_SLIDES):
+        batch_slice = slide_images[b_start:b_start + BATCH_SLIDES]
+        tasks = [_ocr_single_slide(s_num, b) for s_num, b in batch_slice]
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+        for r in batch_results:
+            if isinstance(r, tuple) and len(r) == 2 and r[1] and len(r[1].split()) >= 6:
+                extracted_slides.append(r)
+        gc.collect()
 
     print(f"✅ [PPTX SLIDE OCR] Successfully transcribed {len(extracted_slides)}/{len(slide_images)} image slide(s).")
     return extracted_slides
@@ -3484,27 +3500,27 @@ async def _embed_and_upsert_chunk_slice(
     clean_title: str,
     category: str
 ) -> int:
-    """Helper to batch embed and upsert a slice of document chunks into Qdrant."""
     loop = asyncio.get_running_loop()
     clean_fn = re.sub(r'[^a-zA-Z0-9_]', '', os.path.splitext(filename)[0].lower()) or "doc"
-    batch_size = 64
-    points = []
-    
+    batch_size = 32
+    total_upserted = 0
+
     for batch_start in range(0, len(chunk_items), batch_size):
         batch_slice = chunk_items[batch_start:batch_start + batch_size]
         batch_texts = [item["text"] for item in batch_slice]
-        
+
         # Embed synchronously inside bulk ThreadPoolExecutor to prevent blocking student chat queries
         embeddings = await loop.run_in_executor(
             bulk_embedding_pool,
             lambda b=batch_texts: list(embedder.embed(b))
         )
-        
+
+        batch_points = []
         for sub_idx, (item, emb) in enumerate(zip(batch_slice, embeddings)):
             chunk_idx = start_chunk_idx + batch_start + sub_idx
             chunk_content_hash = hashlib.sha256(item["text"].encode("utf-8")).hexdigest()[:12]
             point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{sender_phone}_{clean_fn}_{chunk_idx}_{chunk_content_hash}"))
-            
+
             point = models.PointStruct(
                 id=point_id,
                 vector=emb.tolist(),
@@ -3520,14 +3536,19 @@ async def _embed_and_upsert_chunk_slice(
                     "uploaded_at": datetime.utcnow().isoformat()
                 }
             )
-            points.append(point)
-            
-    if points:
-        await qdrant.upsert(
-            collection_name=COLLECTION_NAME,
-            points=points
-        )
-    return len(points)
+            batch_points.append(point)
+
+        if batch_points:
+            await qdrant.upsert(
+                collection_name=COLLECTION_NAME,
+                points=batch_points
+            )
+            total_upserted += len(batch_points)
+            del batch_points
+            del embeddings
+            gc.collect()
+
+    return total_upserted
 
 async def index_user_medical_document(
     sender_phone: str,
