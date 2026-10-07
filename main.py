@@ -343,6 +343,95 @@ users_col = db.users if db is not None else None
 broadcasts_col = db.broadcasts if db is not None else None
 chat_logs_col = db.chat_logs if db is not None else None
 youtube_video_cache_col = db.youtube_video_cache if db is not None else None
+meta_billing_col = db.meta_billing if db is not None else None
+
+# ── META CLOUD API 1,000 FREE SERVICE CONVERSATION PROTECTION ───────────────
+# Meta grants 1,000 free 24-hour service (user-initiated) conversations per calendar month.
+# To guarantee 100% $0 bill from Meta:
+# 1. Hard-cap monthly service conversations at 950 (50 buffer).
+# 2. Track every student's 24-hour window: messages inside an active window are completely free.
+# 3. Only count when opening a NEW 24-hour window.
+# 4. If monthly count >= 950, gracefully decline to open a new paid window.
+# 5. Daily query limit: 25 queries per student per day.
+META_MONTHLY_FREE_CONVERSATIONS_CAP = 950
+DAILY_STUDENT_QUERY_LIMIT = 25
+
+async def check_meta_free_tier_budget(sender_phone: str, is_command: bool = False) -> tuple[bool, str]:
+    """
+    Guarantees $0 charges from Meta by enforcing the 1,000 free conversation ceiling
+    and daily query limits.
+    Returns (is_allowed, notice_message).
+    """
+    if users_col is None:
+        return True, ""
+
+    now_ts = time.time()
+    wat_now = datetime.utcnow() + timedelta(hours=1)
+    current_month = wat_now.strftime("%Y-%m")
+    today_str = wat_now.strftime("%Y-%m-%d")
+
+    # 1. Check user profile for active 24h window & daily query quota
+    user_doc = await users_col.find_one({"user_id": sender_phone})
+    window_expires_at = user_doc.get("meta_window_expires_at", 0) if user_doc else 0
+
+    # Commands (like /menu, /profile, /documents) bypass the 25-query daily cap
+    if not is_command:
+        daily_stats = user_doc.get("daily_chat_stats", {}) if user_doc else {}
+        today_queries = daily_stats.get(today_str, 0)
+        if today_queries >= DAILY_STUDENT_QUERY_LIMIT:
+            limit_msg = (
+                f"⏳ *Daily Study Limit Reached ({DAILY_STUDENT_QUERY_LIMIT}/{DAILY_STUDENT_QUERY_LIMIT} queries)*\n\n"
+                f"To keep Ranviar 100% free and fast for every medical student, questions are limited to *{DAILY_STUDENT_QUERY_LIMIT} per day*.\n\n"
+                "Your daily study limit will reset at midnight (WAT)! You can still view your notes with */documents* or check your streak with */streak*. 🩺📚"
+            )
+            return False, limit_msg
+
+    # 2. If user is already inside an active 24-hour service window, message is 100% free under Meta rules
+    if now_ts < window_expires_at:
+        if not is_command:
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$inc": {f"daily_chat_stats.{today_str}": 1}},
+                upsert=True
+            )
+        return True, ""
+
+    # 3. User is attempting to open a NEW 24-hour conversation window.
+    # Check global monthly count.
+    monthly_count = 0
+    if meta_billing_col is not None:
+        doc = await meta_billing_col.find_one({"month": current_month})
+        monthly_count = doc.get("conversation_count", 0) if doc else 0
+
+    if monthly_count >= META_MONTHLY_FREE_CONVERSATIONS_CAP:
+        print(f"🛑 [META QUOTA GUARD] Monthly free conversation limit reached ({monthly_count}/{META_MONTHLY_FREE_CONVERSATIONS_CAP}). Blocking new window for {sender_phone}.")
+        cap_msg = (
+            "🎓 *Monthly Free Community Quota Reached*\n\n"
+            "Ranviar has reached its free monthly study capacity (1,000 conversations) allocated for this month across all medical schools.\n\n"
+            "Access will automatically reset on the *1st of next month*. Thank you for studying with Ranviar! 🧠⚡"
+        )
+        return False, cap_msg
+
+    # Grant new 24h window (86,400s) and increment monthly counter
+    new_expires_at = now_ts + 86400
+    if meta_billing_col is not None:
+        await meta_billing_col.update_one(
+            {"month": current_month},
+            {"$inc": {"conversation_count": 1}},
+            upsert=True
+        )
+        print(f"📊 [META QUOTA GUARD] New 24h conversation window opened for {sender_phone} ({monthly_count + 1}/{META_MONTHLY_FREE_CONVERSATIONS_CAP} this month).")
+
+    update_ops = {"$set": {"meta_window_expires_at": new_expires_at}}
+    if not is_command:
+        update_ops["$inc"] = {f"daily_chat_stats.{today_str}": 1}
+
+    await users_col.update_one(
+        {"user_id": sender_phone},
+        update_ops,
+        upsert=True
+    )
+    return True, ""
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neura2026admin")
 ADMIN_SESSIONS = set()
@@ -589,11 +678,10 @@ async def check_and_send_inactivity_reminders(force_ignore_quiet_hours: bool = F
             async with STREAK_NUDGE_SEMAPHORE:
                 streak_msg = await generate_streak_message(name, streak, recent_topics)
                 
-                # Send reminder message directly; auto fallback to Meta template if outside 24h window
+                # Send reminder message directly; never fallback to paid Meta marketing templates
                 delivered = await send_whatsapp_cloud_msg(phone, streak_msg)
                 if not delivered:
-                    print(f"[NUDGE] Direct reminder unconfirmed for {phone} (>24h inactive). Delivering via neura_announcement template...")
-                    await send_whatsapp_template_msg(phone, "neura_announcement", [name, streak_msg])
+                    print(f"[NUDGE] Skipping {phone} (>24h inactive — suppressed to avoid paid Meta marketing template charge)")
                 
                 # Mark reminder sent date to ensure strict 1-per-day cap
                 await users_col.update_one(
@@ -736,8 +824,8 @@ async def startup_event():
     # Clean up legacy title naming in database
     asyncio.create_task(cleanup_legacy_textbook_titles())
     
-    # Launch inactivity streak reminder worker in the background
-    asyncio.create_task(start_inactivity_reminder_loop())
+    # Automated streak reminders disabled to protect Meta 1,000 free-tier limit and guarantee $0 bill
+    # asyncio.create_task(start_inactivity_reminder_loop())
 
     # Synchronize native WhatsApp chat commands with Meta Cloud API
     asyncio.create_task(register_whatsapp_chat_commands())
@@ -2498,6 +2586,12 @@ async def process_whatsapp_audio(sender_phone: str, media_id: str, is_tagged_rep
     except Exception:
         pass
 
+    # Meta Cloud API Free-Tier Budget & Daily Limit Guard
+    is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
+    if not is_allowed:
+        await send_whatsapp_cloud_msg(sender_phone, quota_notice)
+        return
+
     # Step 1: Download audio bytes from Meta CDN
     audio_bytes, mime_type = await download_whatsapp_media(media_id)
     if not audio_bytes:
@@ -2589,6 +2683,12 @@ async def process_whatsapp_image(
         await send_whatsapp_typing_indicator(sender_phone)
     except Exception:
         pass
+
+    # Meta Cloud API Free-Tier Budget & Daily Limit Guard
+    is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
+    if not is_allowed:
+        await send_whatsapp_cloud_msg(sender_phone, quota_notice)
+        return
 
     # 2. Download image bytes
     img_bytes, detected_mime = await download_whatsapp_media(media_id)
@@ -3765,6 +3865,12 @@ async def process_whatsapp_document(
             "Please export or send your lecture materials in one of these formats! 🩺📚"
         )
         await send_whatsapp_cloud_msg(sender_phone, msg)
+        return
+
+    # Meta Cloud API Free-Tier Budget & Daily Limit Guard
+    is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
+    if not is_allowed:
+        await send_whatsapp_cloud_msg(sender_phone, quota_notice)
         return
 
     try:
@@ -5976,6 +6082,11 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             "update level", "updatelevel", "update name", "updatename",
             "?", "m", "cmd"
         ]):
+            # Check/open 24h window for command if needed (bypasses 25-query cap)
+            is_cmd_allowed, cmd_notice = await check_meta_free_tier_budget(sender_phone, is_command=True)
+            if not is_cmd_allowed:
+                await send_whatsapp_cloud_msg(sender_phone, cmd_notice)
+                return
             # If user is in an update flow and triggers a non-update command, gracefully clear the update state
             if user_doc and user_doc.get("is_updating") and not any(k in msg_lower for k in ["update", "level", "books", "textbooks", "name"]):
                 await users_col.update_one(
@@ -6442,6 +6553,12 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # Handle onboarding state machine
         is_onboarding = await handle_onboarding(sender_phone, user_msg)
         if is_onboarding:
+            return
+
+        # ── Meta Cloud API Free-Tier Budget & Daily Limit Guard ───────────────
+        is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
+        if not is_allowed:
+            await send_whatsapp_cloud_msg(sender_phone, quota_notice)
             return
 
         msg_clean_for_quiz = user_msg.strip()
