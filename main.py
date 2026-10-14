@@ -82,6 +82,7 @@ from bot_capabilities import (
 QDRANT_URL = os.getenv("QDRANT_URL", "https://76ce5d85-4701-4671-8c3f-02bcc741b078.us-west-1-0.aws.cloud.qdrant.io")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZDliOTdhZjYtOTYyOS00YzMxLWJlNTktYTBiZWRkNmQ3NjlhIn0.Oa7xD5-T58Q-r-Az1waWwtwwLVTDi7HgzmtLLJE7cJw")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
@@ -222,6 +223,7 @@ print("Initializing FastEmbed & Qdrant Client...")
 print(f"QDRANT_URL: {QDRANT_URL}")
 print(f"QDRANT_API_KEY Present: {bool(QDRANT_API_KEY)}")
 print(f"OPENROUTER_API_KEY Present: {bool(OPENROUTER_API_KEY)}")
+print(f"GEMINI_API_KEY Present: {bool(GEMINI_API_KEY)}")
 print(f"GROQ_API_KEY Present: {bool(GROQ_API_KEY)}")
 print(f"PHONE_NUMBER_ID: {PHONE_NUMBER_ID}")
 
@@ -1127,6 +1129,151 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
         return "GIBBERISH"
     return "CONVERSATIONAL"
 
+# ==========================================
+# 2.4 DIRECT GOOGLE GEMINI API ENGINE (Free Tier & High Performance)
+# ==========================================
+def _format_gemini_contents(chat_history: list, user_prompt: str) -> list:
+    """Formats chat history and user prompt into Gemini-compliant alternating contents."""
+    contents = []
+    if chat_history:
+        for m in chat_history:
+            if not isinstance(m, dict):
+                continue
+            role = "user" if m.get("role") == "user" else "model"
+            text = str(m.get("content", "")).strip()
+            if not text:
+                continue
+            if contents and contents[-1]["role"] == role:
+                contents[-1]["parts"][0]["text"] += f"\n\n{text}"
+            else:
+                contents.append({"role": role, "parts": [{"text": text}]})
+
+    clean_prompt = str(user_prompt or "").strip()
+    if contents and contents[-1]["role"] == "user":
+        if clean_prompt:
+            contents[-1]["parts"][0]["text"] += f"\n\n{clean_prompt}"
+    else:
+        contents.append({"role": "user", "parts": [{"text": clean_prompt or "Hello"}]})
+
+    if contents and contents[0]["role"] == "model":
+        contents.insert(0, {"role": "user", "parts": [{"text": "Hello"}]})
+    return contents
+
+
+async def call_gemini_api(
+    system_prompt: str,
+    user_prompt: str,
+    chat_history: list = None,
+    max_tokens: int = 2500,
+    temperature: float = 0.65,
+    preferred_model: str = "gemini-3.5-flash-lite"
+) -> str:
+    """High-performance direct call to Google Gemini API with automatic candidate fallback and retry."""
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is not configured on Render!")
+
+    t_start = time.perf_counter()
+    contents = _format_gemini_contents(chat_history, user_prompt)
+    payload = {
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "contents": contents,
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens
+        }
+    }
+
+    models_to_try = [preferred_model]
+    if preferred_model != "gemini-3.8-flash":
+        models_to_try.append("gemini-3.8-flash")
+    if preferred_model != "gemini-flash-latest":
+        models_to_try.append("gemini-flash-latest")
+
+    last_error = None
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY.strip()}"
+        for attempt in range(2):
+            try:
+                response = await shared_http_client.post(url, json=payload, timeout=35.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    cands = data.get("candidates") or []
+                    if cands:
+                        parts = cands[0].get("content", {}).get("parts", [])
+                        text = "".join(p.get("text", "") for p in parts).strip()
+                        if text:
+                            dt = time.perf_counter() - t_start
+                            print(f"⏱️ [LLM TIMER] Gemini completed in {dt:.3f}s (Model: {model_name}, Attempt: {attempt+1}, Tokens: ~{len(text.split())*4/3:.0f})")
+                            return text
+                elif response.status_code in [429, 503]:
+                    print(f"⚠️ [GEMINI] {model_name} HTTP {response.status_code} on attempt {attempt+1}. Retrying in 1.5s...")
+                    await asyncio.sleep(1.5)
+                    continue
+                else:
+                    print(f"⚠️ [GEMINI] {model_name} HTTP {response.status_code}: {response.text[:200]}")
+                    break
+            except Exception as net_err:
+                last_error = net_err
+                print(f"⚠️ [GEMINI] Network error calling {model_name} (attempt {attempt+1}): {net_err}")
+                await asyncio.sleep(1.0)
+
+    raise RuntimeError(f"All Gemini model candidates failed: {last_error}")
+
+
+async def call_gemini_vision_api(
+    system_prompt: str,
+    user_prompt: str,
+    b64_image: str,
+    mime_type: str = "image/jpeg",
+    max_tokens: int = 1500
+) -> str:
+    """Multimodal vision analysis directly via Google Gemini API."""
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is not configured on Render!")
+
+    t_start = time.perf_counter()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={GEMINI_API_KEY.strip()}"
+    payload = {
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": user_prompt or "Analyze this medical image thoroughly."},
+                    {
+                        "inlineData": {
+                            "mimeType": mime_type or "image/jpeg",
+                            "data": b64_image
+                        }
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": max_tokens
+        }
+    }
+
+    try:
+        response = await shared_http_client.post(url, json=payload, timeout=40.0)
+    except Exception as http_err:
+        async with httpx.AsyncClient(timeout=40.0) as fallback_client:
+            response = await fallback_client.post(url, json=payload)
+
+    if response.status_code == 200:
+        data = response.json()
+        cands = data.get("candidates") or []
+        if cands:
+            parts = cands[0].get("content", {}).get("parts", [])
+            text = "".join(p.get("text", "") for p in parts).strip()
+            if text:
+                dt = time.perf_counter() - t_start
+                print(f"⏱️ [VISION TIMER] Gemini Vision completed in {dt:.3f}s")
+                return text
+    raise RuntimeError(f"Gemini Vision HTTP {response.status_code}: {response.text[:200]}")
+
+
 async def call_openrouter_llm(
     system_prompt: str, 
     user_prompt: str, 
@@ -1138,8 +1285,24 @@ async def call_openrouter_llm(
     temperature: float = 0.65,
     reasoning: dict = None
 ) -> str:
+    # 1. Primary Engine: Google Gemini API (Free Tier & High Performance)
+    if GEMINI_API_KEY:
+        try:
+            return await call_gemini_api(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                chat_history=chat_history,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+        except Exception as gemini_err:
+            print(f"⚠️ [PRIMARY GEMINI FAILED] {gemini_err}. Attempting OpenRouter fallback...")
+            if not OPENROUTER_API_KEY:
+                raise gemini_err
+
+    # 2. Secondary Engine: OpenRouter (if configured and funded)
     if not OPENROUTER_API_KEY:
-        raise ValueError("OPENROUTER_API_KEY environment variable is not set on Render!")
+        raise ValueError("Neither GEMINI_API_KEY nor OPENROUTER_API_KEY is configured on Render!")
         
     t_start = time.perf_counter()
     url = "https://openrouter.ai/api/v1/chat/completions"
@@ -2741,8 +2904,8 @@ async def process_whatsapp_image(
         except Exception:
             pass
 
-    # 4. OpenRouter Vision API Call
-    if not OPENROUTER_API_KEY:
+    # 4. Vision API Call (Gemini primary, OpenRouter fallback)
+    if not GEMINI_API_KEY and not OPENROUTER_API_KEY:
         await send_whatsapp_cloud_msg(
             sender_phone,
             "⚠️ Vision analysis service is temporarily unavailable. Please try again shortly."
@@ -2756,74 +2919,77 @@ async def process_whatsapp_image(
     base_prompt = caption.strip() if caption.strip() else "Please analyze this medical image thoroughly for my MBBS studies."
     user_prompt_text = f"{tagged_prefix}{base_prompt}" if tagged_prefix else base_prompt
 
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://ranviar.org",
-        "X-Title": "Ranviar Medical Vision"
-    }
+    analysis = ""
+    # 4a. Attempt Google Gemini Vision (Primary)
+    if GEMINI_API_KEY:
+        try:
+            analysis = await call_gemini_vision_api(
+                system_prompt=sys_prompt,
+                user_prompt=user_prompt_text,
+                b64_image=b64_image,
+                mime_type=effective_mime,
+                max_tokens=1500
+            )
+        except Exception as gem_vis_err:
+            print(f"⚠️ Gemini Vision failed: {gem_vis_err}. Attempting OpenRouter fallback...")
+            analysis = ""
 
-    vision_models = [
-        "google/gemini-2.5-flash",
-        "google/gemini-flash-1.5",
-        "meta-llama/llama-3.2-11b-vision-instruct"
-    ]
+    # 4b. OpenRouter Vision fallback
+    if not analysis and OPENROUTER_API_KEY:
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://ranviar.org",
+            "X-Title": "Ranviar Medical Vision"
+        }
 
-    payload = {
-        "model": vision_models[0],
-        "models": vision_models,
-        "messages": [
-            {"role": "system", "content": sys_prompt},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_prompt_text},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{effective_mime};base64,{b64_image}"
+        vision_models = [
+            "google/gemini-2.5-flash",
+            "google/gemini-flash-1.5",
+            "meta-llama/llama-3.2-11b-vision-instruct"
+        ]
+
+        payload = {
+            "model": vision_models[0],
+            "models": vision_models,
+            "messages": [
+                {"role": "system", "content": sys_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_prompt_text},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{effective_mime};base64,{b64_image}"
+                            }
                         }
-                    }
-                ]
-            }
-        ],
-        "temperature": 0.2,
-        "max_tokens": 1500
-    }
+                    ]
+                }
+            ],
+            "temperature": 0.2,
+            "max_tokens": 1500
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                choices = data.get("choices")
+                if isinstance(choices, list) and len(choices) > 0:
+                    first_choice = choices[0]
+                    if isinstance(first_choice, dict):
+                        analysis = first_choice.get("message", {}).get("content", "").strip()
+        except Exception as or_vis_err:
+            print(f"⚠️ OpenRouter Vision fallback error: {or_vis_err}")
 
     del b64_image
     gc.collect()
 
-    analysis = ""
-    try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-    except httpx.TimeoutException:
-        print(f"⚠️ Vision API Timeout for {sender_phone}")
-        await send_whatsapp_cloud_msg(sender_phone, "⚠️ The vision analysis timed out while examining your image. Please try sending it again in a moment.")
-        return
-    except Exception as net_err:
-        print(f"⚠️ Network error calling Vision API: {net_err}")
-        await send_whatsapp_cloud_msg(sender_phone, "⚠️ A connection error occurred while contacting the vision service. Please try again shortly.")
-        return
-
-    if resp.status_code != 200:
-        print(f"⚠️ Vision API Error {resp.status_code}: {resp.text}")
-        analysis = "⚠️ I encountered an issue analyzing this image. Please ensure the image is clear and try sending it again."
-    else:
-        try:
-            data = resp.json()
-            choices = data.get("choices")
-            if isinstance(choices, list) and len(choices) > 0:
-                first_choice = choices[0]
-                if isinstance(first_choice, dict):
-                    analysis = first_choice.get("message", {}).get("content", "").strip()
-            if not analysis:
-                analysis = "I reviewed the image, but couldn't generate a clear analysis. Could you provide a higher-resolution photo or specify what you'd like me to focus on?"
-        except Exception as parse_err:
-            print(f"⚠️ Vision API JSON parse error: {parse_err} | Raw response: {resp.text[:300]}")
-            analysis = "⚠️ An unexpected format was returned while analyzing your image. Please re-send or try another photo."
+    if not analysis:
+        analysis = "⚠️ I reviewed the image, but couldn't generate a clear analysis. Please ensure the photo is clear and try sending it again."
 
     # 5. Send reply
     await send_whatsapp_cloud_msg(sender_phone, analysis)
@@ -3223,7 +3389,7 @@ async def transcribe_scanned_pdf_pages(pdf_bytes: bytes, scanned_indices: list[i
     and runs high-precision OCR transcription via OpenRouter Gemini 2.5 Flash Vision
     with automatic fallbacks to Gemini Flash 1.5 and Llama 3.2 Vision.
     """
-    if not fitz or not pdf_bytes or not OPENROUTER_API_KEY:
+    if not fitz or not pdf_bytes or (not GEMINI_API_KEY and not OPENROUTER_API_KEY):
         return []
 
     target_indices = scanned_indices[:max_pages]
@@ -3235,6 +3401,27 @@ async def transcribe_scanned_pdf_pages(pdf_bytes: bytes, scanned_indices: list[i
         async with ocr_semaphore:
             try:
                 b64_img = base64.b64encode(img_jpeg).decode("utf-8")
+                if GEMINI_API_KEY:
+                    try:
+                        txt = await call_gemini_vision_api(
+                            system_prompt=(
+                                "You are an expert medical document OCR engine. Transcribe all readable medical text, "
+                                "headings, bullet points, clinical notes, tables, drug names, and dosages from this "
+                                "scanned document page verbatim. Output ONLY the extracted text with clean line breaks, "
+                                "without conversational preamble, markdown meta-text, or commentary."
+                            ),
+                            user_prompt="Transcribe this scanned medical page verbatim.",
+                            b64_image=b64_img,
+                            mime_type="image/jpeg",
+                            max_tokens=2000
+                        )
+                        if txt:
+                            return (page_idx + 1, txt)
+                    except Exception as gem_ocr_err:
+                        print(f"⚠️ Gemini OCR error on page {page_idx + 1}: {gem_ocr_err}. Falling back to OpenRouter...")
+
+                if not OPENROUTER_API_KEY:
+                    return (page_idx + 1, "")
                 vision_models = [
                     "google/gemini-2.5-flash",
                     "google/gemini-flash-1.5",
@@ -3372,7 +3559,7 @@ async def transcribe_image_slides(slide_images: list[tuple[int, bytes]]) -> list
     """Transcribes slide images using Gemini 2.5 Flash Vision OCR via OpenRouter.
     Returns [(slide_number, text), ...].
     """
-    if not slide_images or not OPENROUTER_API_KEY:
+    if not slide_images or (not GEMINI_API_KEY and not OPENROUTER_API_KEY):
         return []
 
     print(f"🔍 [PPTX SLIDE OCR] Transcribing {len(slide_images)} image slide(s)...")
@@ -3382,6 +3569,27 @@ async def transcribe_image_slides(slide_images: list[tuple[int, bytes]]) -> list
         async with ocr_semaphore:
             try:
                 b64_img = base64.b64encode(img_bytes).decode("utf-8")
+                if GEMINI_API_KEY:
+                    try:
+                        txt = await call_gemini_vision_api(
+                            system_prompt=(
+                                "You are an expert medical document OCR engine. Transcribe all readable medical text, "
+                                "slide titles, bullet points, clinical notes, anatomical labels, pathways, tables, and drug names "
+                                "from this lecture slide verbatim. Output ONLY the extracted text with clean line breaks, "
+                                "without conversational preamble, markdown meta-text, or commentary."
+                            ),
+                            user_prompt="Transcribe this lecture slide verbatim.",
+                            b64_image=b64_img,
+                            mime_type="image/jpeg",
+                            max_tokens=2000
+                        )
+                        if txt:
+                            return (slide_num, txt)
+                    except Exception as gem_slide_err:
+                        print(f"⚠️ Gemini slide OCR error on slide {slide_num}: {gem_slide_err}. Falling back to OpenRouter...")
+
+                if not OPENROUTER_API_KEY:
+                    return (slide_num, "")
                 vision_models = [
                     "google/gemini-2.5-flash",
                     "google/gemini-flash-1.5",
