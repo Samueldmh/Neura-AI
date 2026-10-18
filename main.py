@@ -261,6 +261,21 @@ LARGE_DOC_SEMAPHORE = asyncio.Semaphore(1)       # 1 concurrent large document
 MEDIA_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(1)  # 1 concurrent file download (prevents multi-70MB spikes)
 DOC_INGESTION_SEMAPHORE = SMALL_DOC_SEMAPHORE    # Backward compatibility alias
 
+# ── Global Concurrency & Burst Load Balancer (Option 3) ──────────────────────
+# Regulates traffic spikes across WhatsApp users to strictly guarantee:
+# 1. Total active LLM queries never breach Gemini free-tier rate limits (15 RPM).
+# 2. Parallel embeddings & base64 buffers remain safely under Render's 512MB RAM cap.
+MAX_CONCURRENT_CHAT_QUERIES = 6
+CONCURRENT_CHAT_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_CHAT_QUERIES)
+
+MAX_CONCURRENT_VISION_QUERIES = 2
+CONCURRENT_VISION_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_VISION_QUERIES)
+
+# Concurrency & Queue Telemetry
+_ACTIVE_CHAT_WORKERS = 0
+_ACTIVE_VISION_WORKERS = 0
+
+
 # ── Webhook Deduplication ────────────────────────────────────────────────────
 # Meta retries failed webhooks. Without dedup, a slow response causes every
 # message to be processed 3–5 times during launch traffic spikes.
@@ -2838,166 +2853,176 @@ async def process_whatsapp_image(
     mime_type: str = "image/jpeg",
     is_tagged_reply: bool = False
 ):
-    """Processes incoming WhatsApp images using OpenRouter Vision (Gemini 2.5 Flash)."""
+    """Processes incoming WhatsApp images using OpenRouter Vision / Gemini Vision with concurrency queuing."""
+    global _ACTIVE_VISION_WORKERS
     print(f"\n🖼️ [VISION START] Processing image from {sender_phone} (Media ID: {media_id}, Caption: '{caption}', Tagged: {is_tagged_reply})...")
 
-    # 1. Typing indicator
+    # 1. Typing indicator right away
     try:
         await send_whatsapp_typing_indicator(sender_phone)
     except Exception:
         pass
 
-    # Meta Cloud API Free-Tier Budget & Daily Limit Guard
-    is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
-    if not is_allowed:
-        await send_whatsapp_cloud_msg(sender_phone, quota_notice)
-        return
-
-    # 2. Download image bytes
-    img_bytes, detected_mime = await download_whatsapp_media(media_id)
-    if not img_bytes:
-        await send_whatsapp_cloud_msg(
-            sender_phone,
-            "⚠️ I couldn't download the image from WhatsApp. Please check your connection and send it again! 🖼️"
-        )
-        return
-
-    effective_mime = detected_mime if (detected_mime and "image" in detected_mime) else (mime_type or "image/jpeg")
-    b64_image = base64.b64encode(img_bytes).decode("utf-8")
-    del img_bytes
-
-    # 3. User profile & study streak
-    student_name = "Doctor"
-    class_level = "MBBS"
-    if users_col is not None:
+    t_queue = time.perf_counter()
+    async with CONCURRENT_VISION_SEMAPHORE:
+        queue_wait = time.perf_counter() - t_queue
+        _ACTIVE_VISION_WORKERS += 1
+        if queue_wait > 0.3:
+            print(f"🚦 [BURST QUEUE] Vision slot acquired for {sender_phone} after {queue_wait:.2f}s (Active: {_ACTIVE_VISION_WORKERS}/{MAX_CONCURRENT_VISION_QUERIES})")
         try:
-            user_doc = await users_col.find_one({"user_id": sender_phone})
-            if user_doc:
-                student_name = user_doc.get("name", "Doctor")
-                class_level = user_doc.get("level", "MBBS")
-                if not user_doc.get("contact_card_sent"):
-                    await check_and_send_contact_card(sender_phone, user_doc)
-        except Exception:
-            pass
+            # Meta Cloud API Free-Tier Budget & Daily Limit Guard
+            is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
+            if not is_allowed:
+                await send_whatsapp_cloud_msg(sender_phone, quota_notice)
+                return
 
-    try:
-        await update_user_study_streak(sender_phone)
-    except Exception:
-        pass
+            # 2. Download image bytes
+            img_bytes, detected_mime = await download_whatsapp_media(media_id)
+            if not img_bytes:
+                await send_whatsapp_cloud_msg(
+                    sender_phone,
+                    "⚠️ I couldn't download the image from WhatsApp. Please check your connection and send it again! 🖼️"
+                )
+                return
 
-    logged_caption = f"[🖼️ Image Uploaded] {caption}" if caption else "[🖼️ Image Uploaded]"
-    try:
-        await log_user_chat_message(sender_phone, "user", logged_caption, msg_type="image_query")
-    except Exception:
-        pass
+            effective_mime = detected_mime if (detected_mime and "image" in detected_mime) else (mime_type or "image/jpeg")
+            b64_image = base64.b64encode(img_bytes).decode("utf-8")
+            del img_bytes
 
-    # Handle is_tagged_reply: prepend quoted context if the student tagged a previous message
-    tagged_prefix = ""
-    if is_tagged_reply:
-        try:
-            history_turns = await get_recent_history(sender_phone, n=2)
-            if history_turns:
-                last_turn = history_turns[-1]
-                prev_text = last_turn.get("a") or last_turn.get("q") or ""
-                if prev_text:
-                    tagged_prefix = f"[Student tagged previous message: \"{prev_text[:250]}\"]\n"
-        except Exception:
-            pass
+            # 3. User profile & study streak
+            student_name = "Doctor"
+            class_level = "MBBS"
+            if users_col is not None:
+                try:
+                    user_doc = await users_col.find_one({"user_id": sender_phone})
+                    if user_doc:
+                        student_name = user_doc.get("name", "Doctor")
+                        class_level = user_doc.get("level", "MBBS")
+                        if not user_doc.get("contact_card_sent"):
+                            await check_and_send_contact_card(sender_phone, user_doc)
+                except Exception:
+                    pass
 
-    # 4. Vision API Call (Gemini primary, OpenRouter fallback)
-    if not GEMINI_API_KEY and not OPENROUTER_API_KEY:
-        await send_whatsapp_cloud_msg(
-            sender_phone,
-            "⚠️ Vision analysis service is temporarily unavailable. Please try again shortly."
-        )
-        return
+            try:
+                await update_user_study_streak(sender_phone)
+            except Exception:
+                pass
 
-    sys_prompt = SYSTEM_VISION_PROMPT.format(
-        student_name=student_name,
-        class_level=class_level
-    )
-    base_prompt = caption.strip() if caption.strip() else "Please analyze this medical image thoroughly for my MBBS studies."
-    user_prompt_text = f"{tagged_prefix}{base_prompt}" if tagged_prefix else base_prompt
+            logged_caption = f"[🖼️ Image Uploaded] {caption}" if caption else "[🖼️ Image Uploaded]"
+            try:
+                await log_user_chat_message(sender_phone, "user", logged_caption, msg_type="image_query")
+            except Exception:
+                pass
 
-    analysis = ""
-    # 4a. Attempt Google Gemini Vision (Primary)
-    if GEMINI_API_KEY:
-        try:
-            analysis = await call_gemini_vision_api(
-                system_prompt=sys_prompt,
-                user_prompt=user_prompt_text,
-                b64_image=b64_image,
-                mime_type=effective_mime,
-                max_tokens=1500
+            # Handle is_tagged_reply: prepend quoted context if the student tagged a previous message
+            tagged_prefix = ""
+            if is_tagged_reply:
+                try:
+                    history_turns = await get_recent_history(sender_phone, n=2)
+                    if history_turns:
+                        last_turn = history_turns[-1]
+                        prev_text = last_turn.get("a") or last_turn.get("q") or ""
+                        if prev_text:
+                            tagged_prefix = f"[Student tagged previous message: \"{prev_text[:250]}\"]\n"
+                except Exception:
+                    pass
+
+            # 4. Vision API Call (Gemini primary, OpenRouter fallback)
+            if not GEMINI_API_KEY and not OPENROUTER_API_KEY:
+                await send_whatsapp_cloud_msg(
+                    sender_phone,
+                    "⚠️ Vision analysis service is temporarily unavailable. Please try again shortly."
+                )
+                return
+
+            sys_prompt = SYSTEM_VISION_PROMPT.format(
+                student_name=student_name,
+                class_level=class_level
             )
-        except Exception as gem_vis_err:
-            print(f"⚠️ Gemini Vision failed: {gem_vis_err}. Attempting OpenRouter fallback...")
+            base_prompt = caption.strip() if caption.strip() else "Please analyze this medical image thoroughly for my MBBS studies."
+            user_prompt_text = f"{tagged_prefix}{base_prompt}" if tagged_prefix else base_prompt
+
             analysis = ""
+            # 4a. Attempt Google Gemini Vision (Primary)
+            if GEMINI_API_KEY:
+                try:
+                    analysis = await call_gemini_vision_api(
+                        system_prompt=sys_prompt,
+                        user_prompt=user_prompt_text,
+                        b64_image=b64_image,
+                        mime_type=effective_mime,
+                        max_tokens=1500
+                    )
+                except Exception as gem_vis_err:
+                    print(f"⚠️ Gemini Vision failed: {gem_vis_err}. Attempting OpenRouter fallback...")
+                    analysis = ""
 
-    # 4b. OpenRouter Vision fallback
-    if not analysis and OPENROUTER_API_KEY:
-        url = "https://openrouter.ai/api/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://ranviar.org",
-            "X-Title": "Ranviar Medical Vision"
-        }
-
-        vision_models = [
-            "google/gemini-2.5-flash",
-            "google/gemini-flash-1.5",
-            "meta-llama/llama-3.2-11b-vision-instruct"
-        ]
-
-        payload = {
-            "model": vision_models[0],
-            "models": vision_models,
-            "messages": [
-                {"role": "system", "content": sys_prompt},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_prompt_text},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{effective_mime};base64,{b64_image}"
-                            }
-                        }
-                    ]
+            # 4b. OpenRouter Vision fallback
+            if not analysis and OPENROUTER_API_KEY:
+                url = "https://openrouter.ai/api/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://ranviar.org",
+                    "X-Title": "Ranviar Medical Vision"
                 }
-            ],
-            "temperature": 0.2,
-            "max_tokens": 1500
-        }
 
-        try:
-            async with httpx.AsyncClient(timeout=45.0) as client:
-                resp = await client.post(url, headers=headers, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                choices = data.get("choices")
-                if isinstance(choices, list) and len(choices) > 0:
-                    first_choice = choices[0]
-                    if isinstance(first_choice, dict):
-                        analysis = first_choice.get("message", {}).get("content", "").strip()
-        except Exception as or_vis_err:
-            print(f"⚠️ OpenRouter Vision fallback error: {or_vis_err}")
+                vision_models = [
+                    "google/gemini-2.5-flash",
+                    "google/gemini-flash-1.5",
+                    "meta-llama/llama-3.2-11b-vision-instruct"
+                ]
 
-    del b64_image
-    gc.collect()
+                payload = {
+                    "model": vision_models[0],
+                    "models": vision_models,
+                    "messages": [
+                        {"role": "system", "content": sys_prompt},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": user_prompt_text},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:{effective_mime};base64,{b64_image}"
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 1500
+                }
 
-    if not analysis:
-        analysis = "⚠️ I reviewed the image, but couldn't generate a clear analysis. Please ensure the photo is clear and try sending it again."
+                try:
+                    async with httpx.AsyncClient(timeout=45.0) as client:
+                        resp = await client.post(url, headers=headers, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        choices = data.get("choices")
+                        if isinstance(choices, list) and len(choices) > 0:
+                            first_choice = choices[0]
+                            if isinstance(first_choice, dict):
+                                analysis = first_choice.get("message", {}).get("content", "").strip()
+                except Exception as or_vis_err:
+                    print(f"⚠️ OpenRouter Vision fallback error: {or_vis_err}")
 
-    # 5. Send reply
-    await send_whatsapp_cloud_msg(sender_phone, analysis)
+            del b64_image
+            gc.collect()
 
-    try:
-        await log_user_chat_message(sender_phone, "assistant", analysis, msg_type="image_analysis")
-    except Exception:
-        pass
+            if not analysis:
+                analysis = "⚠️ I reviewed the image, but couldn't generate a clear analysis. Please ensure the photo is clear and try sending it again."
+
+            # 5. Send reply
+            await send_whatsapp_cloud_msg(sender_phone, analysis)
+
+            try:
+                await log_user_chat_message(sender_phone, "assistant", analysis, msg_type="image_analysis")
+            except Exception:
+                pass
+        finally:
+            _ACTIVE_VISION_WORKERS = max(0, _ACTIVE_VISION_WORKERS - 1)
 
 
 # ==========================================
@@ -6129,10 +6154,24 @@ async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: 
 
 # User-level sequential lock to prevent race conditions on simultaneous messages from the same user (defined above at line 127)
 async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_reply: bool = False, is_voice: bool = False):
-    """Background task wrapper to process messages sequentially per user lock"""
+    """Background task wrapper to process messages sequentially per user lock with concurrency burst regulation"""
+    global _ACTIVE_CHAT_WORKERS
     lock = get_user_lock(sender_phone)
     async with lock:
-        await _process_whatsapp_message_internal(sender_phone, user_msg, is_tagged_reply, is_voice)
+        try:
+            await send_whatsapp_typing_indicator(sender_phone)
+        except Exception:
+            pass
+        t_queue = time.perf_counter()
+        async with CONCURRENT_CHAT_SEMAPHORE:
+            queue_wait = time.perf_counter() - t_queue
+            _ACTIVE_CHAT_WORKERS += 1
+            if queue_wait > 0.3:
+                print(f"🚦 [BURST QUEUE] Chat slot acquired for {sender_phone} after {queue_wait:.2f}s (Active: {_ACTIVE_CHAT_WORKERS}/{MAX_CONCURRENT_CHAT_QUERIES})")
+            try:
+                await _process_whatsapp_message_internal(sender_phone, user_msg, is_tagged_reply, is_voice)
+            finally:
+                _ACTIVE_CHAT_WORKERS = max(0, _ACTIVE_CHAT_WORKERS - 1)
 
 async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, is_tagged_reply: bool = False, is_voice: bool = False):
     """Internal task to run RAG & OpenRouter LLM and send WhatsApp reply"""
@@ -7953,7 +7992,13 @@ async def admin_stats(request: Request):
         "active_24h": active_24h,
         "total_wallet_balance_ngn": round(total_wallet, 2),
         "level_distribution": level_dist,
-        "recent_broadcasts": recent_broadcasts
+        "recent_broadcasts": recent_broadcasts,
+        "concurrency": {
+            "active_chat_workers": _ACTIVE_CHAT_WORKERS,
+            "max_concurrent_chat": MAX_CONCURRENT_CHAT_QUERIES,
+            "active_vision_workers": _ACTIVE_VISION_WORKERS,
+            "max_concurrent_vision": MAX_CONCURRENT_VISION_QUERIES
+        }
     }
 
 async def resolve_user_last_active(u: dict, uid: str) -> str:
