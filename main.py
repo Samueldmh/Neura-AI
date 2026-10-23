@@ -237,14 +237,6 @@ query_embedding_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="que
 bulk_embedding_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bulk_embed")
 embedding_pool = query_embedding_pool  # Backward compatibility
 
-# User-level sequential locks to prevent race conditions on simultaneous actions from the same user
-_user_locks: dict[str, asyncio.Lock] = {}
-
-def get_user_lock(user_id: str) -> asyncio.Lock:
-    if user_id not in _user_locks:
-        _user_locks[user_id] = asyncio.Lock()
-    return _user_locks[user_id]
-
 # User-level sequential locks for document uploads (isolated from chat messages so questions are never blocked)
 _user_doc_locks: dict[str, asyncio.Lock] = {}
 
@@ -549,8 +541,6 @@ async def update_user_study_streak(user_id: str) -> int:
         print(f"Error updating study streak: {e}")
         return 1
 
-# Concurrency Limiter for Automated Streak Nudges: bounds parallel LLM generations and WhatsApp sends to 10
-STREAK_NUDGE_SEMAPHORE = asyncio.Semaphore(10)
 
 STREAK_MSG_PROMPT = """You are writing a short, warm WhatsApp daily study nudge for a medical student on Ranviar.
 
@@ -677,7 +667,6 @@ async def check_and_send_inactivity_reminders(force_ignore_quiet_hours: bool = F
                     recent_topics.append(last_t.strip())
 
             # Bounded concurrency: maximum 10 concurrent OpenRouter LLM calls and WhatsApp API deliveries
-            async with STREAK_NUDGE_SEMAPHORE:
                 streak_msg = await generate_streak_message(name, streak, recent_topics)
                 
                 # Send reminder message directly; never fallback to paid Meta marketing templates
@@ -6163,23 +6152,8 @@ async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: 
 
 # User-level sequential lock to prevent race conditions on simultaneous messages from the same user (defined above at line 127)
 async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_reply: bool = False, is_voice: bool = False):
-    """Background task wrapper to process messages sequentially per user lock with hard 55s ceiling"""
-    lock = get_user_lock(sender_phone)
-    async with lock:
-        try:
-            await asyncio.wait_for(
-                _process_whatsapp_message_internal(sender_phone, user_msg, is_tagged_reply, is_voice),
-                timeout=55.0
-            )
-        except asyncio.TimeoutError:
-            print(f"⏱️ [PIPELINE TIMEOUT] Message processing for {sender_phone} exceeded 55s ceiling. Releasing lock.")
-            try:
-                await send_whatsapp_cloud_msg(
-                    sender_phone,
-                    "Sorry, Ranviar experienced a brief connection delay while analyzing your question. Please ask your question again! 🩺⚡"
-                )
-            except Exception:
-                pass
+    """Direct background task to process WhatsApp messages without locks or concurrency queues."""
+    await _process_whatsapp_message_internal(sender_phone, user_msg, is_tagged_reply, is_voice)
 
 async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, is_tagged_reply: bool = False, is_voice: bool = False):
     """Internal task to run RAG & OpenRouter LLM and send WhatsApp reply"""
