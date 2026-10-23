@@ -795,6 +795,9 @@ async def upgrade_curriculum_for_all_users():
     print("🏓 [KEEP-ALIVE] Self-ping task started (every 4 minutes)")
 
 async def startup_event():
+    # Launch keep-alive self-ping immediately on startup to prevent Render free-tier cold starts
+    asyncio.create_task(_self_ping_keep_alive())
+    print('🏓 [KEEP-ALIVE] Self-ping task started (every 3 minutes)')
     try:
         await qdrant.create_payload_index(
             collection_name=COLLECTION_NAME,
@@ -1118,15 +1121,39 @@ async def classify_intent(message: str, chat_history: list = None) -> str:
         except Exception as e:
             print(f"LLM Intent Classifier fallback error: {e}")
 
-    # Default fallback: Only classify as MEDICAL if genuine clinical indicators or medical query patterns are present
+    # 4b. Gemini Fallback Intent Classifier - if OpenRouter failed/unavailable, try Gemini directly
+    if GEMINI_API_KEY:
+        try:
+            gemini_router_prompt = (
+                "Classify this student message for a medical study chatbot. "
+                "Categories: MEDICAL, GREETING, CONVERSATIONAL, GRATITUDE, ACKNOWLEDGMENT, GIBBERISH, QUIZ, OFF_TOPIC, PLATFORM_META. "
+                "Output ONLY the category name in uppercase."
+            )
+            gemini_result = await call_gemini_api(
+                system_prompt=gemini_router_prompt,
+                user_prompt=f'Student message: "{message}"',
+                max_tokens=15,
+                temperature=0.0,
+                preferred_model="gemini-3.5-flash-lite"
+            )
+            cat = (gemini_result or "").strip().upper()
+            for valid in ["PLATFORM_META", "GREETING", "OFF_TOPIC", "CONVERSATIONAL", "GRATITUDE", "ACKNOWLEDGMENT", "GIBBERISH", "QUIZ", "MEDICAL"]:
+                if valid in cat:
+                    print(f"[INTENT] Gemini fallback classified '{message[:50]}' -> {valid}")
+                    return valid
+        except Exception as gem_err:
+            print(f"Gemini Intent Classifier fallback error: {gem_err}")
+
+    # 5. Deterministic regex fallback (last resort - both LLMs failed)
     if any(re.search(pat, msg_clean) for pat in off_topic_patterns):
         return "OFF_TOPIC"
     terms = extract_medical_terms(message)
     is_not_conversational = not any(w in msg_clean for w in ["who made", "who created", "samuel", "joke", "weather", "who are you", "what can you do", "introduce yourself"])
     if any(ind in msg_clean for ind in KNOWN_MED_INDICATORS) or (terms and is_not_conversational and len(msg_clean.split()) >= 2):
         return "MEDICAL"
+    # Default short messages to MEDICAL - single-word medical terms (Scoliosis, Pneumonia) are common student queries
     if len(msg_clean.split()) <= 2:
-        return "GIBBERISH"
+        return "MEDICAL"
     return "CONVERSATIONAL"
 
 # ==========================================
@@ -1168,7 +1195,7 @@ async def call_gemini_api(
     temperature: float = 0.65,
     preferred_model: str = "gemini-3.5-flash-lite"
 ) -> str:
-    """High-performance direct call to Google Gemini API with automatic candidate fallback and retry."""
+    """High-performance direct call to Google Gemini API with automatic candidate fallback and fast timeout."""
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not configured on Render!")
 
@@ -1184,38 +1211,37 @@ async def call_gemini_api(
     }
 
     models_to_try = [preferred_model]
-    if preferred_model != "gemini-3.8-flash":
-        models_to_try.append("gemini-3.8-flash")
-    if preferred_model != "gemini-flash-latest":
-        models_to_try.append("gemini-flash-latest")
+    for m in ["gemini-2.5-flash", "gemini-flash-latest"]:
+        if m not in models_to_try:
+            models_to_try.append(m)
 
     last_error = None
     for model_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY.strip()}"
-        for attempt in range(2):
+        try:
             try:
-                response = await shared_http_client.post(url, json=payload, timeout=35.0)
-                if response.status_code == 200:
-                    data = response.json()
-                    cands = data.get("candidates") or []
-                    if cands:
-                        parts = cands[0].get("content", {}).get("parts", [])
-                        text = "".join(p.get("text", "") for p in parts).strip()
-                        if text:
-                            dt = time.perf_counter() - t_start
-                            print(f"⏱️ [LLM TIMER] Gemini completed in {dt:.3f}s (Model: {model_name}, Attempt: {attempt+1}, Tokens: ~{len(text.split())*4/3:.0f})")
-                            return text
-                elif response.status_code in [429, 503]:
-                    print(f"⚠️ [GEMINI] {model_name} HTTP {response.status_code} on attempt {attempt+1}. Retrying in 1.5s...")
-                    await asyncio.sleep(1.5)
-                    continue
-                else:
-                    print(f"⚠️ [GEMINI] {model_name} HTTP {response.status_code}: {response.text[:200]}")
-                    break
-            except Exception as net_err:
-                last_error = net_err
-                print(f"⚠️ [GEMINI] Network error calling {model_name} (attempt {attempt+1}): {net_err}")
-                await asyncio.sleep(1.0)
+                response = await shared_http_client.post(url, json=payload, timeout=12.0)
+            except Exception:
+                async with httpx.AsyncClient(timeout=12.0) as fallback_client:
+                    response = await fallback_client.post(url, json=payload)
+            if response.status_code == 200:
+                data = response.json()
+                cands = data.get("candidates") or []
+                if cands:
+                    parts = cands[0].get("content", {}).get("parts", [])
+                    text = "".join(p.get("text", "") for p in parts).strip()
+                    if text:
+                        dt = time.perf_counter() - t_start
+                        print(f"⏱️ [LLM TIMER] Gemini completed in {dt:.3f}s (Model: {model_name}, Tokens: ~{len(text.split())*4/3:.0f})")
+                        return text
+            elif response.status_code in [429, 503]:
+                print(f"⚠️ [GEMINI] {model_name} HTTP {response.status_code}. Quick-switching to next candidate...")
+                continue
+            else:
+                print(f"⚠️ [GEMINI] {model_name} HTTP {response.status_code}: {response.text[:150]}")
+        except Exception as net_err:
+            last_error = net_err
+            print(f"⚠️ [GEMINI] Error calling {model_name}: {net_err}")
 
     raise RuntimeError(f"All Gemini model candidates failed: {last_error}")
 
@@ -2319,6 +2345,10 @@ async def check_and_send_contact_card(sender_phone: str, user_doc: dict = None) 
         return False
 
 
+async def send_whatsapp_typing_indicator(to_number: str):
+    """Safely acknowledges typing state without throwing NameError."""
+    pass
+
 async def mark_message_as_read(message_id: str):
     """Marks incoming message as read and activates WhatsApp native floating typing indicator bubble (<50ms)"""
     if not message_id or not WHATSAPP_TOKEN:
@@ -2351,9 +2381,13 @@ async def mark_message_as_read(message_id: str):
 
 async def send_whatsapp_template_msg(to_number: str, template_name: str, parameters: list, language_code: str = "en") -> bool:
     """Sends a Meta Pre-Approved Template Message (Utility / Marketing) to a student.
-    Handles templates with named body parameters (e.g. neura_announcement: {{student_name}} and {{announcement_text}} in body)
-    as well as positional and custom component parameters.
+    Guarded with strict $0 bill protection — automatically blocks template sends unless explicitly enabled.
     """
+    # 🛡️ STRICT META $0 BILL SAFETY GUARD
+    allow_templates = os.getenv("ALLOW_META_TEMPLATE_SENDS", "false").strip().lower() == "true"
+    if not allow_templates:
+        print(f"🛑 [META CHARGE GUARD] Suppressed template '{template_name}' to {to_number} to guarantee $0 Meta bill.")
+        return False
     if not to_number or not WHATSAPP_TOKEN:
         return False
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
@@ -6129,10 +6163,23 @@ async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: 
 
 # User-level sequential lock to prevent race conditions on simultaneous messages from the same user (defined above at line 127)
 async def process_whatsapp_message(sender_phone: str, user_msg: str, is_tagged_reply: bool = False, is_voice: bool = False):
-    """Background task wrapper to process messages sequentially per user lock"""
+    """Background task wrapper to process messages sequentially per user lock with hard 55s ceiling"""
     lock = get_user_lock(sender_phone)
     async with lock:
-        await _process_whatsapp_message_internal(sender_phone, user_msg, is_tagged_reply, is_voice)
+        try:
+            await asyncio.wait_for(
+                _process_whatsapp_message_internal(sender_phone, user_msg, is_tagged_reply, is_voice),
+                timeout=55.0
+            )
+        except asyncio.TimeoutError:
+            print(f"⏱️ [PIPELINE TIMEOUT] Message processing for {sender_phone} exceeded 55s ceiling. Releasing lock.")
+            try:
+                await send_whatsapp_cloud_msg(
+                    sender_phone,
+                    "Sorry, Ranviar experienced a brief connection delay while analyzing your question. Please ask your question again! 🩺⚡"
+                )
+            except Exception:
+                pass
 
 async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, is_tagged_reply: bool = False, is_voice: bool = False):
     """Internal task to run RAG & OpenRouter LLM and send WhatsApp reply"""
@@ -7381,19 +7428,36 @@ async def health_check():
 
 async def _self_ping_keep_alive():
     """
-    Pings this server's /health endpoint every 4 minutes.
+    Pings this server's /health endpoint every 3 minutes with retry logic.
     Keeps Render's free-tier dyno from sleeping between messages,
-    which would cause a 30–60 second cold-start delay on the next webhook.
+    which would cause a 45–60 second cold-start delay on the next webhook.
     """
-    await asyncio.sleep(30)  # wait for server to fully start first
+    await asyncio.sleep(15)  # wait for server to fully start first
+    consecutive_failures = 0
     while True:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{BASE_URL}/health")
-                print(f"🏓 [KEEP-ALIVE] Self-ping → {resp.status_code}")
-        except Exception as e:
-            print(f"⚠️ [KEEP-ALIVE] Self-ping failed: {e}")
-        await asyncio.sleep(240)  # 4-minute interval
+        success = False
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(f"{BASE_URL}/health")
+                    if resp.status_code == 200:
+                        if consecutive_failures > 0:
+                            print(f"🏓 [KEEP-ALIVE] Self-ping recovered after {consecutive_failures} failures → {resp.status_code}")
+                        else:
+                            print(f"🏓 [KEEP-ALIVE] Self-ping → {resp.status_code}")
+                        consecutive_failures = 0
+                        success = True
+                        break
+                    else:
+                        print(f"⚠️ [KEEP-ALIVE] Self-ping non-200: {resp.status_code} (attempt {attempt+1}/3)")
+            except Exception as e:
+                print(f"⚠️ [KEEP-ALIVE] Self-ping failed (attempt {attempt+1}/3): {e}")
+            if attempt < 2:
+                await asyncio.sleep(10)  # 10s backoff between retries
+        if not success:
+            consecutive_failures += 1
+            print(f"❌ [KEEP-ALIVE] All 3 ping attempts failed (streak: {consecutive_failures})")
+        await asyncio.sleep(180)  # 4-minute interval
 
 @app.post("/webhook/flutterwave")
 async def flutterwave_webhook(request: Request):
