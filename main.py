@@ -339,94 +339,154 @@ chat_logs_col = db.chat_logs if db is not None else None
 youtube_video_cache_col = db.youtube_video_cache if db is not None else None
 meta_billing_col = db.meta_billing if db is not None else None
 
-# ── META CLOUD API 1,000 FREE SERVICE CONVERSATION PROTECTION ───────────────
-# Meta grants 1,000 free 24-hour service (user-initiated) conversations per calendar month.
-# To guarantee 100% $0 bill from Meta:
-# 1. Hard-cap monthly service conversations at 950 (50 buffer).
-# 2. Track every student's 24-hour window: messages inside an active window are completely free.
-# 3. Only count when opening a NEW 24-hour window.
-# 4. If monthly count >= 950, gracefully decline to open a new paid window.
-# 5. Daily query limit: 25 queries per student per day.
-META_MONTHLY_FREE_CONVERSATIONS_CAP = 950
-DAILY_STUDENT_QUERY_LIMIT = 25
+# ── META CLOUD API 1,000 FREE SERVICE MESSAGE ZERO-BILL ENFORCER ──────────────
+# Meta grants 1,000 free service messages per calendar month per business phone number.
+# Every delivered message above 1,000 costs $0.0067 USD in Nigeria.
+# To guarantee 100% $0 bill from Meta under all circumstances:
+# 1. Monthly Absolute Hard Cap: 900 messages (leaving a 100-message / 10% emergency safety buffer).
+# 2. Daily Global Pace Budget: 35 messages/day (prevents early-month exhaustion).
+# 3. Daily Per-Student Limit: 2 queries per student per day (supports 15–20 active daily students).
+# 4. Single-Message Architecture: Video lecture links embedded directly in main answer bubble (50% reduction).
+# 5. Hard Block: When monthly count hits 900, Meta Graph API calls are physically BLOCKED. Meta cannot bill $0.01.
+META_MONTHLY_FREE_MESSAGES_CAP = 900
+META_DAILY_GLOBAL_MESSAGES_CAP = 35
+DAILY_STUDENT_QUERY_LIMIT = 2
+
+async def get_meta_monthly_outbound_count(current_month: str = None) -> int:
+    """Retrieves the exact total outbound WhatsApp messages delivered this month from MongoDB."""
+    if meta_billing_col is None:
+        return 0
+    if not current_month:
+        wat_now = datetime.utcnow() + timedelta(hours=1)
+        current_month = wat_now.strftime("%Y-%m")
+    try:
+        doc = await meta_billing_col.find_one({"month": current_month})
+        return int(doc.get("outbound_messages_count", 0)) if doc else 0
+    except Exception as e:
+        print(f"⚠️ Error reading meta monthly count: {e}")
+        return 0
+
+async def get_meta_daily_outbound_count(today_str: str = None) -> int:
+    """Retrieves today's total outbound WhatsApp messages delivered across all students."""
+    if meta_billing_col is None:
+        return 0
+    wat_now = datetime.utcnow() + timedelta(hours=1)
+    current_month = wat_now.strftime("%Y-%m")
+    if not today_str:
+        today_str = wat_now.strftime("%Y-%m-%d")
+    try:
+        doc = await meta_billing_col.find_one({"month": current_month})
+        if not doc:
+            return 0
+        breakdown = doc.get("daily_breakdown", {})
+        return int(breakdown.get(today_str, 0))
+    except Exception as e:
+        print(f"⚠️ Error reading meta daily count: {e}")
+        return 0
+
+async def record_meta_outbound_message_delivered():
+    """Increments the persistent monthly outbound message counter in MongoDB upon successful Meta delivery."""
+    if meta_billing_col is None:
+        return
+    wat_now = datetime.utcnow() + timedelta(hours=1)
+    current_month = wat_now.strftime("%Y-%m")
+    today_str = wat_now.strftime("%Y-%m-%d")
+    try:
+        await meta_billing_col.update_one(
+            {"month": current_month},
+            {
+                "$inc": {
+                    "outbound_messages_count": 1,
+                    f"daily_breakdown.{today_str}": 1
+                }
+            },
+            upsert=True
+        )
+    except Exception as e:
+        print(f"⚠️ Error recording meta outbound message: {e}")
+
+async def can_dispatch_meta_message(to_number: str = "") -> bool:
+    """
+    Central gatekeeper: Checked before ANY HTTP call to Meta Graph API.
+    Returns False and halts delivery if monthly ceiling (900) or daily pacing ceiling is hit.
+    """
+    wat_now = datetime.utcnow() + timedelta(hours=1)
+    current_month = wat_now.strftime("%Y-%m")
+    monthly_count = await get_meta_monthly_outbound_count(current_month)
+    if monthly_count >= META_MONTHLY_FREE_MESSAGES_CAP:
+        print(f"🛑 [META $0 BUDGET ENFORCER] Monthly free tier limit reached ({monthly_count}/{META_MONTHLY_FREE_MESSAGES_CAP}). Blocked message to {to_number} to guarantee $0 Meta bill.")
+        return False
+
+    today_str = wat_now.strftime("%Y-%m-%d")
+    daily_count = await get_meta_daily_outbound_count(today_str)
+    if daily_count >= META_DAILY_GLOBAL_MESSAGES_CAP:
+        print(f"🛑 [META $0 PACING GUARD] Daily platform limit reached ({daily_count}/{META_DAILY_GLOBAL_MESSAGES_CAP}). Blocked message to {to_number} to preserve free tier.")
+        return False
+
+    return True
 
 async def check_meta_free_tier_budget(sender_phone: str, is_command: bool = False) -> tuple[bool, str]:
     """
-    Guarantees $0 charges from Meta by enforcing the 1,000 free conversation ceiling
-    and daily query limits.
+    Guarantees $0 charges from Meta by enforcing the 900 free message ceiling,
+    daily pacing limit (35 messages/day globally), and 2-query daily limit per student.
     Returns (is_allowed, notice_message).
     """
-    if users_col is None:
-        return True, ""
-
-    now_ts = time.time()
     wat_now = datetime.utcnow() + timedelta(hours=1)
     current_month = wat_now.strftime("%Y-%m")
     today_str = wat_now.strftime("%Y-%m-%d")
 
-    # 1. Check user profile for active 24h window & daily query quota
-    user_doc = await users_col.find_one({"user_id": sender_phone})
-    window_expires_at = user_doc.get("meta_window_expires_at", 0) if user_doc else 0
-
-    # Commands (like /menu, /profile, /documents) bypass the 25-query daily cap
-    if not is_command:
-        daily_stats = user_doc.get("daily_chat_stats", {}) if user_doc else {}
-        today_queries = daily_stats.get(today_str, 0)
-        if today_queries >= DAILY_STUDENT_QUERY_LIMIT:
-            limit_msg = (
-                f"⏳ *Daily Study Limit Reached ({DAILY_STUDENT_QUERY_LIMIT}/{DAILY_STUDENT_QUERY_LIMIT} queries)*\n\n"
-                f"To keep Ranviar 100% free and fast for every medical student, questions are limited to *{DAILY_STUDENT_QUERY_LIMIT} per day*.\n\n"
-                "Your daily study limit will reset at midnight (WAT)! You can still view your notes with */documents* or check your streak with */streak*. 🩺📚"
-            )
-            return False, limit_msg
-
-    # 2. If user is already inside an active 24-hour service window, message is 100% free under Meta rules
-    if now_ts < window_expires_at:
-        if not is_command:
-            await users_col.update_one(
-                {"user_id": sender_phone},
-                {"$inc": {f"daily_chat_stats.{today_str}": 1}},
-                upsert=True
-            )
-        return True, ""
-
-    # 3. User is attempting to open a NEW 24-hour conversation window.
-    # Check global monthly count.
-    monthly_count = 0
-    if meta_billing_col is not None:
-        doc = await meta_billing_col.find_one({"month": current_month})
-        monthly_count = doc.get("conversation_count", 0) if doc else 0
-
-    if monthly_count >= META_MONTHLY_FREE_CONVERSATIONS_CAP:
-        print(f"🛑 [META QUOTA GUARD] Monthly free conversation limit reached ({monthly_count}/{META_MONTHLY_FREE_CONVERSATIONS_CAP}). Blocking new window for {sender_phone}.")
+    # 1. Global Monthly Hard Stop (900 ceiling)
+    monthly_count = await get_meta_monthly_outbound_count(current_month)
+    if monthly_count >= META_MONTHLY_FREE_MESSAGES_CAP:
+        print(f"🛑 [META QUOTA GUARD] Monthly free message limit reached ({monthly_count}/{META_MONTHLY_FREE_MESSAGES_CAP}).")
         cap_msg = (
             "🎓 *Monthly Free Community Quota Reached*\n\n"
-            "Ranviar has reached its free monthly study capacity (1,000 conversations) allocated for this month across all medical schools.\n\n"
+            "Ranviar has reached its free monthly study capacity (1,000 messages) allocated for this month across all medical schools.\n\n"
             "Access will automatically reset on the *1st of next month*. Thank you for studying with Ranviar! 🧠⚡"
         )
         return False, cap_msg
 
-    # Grant new 24h window (86,400s) and increment monthly counter
-    new_expires_at = now_ts + 86400
-    if meta_billing_col is not None:
-        await meta_billing_col.update_one(
-            {"month": current_month},
-            {"$inc": {"conversation_count": 1}},
+    # 2. Daily Global Pacing Budget (35 messages/day)
+    daily_count = await get_meta_daily_outbound_count(today_str)
+    if daily_count >= META_DAILY_GLOBAL_MESSAGES_CAP:
+        print(f"🛑 [META QUOTA GUARD] Daily platform limit reached ({daily_count}/{META_DAILY_GLOBAL_MESSAGES_CAP}).")
+        pacing_msg = (
+            "⏳ *Daily Platform Study Quota Reached*\n\n"
+            "Ranviar's daily study quota has been reached for today to preserve our 100% free community tier.\n\n"
+            "Daily quota automatically resets at *midnight (WAT)*. Thank you for your patience! 🩺⚡"
+        )
+        return False, pacing_msg
+
+    # 3. Daily Per-Student Limit (2 queries per day)
+    if users_col is not None and not is_command:
+        user_doc = await users_col.find_one({"user_id": sender_phone})
+        daily_stats = user_doc.get("daily_chat_stats", {}) if user_doc else {}
+        today_queries = daily_stats.get(today_str, 0)
+        if today_queries >= DAILY_STUDENT_QUERY_LIMIT:
+            # Check if this student was already notified today to prevent spam burning quota
+            last_alert_date = user_doc.get("last_limit_alert_date", "") if user_doc else ""
+            if last_alert_date == today_str:
+                return False, ""
+
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$set": {"last_limit_alert_date": today_str}}
+            )
+            limit_msg = (
+                f"⏳ *Daily Study Limit Reached ({DAILY_STUDENT_QUERY_LIMIT}/{DAILY_STUDENT_QUERY_LIMIT} queries)*\n\n"
+                f"To keep Ranviar 100% free with zero fees for all 640+ MBBS students without exceeding Meta's free sponsor capacity, daily questions are capped at *{DAILY_STUDENT_QUERY_LIMIT} per student*.\n\n"
+                "Your daily limit resets at midnight (WAT)! You can still review your uploaded notes with */documents* or check your streak with */streak*. 🩺📚"
+            )
+            return False, limit_msg
+
+        # Increment user daily queries
+        await users_col.update_one(
+            {"user_id": sender_phone},
+            {"$inc": {f"daily_chat_stats.{today_str}": 1}},
             upsert=True
         )
-        print(f"📊 [META QUOTA GUARD] New 24h conversation window opened for {sender_phone} ({monthly_count + 1}/{META_MONTHLY_FREE_CONVERSATIONS_CAP} this month).")
 
-    update_ops = {"$set": {"meta_window_expires_at": new_expires_at}}
-    if not is_command:
-        update_ops["$inc"] = {f"daily_chat_stats.{today_str}": 1}
-
-    await users_col.update_one(
-        {"user_id": sender_phone},
-        update_ops,
-        upsert=True
-    )
     return True, ""
-
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neura2026admin")
 ADMIN_SESSIONS = set()
 
@@ -1942,9 +2002,11 @@ def split_into_whatsapp_chunks(text: str, max_chars: int = 3500) -> list[str]:
 
 async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url: bool = False):
     """Sends a text response directly to the student via Meta WhatsApp Cloud API. Automatically chunks messages exceeding Meta's 4000 char limit."""
+    if not await can_dispatch_meta_message(to_number):
+        return False
     message_text = format_whatsapp_text(message_text)
     if not message_text:
-        return
+        return False
 
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
@@ -1980,7 +2042,9 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url
                     status_ok = (res.status_code == 200)
             except Exception:
                 status_ok = False
-        if not status_ok:
+        if status_ok:
+            await record_meta_outbound_message_delivered()
+        else:
             all_success = False
         status_code = res.status_code if res is not None else 'ERR'
         resp_text = getattr(res, 'text', '') if res is not None else ''
@@ -1996,6 +2060,8 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url
 
 async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_text: str, options: list):
     """Sends an Interactive List Message (max 10 options) with fail-safe character limit handling and plain text fallback."""
+    if not await can_dispatch_meta_message(to_number):
+        return False
     body_text = format_whatsapp_text(body_text)
     if not body_text:
         return False
@@ -2070,6 +2136,7 @@ async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_
     print(f"Meta Graph API List Send Status {status_code}: {resp_text}")
 
     if status_ok:
+        await record_meta_outbound_message_delivered()
         try:
             asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text, msg_type="interactive_list"))
         except Exception:
@@ -2087,6 +2154,8 @@ async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_
 
 async def send_whatsapp_interactive_button(to_number: str, body_text: str, buttons: list):
     """Sends an Interactive Button Message (max 3 buttons) with fail-safe character limit handling and plain text fallback."""
+    if not await can_dispatch_meta_message(to_number):
+        return False
     body_text = format_whatsapp_text(body_text)
     if not body_text:
         return False
@@ -2152,6 +2221,7 @@ async def send_whatsapp_interactive_button(to_number: str, body_text: str, butto
     print(f"Meta Graph API Button Send Status {status_code}: {resp_text}")
 
     if status_ok:
+        await record_meta_outbound_message_delivered()
         try:
             btn_summary = " [Options: " + ", ".join(str(b.get("title", "")) for b in buttons) + "]"
             asyncio.create_task(log_user_chat_message(to_number, "assistant", body_text + btn_summary, msg_type="interactive_button"))
@@ -2168,6 +2238,8 @@ async def send_whatsapp_interactive_button(to_number: str, body_text: str, butto
 
 async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_label: str, url_target: str):
     """Sends an Interactive CTA URL Button that opens directly in WhatsApp's in-app webview, with fail-safe fallback."""
+    if not await can_dispatch_meta_message(to_number):
+        return False
     body_text = format_whatsapp_text(body_text)
     if not body_text:
         return False
@@ -2221,6 +2293,7 @@ async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_la
     print(f"Meta CTA URL Button Send Status {status_code}: {resp_text}")
 
     if status_ok:
+        await record_meta_outbound_message_delivered()
         try:
             asyncio.create_task(log_user_chat_message(to_number, "assistant", f"{body_text} [Link: {button_label} -> {url_target}]", msg_type="cta_button"))
         except Exception:
@@ -2238,6 +2311,8 @@ async def send_whatsapp_contact_card(to_number: str) -> bool:
     Once saved to contacts, WhatsApp immediately displays 'Ranviar Medical AI' on the student's chat list.
     """
     if not to_number or not WHATSAPP_TOKEN:
+        return False
+    if not await can_dispatch_meta_message(to_number):
         return False
 
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
@@ -2291,6 +2366,7 @@ async def send_whatsapp_contact_card(to_number: str) -> bool:
     print(f"Meta Contact Card Send Status {status_code}: {resp_text}")
 
     if status_ok:
+        await record_meta_outbound_message_delivered()
         try:
             asyncio.create_task(log_user_chat_message(to_number, "assistant", "📇 [Ranviar Contact Card]", msg_type="contact_card"))
         except Exception:
@@ -2300,38 +2376,9 @@ async def send_whatsapp_contact_card(to_number: str) -> bool:
 
 
 async def check_and_send_contact_card(sender_phone: str, user_doc: dict = None) -> bool:
-    """Delivers the Ranviar WhatsApp Contact Card exactly once to each student.
-    Ensures existing users receive the contact card on their very next chat message so they can
-    save 'Ranviar' in 1 tap, replacing the phone number with Ranviar's name on their chat list.
-    """
-    if not sender_phone or users_col is None:
-        return False
-    try:
-        if user_doc is None:
-            user_doc = await users_col.find_one({"user_id": sender_phone})
-
-        # If user has already received the contact card, do not resend
-        if user_doc and user_doc.get("contact_card_sent") is True:
-            return False
-
-        # Mark in DB immediately to prevent concurrent duplicates
-        await users_col.update_one(
-            {"user_id": sender_phone},
-            {"$set": {"contact_card_sent": True}},
-            upsert=True
-        )
-        if user_doc is not None:
-            user_doc["contact_card_sent"] = True
-
-        tip_msg = (
-            "📌 *Tip:* Tap the card below to save *Ranviar* to your contacts so my name appears clearly on your chat list! 🩺⚡"
-        )
-        await send_whatsapp_cloud_msg(sender_phone, tip_msg)
-        await send_whatsapp_contact_card(sender_phone)
-        return True
-    except Exception as e:
-        print(f"⚠️ Failed to deliver contact card to {sender_phone}: {e}")
-        return False
+    """Delivers the Ranviar WhatsApp Contact Card exactly once to each student."""
+    # Permanently disabled to protect the 1,000 free Meta service message tier and guarantee $0 bill
+    return False
 
 
 async def send_whatsapp_typing_indicator(to_number: str):
@@ -2378,6 +2425,8 @@ async def send_whatsapp_template_msg(to_number: str, template_name: str, paramet
         print(f"🛑 [META CHARGE GUARD] Suppressed template '{template_name}' to {to_number} to guarantee $0 Meta bill.")
         return False
     if not to_number or not WHATSAPP_TOKEN:
+        return False
+    if not await can_dispatch_meta_message(to_number):
         return False
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
@@ -2446,6 +2495,7 @@ async def send_whatsapp_template_msg(to_number: str, template_name: str, paramet
             print(f"⚠️ Meta Template Send Failed ({res.status_code}) to {to_number}: {res.text}")
             print(f"📦 Sent Payload was: {json.dumps(payload)}")
         else:
+            await record_meta_outbound_message_delivered()
             print(f"✅ Meta Template Successfully Delivered ({template_name}) to {to_number}")
         return res.status_code == 200
     except Exception as e:
@@ -2464,6 +2514,9 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
     """
     if not image_url or not WHATSAPP_TOKEN:
         print("⚠️ Cannot send image: missing image_url or WHATSAPP_TOKEN")
+        return False
+
+    if not await can_dispatch_meta_message(to_number):
         return False
 
     meta_media_url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/media"
@@ -2521,6 +2574,7 @@ async def send_whatsapp_image_url(to_number: str, image_url: str, caption: str =
                             json=payload
                         )
                         if send_res.status_code == 200:
+                            await record_meta_outbound_message_delivered()
                             print(f"✅ Image successfully delivered to {to_number}")
                             return True
                         else:
@@ -2775,7 +2829,8 @@ async def process_whatsapp_audio(sender_phone: str, media_id: str, is_tagged_rep
     # Meta Cloud API Free-Tier Budget & Daily Limit Guard
     is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
     if not is_allowed:
-        await send_whatsapp_cloud_msg(sender_phone, quota_notice)
+        if quota_notice:
+            await send_whatsapp_cloud_msg(sender_phone, quota_notice)
         return
 
     # Step 1: Download audio bytes from Meta CDN
@@ -2873,7 +2928,8 @@ async def process_whatsapp_image(
     # Meta Cloud API Free-Tier Budget & Daily Limit Guard
     is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
     if not is_allowed:
-        await send_whatsapp_cloud_msg(sender_phone, quota_notice)
+        if quota_notice:
+            await send_whatsapp_cloud_msg(sender_phone, quota_notice)
         return
 
     # 2. Download image bytes
@@ -4101,7 +4157,8 @@ async def process_whatsapp_document(
     # Meta Cloud API Free-Tier Budget & Daily Limit Guard
     is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
     if not is_allowed:
-        await send_whatsapp_cloud_msg(sender_phone, quota_notice)
+        if quota_notice:
+            await send_whatsapp_cloud_msg(sender_phone, quota_notice)
         return
 
     try:
@@ -6196,8 +6253,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         print(f"⏱️ [REQ +{time.perf_counter()-req_t0:.3f}s] User profile loaded: '{name}' ({level}), Streak: {streak}d")
 
         # Deliver 1-tap Ranviar Contact Card to existing users on their next chat message
-        if user_doc and not user_doc.get("contact_card_sent"):
-            await check_and_send_contact_card(sender_phone, user_doc)
+        # Contact card only sent when explicitly requested via /contact
+        pass
 
         # Check if user has an active document upload mid-flight (< 5 minutes old)
         active_upload = user_doc.get("active_upload") if user_doc else None
@@ -6314,7 +6371,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             # Check/open 24h window for command if needed (bypasses 25-query cap)
             is_cmd_allowed, cmd_notice = await check_meta_free_tier_budget(sender_phone, is_command=True)
             if not is_cmd_allowed:
-                await send_whatsapp_cloud_msg(sender_phone, cmd_notice)
+                if cmd_notice:
+                    await send_whatsapp_cloud_msg(sender_phone, cmd_notice)
                 return
             # If user is in an update flow and triggers a non-update command, gracefully clear the update state
             if user_doc and user_doc.get("is_updating") and not any(k in msg_lower for k in ["update", "level", "books", "textbooks", "name"]):
@@ -6787,7 +6845,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         # ── Meta Cloud API Free-Tier Budget & Daily Limit Guard ───────────────
         is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
         if not is_allowed:
-            await send_whatsapp_cloud_msg(sender_phone, quota_notice)
+            if quota_notice:
+                await send_whatsapp_cloud_msg(sender_phone, quota_notice)
             return
 
         msg_clean_for_quiz = user_msg.strip()
@@ -7104,16 +7163,20 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                 print(f"[CACHE HIT ⚡] Returning instant cached explanation for '{clean_topic}'")
                 
                 streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
-                final_answer = cached_answer + in_flight_note + streak_footer
-                await send_whatsapp_cloud_msg(sender_phone, final_answer)
-                
-                # Fetch and deliver HD Video CTA Card
+                video_footer = ""
                 try:
                     video_info = await get_curated_youtube_lecture(clean_topic)
                     if video_info:
-                        await send_whatsapp_video_cta_card(sender_phone, video_info)
+                        v_title = video_info.get("title", "Medical Lecture")
+                        v_channel = video_info.get("channel", "Medical Channel")
+                        v_url = video_info.get("url", "")
+                        v_dur = f" ({video_info['duration']})" if video_info.get("duration") else ""
+                        video_footer = f"\n\n━━━━━━━━━━━━━━━━━━━━━\n🎥 *Recommended Video Lecture:*\n▶️ *{v_channel}* – {v_title}{v_dur}\n🔗 {v_url}"
                 except Exception as vid_err:
-                    print(f"⚠️ Cache video send error: {vid_err}")
+                    print(f"⚠️ Cache video lookup error: {vid_err}")
+
+                final_answer = cached_answer + in_flight_note + streak_footer + video_footer
+                await send_whatsapp_cloud_msg(sender_phone, final_answer)
                 
                 if chat_history_col is not None:
                     await save_turn(sender_phone, user_msg, cached_answer)
@@ -7296,18 +7359,22 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         is_not_covered = ("not covered" in ai_lower or "sorry" in ai_lower[:30] or "not found" in ai_lower)
 
         streak_footer = f"\n\n_🔥 {streak}-Day Study Streak_" if streak > 0 else ""
-        final_answer = ai_answer + in_flight_note + streak_footer
+        video_footer = ""
+        if video_info and should_fetch_video and not is_not_covered:
+            v_title = video_info.get("title", "Medical Lecture")
+            v_channel = video_info.get("channel", "Medical Channel")
+            v_url = video_info.get("url", "")
+            v_dur = f" ({video_info['duration']})" if video_info.get("duration") else ""
+            video_footer = f"\n\n━━━━━━━━━━━━━━━━━━━━━\n🎥 *Recommended Video Lecture:*\n▶️ *{v_channel}* – {v_title}{v_dur}\n🔗 {v_url}"
+
+        final_answer = ai_answer + in_flight_note + streak_footer + video_footer
         t_wa_start = time.perf_counter()
         await send_whatsapp_cloud_msg(sender_phone, final_answer)
         dt_total = time.perf_counter() - req_t0
         print(f"🎉 [PIPELINE COMPLETE | TOTAL: {dt_total:.3f}s] Delivered response to {sender_phone} via WhatsApp Cloud API in {(time.perf_counter()-t_wa_start)*1000:.1f}ms")
 
-        # Deliver High-Definition Video Lecture Card with 1-Tap Play Button ONLY if verified medical topic
-        if video_info and should_fetch_video and not is_not_covered:
-            try:
-                await send_whatsapp_video_cta_card(sender_phone, video_info)
-            except Exception as vid_err:
-                print(f"⚠️ Error sending video CTA card: {vid_err}")
+        # Combined Video Lecture Link inside main text message (saves 50% Meta quota!)
+        pass
 
 
         if chat_history_col is not None:
@@ -7991,7 +8058,15 @@ async def admin_stats(request: Request):
         "active_24h": active_24h,
         "total_wallet_balance_ngn": round(total_wallet, 2),
         "level_distribution": level_dist,
-        "recent_broadcasts": recent_broadcasts
+        "recent_broadcasts": recent_broadcasts,
+        "meta_billing": {
+            "monthly_outbound_delivered": await get_meta_monthly_outbound_count(),
+            "monthly_cap": META_MONTHLY_FREE_MESSAGES_CAP,
+            "daily_outbound_delivered": await get_meta_daily_outbound_count(),
+            "daily_pacing_cap": META_DAILY_GLOBAL_MESSAGES_CAP,
+            "daily_student_limit": DAILY_STUDENT_QUERY_LIMIT,
+            "percent_used": round((await get_meta_monthly_outbound_count() / META_MONTHLY_FREE_MESSAGES_CAP) * 100, 1)
+        }
     }
 
 async def resolve_user_last_active(u: dict, uid: str) -> str:
