@@ -348,9 +348,9 @@ meta_billing_col = db.meta_billing if db is not None else None
 # 3. Daily Per-Student Limit: 2 queries per student per day (supports 15–20 active daily students).
 # 4. Single-Message Architecture: Video lecture links embedded directly in main answer bubble (50% reduction).
 # 5. Hard Block: When monthly count hits 900, Meta Graph API calls are physically BLOCKED. Meta cannot bill $0.01.
-META_MONTHLY_FREE_MESSAGES_CAP = 900
-META_DAILY_GLOBAL_MESSAGES_CAP = 35
-DAILY_STUDENT_QUERY_LIMIT = 2
+META_MONTHLY_FREE_MESSAGES_CAP = int(os.getenv("META_MONTHLY_FREE_MESSAGES_CAP", "900"))
+META_DAILY_GLOBAL_MESSAGES_CAP = int(os.getenv("META_DAILY_GLOBAL_MESSAGES_CAP", "75"))
+DAILY_STUDENT_QUERY_LIMIT = int(os.getenv("DAILY_STUDENT_QUERY_LIMIT", "10"))
 
 async def get_meta_monthly_outbound_count(current_month: str = None) -> int:
     """Retrieves the exact total outbound WhatsApp messages delivered this month from MongoDB."""
@@ -428,7 +428,7 @@ async def can_dispatch_meta_message(to_number: str = "") -> bool:
 async def check_meta_free_tier_budget(sender_phone: str, is_command: bool = False) -> tuple[bool, str]:
     """
     Guarantees $0 charges from Meta by enforcing the 900 free message ceiling,
-    daily pacing limit (35 messages/day globally), and 2-query daily limit per student.
+    daily pacing limit (75 messages/day globally), and 10-query daily limit per student.
     Returns (is_allowed, notice_message).
     """
     wat_now = datetime.utcnow() + timedelta(hours=1)
