@@ -13,6 +13,8 @@ try:
 except ImportError:
     pass
 import gc
+import math
+import calendar
 import re
 import json
 import logging
@@ -344,13 +346,34 @@ meta_billing_col = db.meta_billing if db is not None else None
 # Every delivered message above 1,000 costs $0.0067 USD in Nigeria.
 # To guarantee 100% $0 bill from Meta under all circumstances:
 # 1. Monthly Absolute Hard Cap: 900 messages (leaving a 100-message / 10% emergency safety buffer).
-# 2. Daily Global Pace Budget: 35 messages/day (prevents early-month exhaustion).
-# 3. Daily Per-Student Limit: 2 queries per student per day (supports 15–20 active daily students).
-# 4. Single-Message Architecture: Video lecture links embedded directly in main answer bubble (50% reduction).
-# 5. Hard Block: When monthly count hits 900, Meta Graph API calls are physically BLOCKED. Meta cannot bill $0.01.
+# 2. Smart Daily Rollover Pacing: Divides remaining monthly quota dynamically across remaining days
+#    of the month (starts at 30/day; unused quiet days automatically roll over to busier exam days).
+# 3. Daily Per-Student Limit: 5 queries per student per day (fair access without exhausting pool).
+# 4. Zero Auto Messages: Reminders, welcome vCards, forced upgrade notices & reaction replies stopped.
+# 5. Hard Block: When monthly count hits 900, ALL Meta Graph API calls are physically BLOCKED.
 META_MONTHLY_FREE_MESSAGES_CAP = int(os.getenv("META_MONTHLY_FREE_MESSAGES_CAP", "900"))
-META_DAILY_GLOBAL_MESSAGES_CAP = int(os.getenv("META_DAILY_GLOBAL_MESSAGES_CAP", "75"))
-DAILY_STUDENT_QUERY_LIMIT = int(os.getenv("DAILY_STUDENT_QUERY_LIMIT", "10"))
+META_DAILY_GLOBAL_MESSAGES_CAP = int(os.getenv("META_DAILY_GLOBAL_MESSAGES_CAP", "0"))  # 0 = dynamic rollover division
+DAILY_STUDENT_QUERY_LIMIT = int(os.getenv("DAILY_STUDENT_QUERY_LIMIT", "5"))
+
+def get_effective_daily_global_cap(monthly_count: int, daily_count: int, wat_now: datetime = None) -> int:
+    """
+    Computes today's global daily outbound message ceiling.
+    When META_DAILY_GLOBAL_MESSAGES_CAP <= 0 (default), dynamically divides the remaining
+    900 monthly budget across the remaining days of the month (rollover pacing), so quiet days
+    roll forward into higher capacity on exam days while guaranteeing full-month coverage.
+    """
+    if monthly_count >= META_MONTHLY_FREE_MESSAGES_CAP:
+        return 0
+    if META_DAILY_GLOBAL_MESSAGES_CAP > 0:
+        return META_DAILY_GLOBAL_MESSAGES_CAP
+    if wat_now is None:
+        wat_now = datetime.utcnow() + timedelta(hours=1)
+    days_in_month = calendar.monthrange(wat_now.year, wat_now.month)[1]
+    remaining_days = max(1, (days_in_month - wat_now.day) + 1)
+    remaining_at_start_of_day = max(0, (META_MONTHLY_FREE_MESSAGES_CAP - monthly_count) + daily_count)
+    if remaining_at_start_of_day <= 0:
+        return 0
+    return max(1, math.ceil(remaining_at_start_of_day / remaining_days))
 
 async def get_meta_monthly_outbound_count(current_month: str = None) -> int:
     """Retrieves the exact total outbound WhatsApp messages delivered this month from MongoDB."""
@@ -405,10 +428,10 @@ async def record_meta_outbound_message_delivered():
     except Exception as e:
         print(f"⚠️ Error recording meta outbound message: {e}")
 
-async def can_dispatch_meta_message(to_number: str = "") -> bool:
+async def can_dispatch_meta_message(to_number: str = "", allow_notice_buffer: bool = False) -> bool:
     """
-    Central gatekeeper: Checked before ANY HTTP call to Meta Graph API.
-    Returns False and halts delivery if monthly ceiling (900) or daily pacing ceiling is hit.
+    Central gatekeeper: Checked before EVERY SINGLE HTTP call / chunk sent to Meta Graph API.
+    Unconditionally halts ALL outbound messages at 900/month and enforces dynamic daily rollover cap.
     """
     wat_now = datetime.utcnow() + timedelta(hours=1)
     current_month = wat_now.strftime("%Y-%m")
@@ -419,8 +442,10 @@ async def can_dispatch_meta_message(to_number: str = "") -> bool:
 
     today_str = wat_now.strftime("%Y-%m-%d")
     daily_count = await get_meta_daily_outbound_count(today_str)
-    if daily_count >= META_DAILY_GLOBAL_MESSAGES_CAP:
-        print(f"🛑 [META $0 PACING GUARD] Daily platform limit reached ({daily_count}/{META_DAILY_GLOBAL_MESSAGES_CAP}). Blocked message to {to_number} to preserve free tier.")
+    eff_daily_cap = get_effective_daily_global_cap(monthly_count, daily_count, wat_now)
+    cap_with_buffer = eff_daily_cap + (3 if allow_notice_buffer else 0)
+    if daily_count >= cap_with_buffer:
+        print(f"🛑 [META $0 PACING GUARD] Daily platform limit reached ({daily_count}/{eff_daily_cap}). Blocked message to {to_number} to stretch 900 cap across the full month.")
         return False
 
     return True
@@ -428,54 +453,59 @@ async def can_dispatch_meta_message(to_number: str = "") -> bool:
 async def check_meta_free_tier_budget(sender_phone: str, is_command: bool = False) -> tuple[bool, str]:
     """
     Guarantees $0 charges from Meta by enforcing the 900 free message ceiling,
-    daily pacing limit (75 messages/day globally), and 10-query daily limit per student.
+    dynamic daily rollover pacing across the month, and 5-query daily limit per student.
     Returns (is_allowed, notice_message).
     """
     wat_now = datetime.utcnow() + timedelta(hours=1)
     current_month = wat_now.strftime("%Y-%m")
     today_str = wat_now.strftime("%Y-%m-%d")
 
-    # 1. Global Monthly Hard Stop (900 ceiling)
+    # 1. Global Monthly Hard Stop (900 ceiling — hard blocked at dispatch too, never waste messages)
     monthly_count = await get_meta_monthly_outbound_count(current_month)
     if monthly_count >= META_MONTHLY_FREE_MESSAGES_CAP:
         print(f"🛑 [META QUOTA GUARD] Monthly free message limit reached ({monthly_count}/{META_MONTHLY_FREE_MESSAGES_CAP}).")
-        cap_msg = (
-            "🎓 *Monthly Free Community Quota Reached*\n\n"
-            "Ranviar has reached its free monthly study capacity (1,000 messages) allocated for this month across all medical schools.\n\n"
-            "Access will automatically reset on the *1st of next month*. Thank you for studying with Ranviar! 🧠⚡"
-        )
-        return False, cap_msg
+        return False, ""
 
-    # 2. Daily Global Pacing Budget (35 messages/day)
+    # 2. Smart Daily Global Rollover Pacing Budget
     daily_count = await get_meta_daily_outbound_count(today_str)
-    if daily_count >= META_DAILY_GLOBAL_MESSAGES_CAP:
-        print(f"🛑 [META QUOTA GUARD] Daily platform limit reached ({daily_count}/{META_DAILY_GLOBAL_MESSAGES_CAP}).")
-        pacing_msg = (
-            "⏳ *Daily Platform Study Quota Reached*\n\n"
-            "Ranviar's daily study quota has been reached for today to preserve our 100% free community tier.\n\n"
-            "Daily quota automatically resets at *midnight (WAT)*. Thank you for your patience! 🩺⚡"
-        )
-        return False, pacing_msg
+    eff_daily_cap = get_effective_daily_global_cap(monthly_count, daily_count, wat_now)
+    if daily_count >= eff_daily_cap:
+        print(f"🛑 [META QUOTA GUARD] Daily platform rollover limit reached ({daily_count}/{eff_daily_cap}).")
+        if users_col is not None and daily_count < eff_daily_cap + 3:
+            user_doc = await users_col.find_one({"user_id": sender_phone}, {"last_limit_alert_date": 1})
+            if not user_doc or user_doc.get("last_limit_alert_date") != today_str:
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$set": {"last_limit_alert_date": today_str}},
+                    upsert=True
+                )
+                pacing_msg = (
+                    "⏳ *Daily Platform Study Quota Reached*\n\n"
+                    "Ranviar's daily free study quota has been reached for today so our 100% free tier lasts the whole month.\n\n"
+                    "Daily quota automatically resets at *midnight (WAT)*. Thank you for your patience! 🩺⚡"
+                )
+                return False, pacing_msg
+        return False, ""
 
-    # 3. Daily Per-Student Limit (2 queries per day)
+    # 3. Daily Per-Student Limit (5 queries per day)
     if users_col is not None and not is_command:
         user_doc = await users_col.find_one({"user_id": sender_phone})
         daily_stats = user_doc.get("daily_chat_stats", {}) if user_doc else {}
         today_queries = daily_stats.get(today_str, 0)
         if today_queries >= DAILY_STUDENT_QUERY_LIMIT:
-            # Check if this student was already notified today to prevent spam burning quota
             last_alert_date = user_doc.get("last_limit_alert_date", "") if user_doc else ""
             if last_alert_date == today_str:
                 return False, ""
 
             await users_col.update_one(
                 {"user_id": sender_phone},
-                {"$set": {"last_limit_alert_date": today_str}}
+                {"$set": {"last_limit_alert_date": today_str}},
+                upsert=True
             )
             limit_msg = (
                 f"⏳ *Daily Study Limit Reached ({DAILY_STUDENT_QUERY_LIMIT}/{DAILY_STUDENT_QUERY_LIMIT} queries)*\n\n"
-                f"To keep Ranviar 100% free with zero fees for all 640+ MBBS students without exceeding Meta's free sponsor capacity, daily questions are capped at *{DAILY_STUDENT_QUERY_LIMIT} per student*.\n\n"
-                "Your daily limit resets at midnight (WAT)! You can still review your uploaded notes with */documents* or check your streak with */streak*. 🩺📚"
+                f"To keep Ranviar 100% free with zero fees for all students within Meta's free tier, daily questions are capped at *{DAILY_STUDENT_QUERY_LIMIT} per student*.\n\n"
+                "Your daily limit resets at midnight (WAT)! You can still view your vault with */documents* or your profile with */profile*. 🩺📚"
             )
             return False, limit_msg
 
@@ -665,9 +695,8 @@ async def generate_streak_message(name: str, streak_count: int, recent_topics: l
     )
 
 async def check_and_send_inactivity_reminders(force_ignore_quiet_hours: bool = False, simulated_hour: int = None):
-    """Background worker to send personalized study streak reminders to users inactive for 8-12 hours between 6am and 11pm WAT."""
-    if users_col is None:
-        return
+    """Permanently disabled to stop all automated outbound messages and preserve the 900-message Meta free tier."""
+    return
         
     try:
         now_wat = datetime.utcnow() + timedelta(hours=1)
@@ -749,8 +778,9 @@ async def check_and_send_inactivity_reminders(force_ignore_quiet_hours: bool = F
         print(f"Error in inactivity reminder worker: {e}")
 
 async def start_inactivity_reminder_loop():
-    """Background periodic loop running every 30 minutes."""
-    while True:
+    """Permanently disabled to stop all automated outbound messages."""
+    return
+    while False:
         try:
             await asyncio.sleep(1800) # 30 minutes
             await check_and_send_inactivity_reminders()
@@ -793,7 +823,6 @@ async def register_whatsapp_chat_commands():
         {"command_name": "wallet", "command_description": "Check balance, total spent & queries remaining"},
         {"command_name": "deposit", "command_description": "Top up your study wallet (via Paystack)"},
         {"command_name": "quiz", "command_description": "Start an interactive MBBS clinical quiz"},
-        {"command_name": "reminders", "command_description": "Toggle daily study streak reminders on/off"},
         {"command_name": "deletedoc", "command_description": "Remove a document from your study vault"},
         {"command_name": "feedback", "command_description": "Share anonymous feedback on Ranviar"},
         {"command_name": "reset", "command_description": "Reset profile & chat history to start over"}
@@ -809,40 +838,11 @@ async def register_whatsapp_chat_commands():
     except Exception as e:
         print(f"⚠️ [META CLOUD API] Error syncing chat commands: {e}")
 
-@app.on_event("startup")
 async def upgrade_curriculum_for_all_users():
-    """Resets all existing users so they re-select their level and textbooks from scratch via Style B."""
-    if users_col is None:
-        return
-    try:
-        # Match all students who have completed onboarding but not yet migrated to v3 library
-        # Explicitly exclude brand-new users (no is_onboarded flag) to prevent disrupting fresh onboarding
-        res = await users_col.update_many(
-            {
-                "ranviar_v3_migrated": {"$ne": True},
-                "is_onboarded": True   # Only reset users who previously completed onboarding
-            },
-            {
-                "$set": {
-                    "preferred_books_list": [],
-                    "onboarding_step": "ASK_LEVEL",
-                    "requires_curriculum_setup": True,
-                    "is_onboarded": False,
-                    "has_completed_onboarding": False,
-                    "ranviar_v3_migrated": False,
-                    "ranviar_v2_migrated": False
-                }
-            }
-        )
-        if res.modified_count > 0:
-            print(f"📚 [LIBRARY UPGRADE] Successfully reset {res.modified_count} users to select textbooks from scratch via Style B!")
-    except Exception as e:
-        print(f"⚠️ Error upgrading curriculum for users: {e}")
+    """Disabled: automatic profile resets / forced re-onboarding upgrades stopped to prevent auto-message spam."""
+    return
 
-    # Launch keep-alive self-ping to prevent Render free-tier cold starts
-    asyncio.create_task(_self_ping_keep_alive())
-    print("🏓 [KEEP-ALIVE] Self-ping task started (every 4 minutes)")
-
+@app.on_event("startup")
 async def startup_event():
     # Launch keep-alive self-ping immediately on startup to prevent Render free-tier cold starts
     asyncio.create_task(_self_ping_keep_alive())
@@ -883,7 +883,6 @@ async def startup_event():
 
     # Synchronize native WhatsApp chat commands with Meta Cloud API
     asyncio.create_task(register_whatsapp_chat_commands())
-    asyncio.create_task(upgrade_curriculum_for_all_users())
 
 class LRUTopicCache:
     """High-speed in-memory 24-hour LRU cache for authoritative textbook explanations (~4KB per topic, max 1000 topics = ~4MB RAM)."""
@@ -2000,10 +1999,8 @@ def split_into_whatsapp_chunks(text: str, max_chars: int = 3500) -> list[str]:
 
     return chunks or [text]
 
-async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url: bool = False):
-    """Sends a text response directly to the student via Meta WhatsApp Cloud API. Automatically chunks messages exceeding Meta's 4000 char limit."""
-    if not await can_dispatch_meta_message(to_number):
-        return False
+async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url: bool = False, is_quota_notice: bool = False):
+    """Sends a text response directly to the student via Meta WhatsApp Cloud API. Checks 900-cap gatekeeper per chunk."""
     message_text = format_whatsapp_text(message_text)
     if not message_text:
         return False
@@ -2014,11 +2011,14 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url
         "Content-Type": "application/json"
     }
 
-    # Meta WhatsApp text messages cap at 4096 chars. Safely chunk into <=3500 char messages.
-    chunks = split_into_whatsapp_chunks(message_text, max_chars=3500)
+    # Meta WhatsApp text messages cap at 4096 chars. Use 4000 chars to keep answers in 1 single message whenever possible.
+    chunks = split_into_whatsapp_chunks(message_text, max_chars=4000)
 
     all_success = True
     for chunk in chunks:
+        if not await can_dispatch_meta_message(to_number, allow_notice_buffer=is_quota_notice):
+            all_success = False
+            break
         has_url = bool(preview_url or "http://" in chunk or "https://" in chunk)
         payload = {
             "messaging_product": "whatsapp",
@@ -2307,11 +2307,8 @@ async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_la
 
 
 async def send_whatsapp_contact_card(to_number: str) -> bool:
-    """Sends Ranviar's official vCard contact card so students can save Ranviar in 1 tap.
-    Once saved to contacts, WhatsApp immediately displays 'Ranviar Medical AI' on the student's chat list.
-    """
-    if not to_number or not WHATSAPP_TOKEN:
-        return False
+    """Permanently disabled to stop auto contact card messages and save Meta quota."""
+    return False
     if not await can_dispatch_meta_message(to_number):
         return False
 
@@ -2830,7 +2827,7 @@ async def process_whatsapp_audio(sender_phone: str, media_id: str, is_tagged_rep
     is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
     if not is_allowed:
         if quota_notice:
-            await send_whatsapp_cloud_msg(sender_phone, quota_notice)
+            await send_whatsapp_cloud_msg(sender_phone, quota_notice, is_quota_notice=True)
         return
 
     # Step 1: Download audio bytes from Meta CDN
@@ -2929,7 +2926,7 @@ async def process_whatsapp_image(
     is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
     if not is_allowed:
         if quota_notice:
-            await send_whatsapp_cloud_msg(sender_phone, quota_notice)
+            await send_whatsapp_cloud_msg(sender_phone, quota_notice, is_quota_notice=True)
         return
 
     # 2. Download image bytes
@@ -4158,7 +4155,7 @@ async def process_whatsapp_document(
     is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
     if not is_allowed:
         if quota_notice:
-            await send_whatsapp_cloud_msg(sender_phone, quota_notice)
+            await send_whatsapp_cloud_msg(sender_phone, quota_notice, is_quota_notice=True)
         return
 
     try:
@@ -4905,7 +4902,6 @@ async def send_commands_menu(sender_phone: str):
         {"id": "/wallet", "title": "💳 /wallet", "description": "Check balance, total spent & queries remaining"},
         {"id": "/deposit", "title": "💰 /deposit", "description": "Top up your study wallet (min ₦500)"},
         {"id": "/profile", "title": "👤 /profile", "description": "View study streak, class, balance & textbooks"},
-        {"id": "/reminders on", "title": "🔔 /reminders on", "description": "Toggle daily study streak reminders on/off"},
         {"id": "/update books", "title": "📚 /update books", "description": "Change or add your preferred medical textbooks"},
         {"id": "/update level", "title": "🎓 /update level", "description": "Update your current class/level (e.g. 400L)"},
         {"id": "/documents", "title": "📑 /documents", "description": "View your uploaded lecture slides & handouts"},
@@ -5705,11 +5701,6 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
             "To get started, what is your first name?"
         )
         await send_whatsapp_cloud_msg(sender_phone, welcome_msg)
-        tip_msg = (
-            "📌 *Tip:* Tap the card below to save *Ranviar* to your contacts so my name appears clearly on your chat list! 🩺⚡"
-        )
-        await send_whatsapp_cloud_msg(sender_phone, tip_msg)
-        await send_whatsapp_contact_card(sender_phone)
         return True
         
     step = str(user_doc.get("onboarding_step") or "")
@@ -5724,49 +5715,13 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
         int(user_doc.get("total_queries_count", 0)) > 0
     )
 
-    # ── Name Re-ask (for students whose stored name is corrupted) ────────────
-    # A past bug saved AI answers as student names. When such a student next
-    # messages us, we ask for their name once, then answer their original question.
-    if user_doc.get("name_reask_active"):
-        pending_q = user_doc.get("name_reask_pending_msg") or ""
-        extracted = await extract_name_with_llm(user_msg)
-        if extracted:
-            await users_col.update_one(
-                {"user_id": sender_phone},
-                {"$set": {"name": extracted}, "$unset": {"name_reask_active": "", "name_reask_pending_msg": ""}}
-            )
-            print(f"✅ [NAME RE-ASK] {sender_phone} name recovered: {extracted}")
-            if pending_q:
-                await send_whatsapp_cloud_msg(sender_phone, f"Thanks, *{extracted}*! ✅ Now, back to your question 👇")
-                # Runs after this message releases the user lock
-                asyncio.create_task(process_whatsapp_message(sender_phone, pending_q))
-            else:
-                await send_whatsapp_cloud_msg(sender_phone, f"Thanks, *{extracted}*! ✅ What are we studying today? 🧠")
-            return True
-        # Not a name — stop asking (clears the corrupted name) and handle this message normally
+    # Disabled automatic name re-ask interruptions to eliminate multi-message replies; silently sanitize corrupted names
+    raw_name = user_doc.get("name")
+    if raw_name and raw_name != "Student" and _clean_and_validate_name(str(raw_name)) is None:
         await users_col.update_one(
             {"user_id": sender_phone},
             {"$set": {"name": "Student"}, "$unset": {"name_reask_active": "", "name_reask_pending_msg": ""}}
         )
-        print(f"ℹ️ [NAME RE-ASK] {sender_phone} skipped giving a name; reset to 'Student'")
-        return False
-
-    raw_name = user_doc.get("name")
-    has_corrupted_name = bool(raw_name) and raw_name != "Student" and _clean_and_validate_name(str(raw_name)) is None
-    if (
-        step == "COMPLETED"
-        and has_corrupted_name
-        and not user_msg.strip().startswith("/")
-    ):
-        await users_col.update_one(
-            {"user_id": sender_phone},
-            {"$set": {"name_reask_active": True, "name_reask_pending_msg": user_msg[:2000]}}
-        )
-        await send_whatsapp_cloud_msg(
-            sender_phone,
-            "Quick one before I answer — I don't have your name saved properly. What's your first name? 😊"
-        )
-        return True
 
     if step == "COMPLETED":
         # Block users from reusing old menu selections or level buttons after completing setup
@@ -5831,19 +5786,13 @@ async def handle_onboarding(sender_phone: str, user_msg: str) -> bool:
         
     # 3. Extract Level
     if step == "ASK_LEVEL":
-        # Check if user needs the expanded library setup
         if user_doc.get("requires_curriculum_setup") and user_msg not in ["200L", "300L", "400L", "500L", "600L"]:
-            welcome_upgrade = (
-                f"👋 Hello *{name}*! We've expanded Ranviar's medical library to **37 official textbooks** (including *Guyton*, *Moore Anatomy*, *Katzung*, *Robbins*, *Nelson Pediatrics*, and *Ten Teachers*)! 📚⚡\n\n"
-                "To configure your personalized study library, please select your medical class/level below:"
+            # Silently release users previously flagged by legacy migration instead of looping upgrade prompts
+            await users_col.update_one(
+                {"user_id": sender_phone},
+                {"$set": {"onboarding_step": "COMPLETED", "requires_curriculum_setup": False, "is_updating": False, "ranviar_v3_migrated": True}}
             )
-            await send_whatsapp_interactive_list(
-                sender_phone, 
-                welcome_upgrade,
-                "Select Level",
-                ["200L", "300L", "400L", "500L", "600L"]
-            )
-            return True
+            return False
         if user_msg not in ["200L", "300L", "400L", "500L", "600L"]:
             is_migrated = bool(user_doc and user_doc.get("ranviar_v3_migrated") is True)
             if is_existing_user and is_migrated:
@@ -6303,12 +6252,11 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             )
         )
 
-        if user_doc and not is_migrated and not is_brand_new_user:
-            # If student is already actively answering level or textbook selection, let handle_onboarding handle it!
+        if False and user_doc and not is_migrated and not is_brand_new_user:
             if current_step == "ASK_LEVEL" or current_step.startswith("ASK_BOOK_"):
                 pass
             else:
-                print(f"📣 [V2 UPGRADE INTERCEPT] Intercepting user {sender_phone} to deliver Ranviar upgrade announcement & textbook setup")
+                print(f"📣 [V2 UPGRADE INTERCEPT] Disabled")
                 upgrade_announcement = (
                     "🧠⚡ *Welcome to Ranviar (formerly NEURA AI)!* ⚡🧠\n\n"
                     "We have upgraded our platform with major clinical study features and expanded our medical library to **37 official textbooks**!\n\n"
@@ -6372,7 +6320,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             is_cmd_allowed, cmd_notice = await check_meta_free_tier_budget(sender_phone, is_command=True)
             if not is_cmd_allowed:
                 if cmd_notice:
-                    await send_whatsapp_cloud_msg(sender_phone, cmd_notice)
+                    await send_whatsapp_cloud_msg(sender_phone, cmd_notice, is_quota_notice=True)
                 return
             # If user is in an update flow and triggers a non-update command, gracefully clear the update state
             if user_doc and user_doc.get("is_updating") and not any(k in msg_lower for k in ["update", "level", "books", "textbooks", "name"]):
@@ -6535,44 +6483,21 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                     print(f"👤 [/profile for {sender_phone}] Loaded {len(preferred_books_list)} books from MongoDB: {preferred_books_list}")
                     books_str = "\n  - ".join(BOOK_DISPLAY_NAMES.get(b, b) for b in preferred_books_list) if preferred_books_list else "None selected"
                     profile_card = (
-                        f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Study Streak: 🔥 {streak_count} Days\n• Reminders: {reminders_status}\n• Books:\n  - {books_str}"
+                        f"👤 *Your Profile*\n• Name: {name}\n• Level: {level}\n• Study Streak: 🔥 {streak_count} Days\n• Books:\n  - {books_str}"
                     )
                     profile_buttons = [
                         {"id": "/update books", "title": "📚 Textbooks"},
-                        {"id": "/reminders", "title": "🔔 Reminders"},
-                        {"id": "/wallet", "title": "💳 Wallet"}
+                        {"id": "/documents", "title": "📂 My Vault"},
+                        {"id": "/menu", "title": "📋 Main Menu"}
                     ]
                     await send_whatsapp_interactive_button(sender_phone, profile_card, profile_buttons)
                     return
-                elif msg_lower in ["/reminders on", "/reminder on", "reminders on"]:
-                    await users_col.update_one({"user_id": sender_phone}, {"$set": {"reminders_enabled": True}}, upsert=True)
-                    await send_whatsapp_cloud_msg(
-                        sender_phone,
-                        "🔔 *Study Streak Reminders Enabled!*\n\nRanviar will gently safeguard your streak if you're inactive for 8–12 hours (between 6:00 AM and 11:00 PM WAT)."
-                    )
-                    return
-                elif msg_lower in ["/reminders off", "/reminder off", "reminders off"]:
+                elif msg_lower in ["/reminders on", "/reminder on", "reminders on", "/reminders off", "/reminder off", "reminders off", "/reminders", "/reminder", "reminders", "reminder"]:
                     await users_col.update_one({"user_id": sender_phone}, {"$set": {"reminders_enabled": False}}, upsert=True)
                     await send_whatsapp_cloud_msg(
                         sender_phone,
-                        "🔕 *Study Streak Reminders Paused.*\n\nYou can re-enable them anytime by tapping */reminders on*."
+                        "🔕 *Automated Reminders Disabled*\n\nAutomatic daily nudges are permanently paused to preserve free study messages for all students."
                     )
-                    return
-                elif msg_lower in ["/reminders", "/reminder", "reminders", "reminder"]:
-                    ud = await users_col.find_one({"user_id": sender_phone}) if users_col is not None else None
-                    current_status = ud.get("reminders_enabled", True) if ud else True
-                    status_str = "Enabled 🔔" if current_status else "Disabled 🔕"
-                    rem_body = (
-                        f"⏰ *Study Streak Reminders*\n\n"
-                        f"Current Status: *{status_str}*\n\n"
-                        "Ranviar sends a personalized study nudge if you haven't studied for 8–12 hours to protect your daily streak.\n\n"
-                        "Tap an option below to update:"
-                    )
-                    rem_buttons = [
-                        {"id": "/reminders on", "title": "🔔 Turn ON"},
-                        {"id": "/reminders off", "title": "🔕 Turn OFF"}
-                    ]
-                    await send_whatsapp_interactive_button(sender_phone, rem_body, rem_buttons)
                     return
                 elif msg_lower == "/feedback":
                     feedback_msg = (
@@ -6846,7 +6771,7 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         is_allowed, quota_notice = await check_meta_free_tier_budget(sender_phone, is_command=False)
         if not is_allowed:
             if quota_notice:
-                await send_whatsapp_cloud_msg(sender_phone, quota_notice)
+                await send_whatsapp_cloud_msg(sender_phone, quota_notice, is_quota_notice=True)
             return
 
         msg_clean_for_quiz = user_msg.strip()
@@ -7722,9 +7647,6 @@ async def handle_whatsapp_webhook(request: Request):
                         print(f"🔒 [DEV MODE] Blocked non-tester {sender_phone} — dev service only")
                         continue
 
-                    if msg_id:
-                        asyncio.create_task(mark_message_as_read(msg_id))
-
                     context_obj = msg.get("context", {})
                     is_tagged_reply = bool(context_obj.get("id"))
 
@@ -7740,6 +7662,8 @@ async def handle_whatsapp_webhook(request: Request):
                             text_body = interactive_obj.get("button_reply", {}).get("id") or interactive_obj.get("button_reply", {}).get("title", "")
 
                     if text_body:
+                        if msg_id:
+                            asyncio.create_task(mark_message_as_read(msg_id))
                         print(f"📩 Received msg ({msg_type}) from {sender_phone} (Tagged Reply: {is_tagged_reply}): '{text_body}'")
                         bg_tasks.add_task(process_whatsapp_message, sender_phone, text_body, is_tagged_reply)
                         tasks_count += 1
@@ -7747,20 +7671,19 @@ async def handle_whatsapp_webhook(request: Request):
                         audio_obj = msg.get("audio", {}) or msg.get("voice", {})
                         media_id = audio_obj.get("id")
                         if media_id:
+                            if msg_id:
+                                asyncio.create_task(mark_message_as_read(msg_id))
                             print(f"🎙️ Received Voice Note from {sender_phone} (Media ID: {media_id})")
                             bg_tasks.add_task(process_whatsapp_audio, sender_phone, media_id, is_tagged_reply)
                             tasks_count += 1
                         else:
-                            print(f"⚠️ Voice note from {sender_phone} missing media_id")
-                            bg_tasks.add_task(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read voice note. Please try recording again! 🎙️")
-                            tasks_count += 1
+                            print(f"⚠️ Voice note from {sender_phone} missing media_id (ignored)")
                     elif msg_type == "document":
                         doc_obj = msg.get("document", {})
                         media_id = doc_obj.get("id")
                         raw_filename = (doc_obj.get("filename") or "").strip()
                         mime_type = doc_obj.get("mime_type", "application/pdf")
                         caption = (doc_obj.get("caption") or "").strip()
-                        # Avoid shared static fallback so two untitled uploads by the same student never collide in Qdrant/MongoDB
                         safe_media_tag = media_id if media_id else str(int(time.time()))
                         if not raw_filename:
                             if mime_type == "application/vnd.ms-powerpoint":
@@ -7777,30 +7700,29 @@ async def handle_whatsapp_webhook(request: Request):
                         else:
                             filename = raw_filename
                         if media_id:
+                            if msg_id:
+                                asyncio.create_task(mark_message_as_read(msg_id))
                             print(f"📄 Received Document from {sender_phone} (Filename: {filename}, Media ID: {media_id}, Caption: '{caption}')")
                             bg_tasks.add_task(process_whatsapp_document, sender_phone, media_id, filename, caption, mime_type)
                             tasks_count += 1
                         else:
-                            print(f"⚠️ Document from {sender_phone} missing media_id")
-                            bg_tasks.add_task(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read the uploaded document. Please try uploading again! 📄")
-                            tasks_count += 1
+                            print(f"⚠️ Document from {sender_phone} missing media_id (ignored)")
                     elif msg_type == "image":
                         img_obj = msg.get("image", {})
                         media_id = img_obj.get("id")
                         caption = (img_obj.get("caption") or "").strip()
                         mime_type = img_obj.get("mime_type", "image/jpeg")
                         if media_id:
+                            if msg_id:
+                                asyncio.create_task(mark_message_as_read(msg_id))
                             print(f"🖼️ Received Image from {sender_phone} (Media ID: {media_id}, Caption: '{caption}')")
                             bg_tasks.add_task(process_whatsapp_image, sender_phone, media_id, caption, mime_type, is_tagged_reply)
                             tasks_count += 1
                         else:
-                            print(f"⚠️ Image from {sender_phone} missing media_id")
-                            bg_tasks.add_task(send_whatsapp_cloud_msg, sender_phone, "⚠️ Could not read the image. Please try uploading again! 🖼️")
-                            tasks_count += 1
+                            print(f"⚠️ Image from {sender_phone} missing media_id (ignored)")
                     else:
-                        print(f"⚠️ Received unsupported message type '{msg_type}' from {sender_phone}")
-                        bg_tasks.add_task(send_whatsapp_cloud_msg, sender_phone, "I can read text, voice notes, images/ECGs/slides, and PDF medical documents! Please send your materials. 🤖🎙️📸📚")
-                        tasks_count += 1
+                        # Silently ignore reactions (👍/❤️), stickers, contacts, location, system & unsupported events — ZERO auto-replies
+                        print(f"🔇 [SILENT IGNORE] Event type '{msg_type}' from {sender_phone} — suppressed auto-reply.")
 
         if tasks_count > 0:
             return Response(content=json.dumps({"status": "processing", "tasks": tasks_count}), media_type="application/json", background=bg_tasks)
@@ -7948,6 +7870,9 @@ async def execute_broadcast_task(broadcast_id: str, message: str, target_level: 
         await broadcasts_col.insert_one(log_doc)
         
     for student in students:
+        if not await can_dispatch_meta_message("broadcast"):
+            print("🛑 [BROADCAST GUARD] Aborting remaining broadcast loop because Meta free-tier cap was reached.")
+            break
         phone = student.get("user_id")
         if not phone or len(phone) < 8:
             failed_count += 1
@@ -8063,7 +7988,8 @@ async def admin_stats(request: Request):
             "monthly_outbound_delivered": await get_meta_monthly_outbound_count(),
             "monthly_cap": META_MONTHLY_FREE_MESSAGES_CAP,
             "daily_outbound_delivered": await get_meta_daily_outbound_count(),
-            "daily_pacing_cap": META_DAILY_GLOBAL_MESSAGES_CAP,
+            "daily_pacing_cap": get_effective_daily_global_cap(await get_meta_monthly_outbound_count(), await get_meta_daily_outbound_count()),
+            "rollover_pacing_enabled": META_DAILY_GLOBAL_MESSAGES_CAP <= 0,
             "daily_student_limit": DAILY_STUDENT_QUERY_LIMIT,
             "percent_used": round((await get_meta_monthly_outbound_count() / META_MONTHLY_FREE_MESSAGES_CAP) * 100, 1)
         }

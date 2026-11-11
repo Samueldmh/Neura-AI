@@ -467,12 +467,42 @@ async def ingest(request: dict) -> dict:
     qdrant_cl = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
     mongo_cl  = AsyncIOMotorClient(MONGO_URI) if MONGO_URI else None
     users_col = mongo_cl["neura_db"]["users"] if mongo_cl is not None else None
+    billing_col = mongo_cl["neura_db"]["meta_billing"] if mongo_cl is not None else None
+    MONTHLY_CAP = int(os.environ.get("META_MONTHLY_FREE_MESSAGES_CAP", "900"))
     embedder  = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", threads=2)
     emb_pool  = ThreadPoolExecutor(max_workers=2)
     loop      = asyncio.get_event_loop()
 
+    async def wa_can_send() -> bool:
+        if billing_col is None:
+            return True
+        try:
+            wat_now = datetime.utcnow() + timedelta(hours=1)
+            doc = await billing_col.find_one({"month": wat_now.strftime("%Y-%m")})
+            if doc and int(doc.get("outbound_messages_count", 0)) >= MONTHLY_CAP:
+                print(f"[MODAL META GUARD] Monthly 900 cap reached — suppressed WhatsApp send.")
+                return False
+        except Exception as be:
+            print(f"[MODAL META GUARD error] {be}")
+        return True
+
+    async def wa_record_sent():
+        if billing_col is None:
+            return
+        try:
+            wat_now = datetime.utcnow() + timedelta(hours=1)
+            await billing_col.update_one(
+                {"month": wat_now.strftime("%Y-%m")},
+                {"$inc": {"outbound_messages_count": 1, f"daily_breakdown.{wat_now.strftime('%Y-%m-%d')}": 1}},
+                upsert=True
+            )
+        except Exception as re_err:
+            print(f"[MODAL record error] {re_err}")
+
     # ── WhatsApp: send plain text message ────────────────────────────────────
     async def wa_send(to: str, text: str):
+        if not await wa_can_send():
+            return
         url  = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
         hdrs = {"Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}", "Content-Type": "application/json"}
         body = {"messaging_product": "whatsapp", "recipient_type": "individual", "to": to,
@@ -481,11 +511,15 @@ async def ingest(request: dict) -> dict:
             async with httpx.AsyncClient(timeout=20.0) as c:
                 r = await c.post(url, headers=hdrs, json=body)
                 print(f"[WA text] {r.status_code}")
+                if r.status_code == 200:
+                    await wa_record_sent()
         except Exception as e:
             print(f"[WA text error] {e}")
 
     # ── WhatsApp: send interactive button message (max 3 buttons) ────────────
     async def wa_buttons(to: str, body_text: str, buttons: list):
+        if not await wa_can_send():
+            return
         url  = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
         hdrs = {"Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}", "Content-Type": "application/json"}
         btns = [
@@ -501,7 +535,9 @@ async def ingest(request: dict) -> dict:
             async with httpx.AsyncClient(timeout=20.0) as c:
                 r = await c.post(url, headers=hdrs, json=body)
                 print(f"[WA buttons] {r.status_code}")
-                if r.status_code != 200:
+                if r.status_code == 200:
+                    await wa_record_sent()
+                else:
                     await wa_send(to, body_text)
         except Exception as e:
             print(f"[WA buttons error] {e}")
