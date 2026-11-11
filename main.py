@@ -942,6 +942,7 @@ Rules:
 - Start with a short, human reaction to the question before the explanation (not a template greeting — vary it)
 - Use analogies or clinical framing where it helps understanding
 - Keep it conversational: short paragraphs, plain language, like a sharp senior student explaining it to a junior
+- SINGLE MESSAGE LIMIT: Write concisely (aim for 1,200–2,800 characters, strictly under 3,400 characters) so the entire answer and video link fit inside ONE single WhatsApp message.
 - If the reference material is thin or doesn't fully answer it, say so honestly rather than padding
 - Never use phrases like "based on the context," "according to the provided material," or "the document states." Speak as if you already know this, informed by the textbook.
 - STRICT MEDICAL SCOPE: You are exclusively an MBBS medical study companion. If a student asks about a subject completely outside human medicine, biology, healthcare, or clinical training (e.g. economics, macroeconomics, finance, computer coding, politics, sports, general pop culture), DO NOT attempt to answer it or invent medical analogies for it. Politely and warmly decline, and redirect the student to a clinical condition, pharmacology, anatomy, or pathology topic.
@@ -1999,10 +2000,53 @@ def split_into_whatsapp_chunks(text: str, max_chars: int = 3500) -> list[str]:
 
     return chunks or [text]
 
-async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url: bool = False, is_quota_notice: bool = False):
-    """Sends a text response directly to the student via Meta WhatsApp Cloud API. Checks 900-cap gatekeeper per chunk."""
+def _fit_single_whatsapp_block(text: str, max_chars: int = 4080) -> str:
+    """
+    Guarantees a message NEVER exceeds max_chars (Meta's hard 4,096 ceiling),
+    so every response sends as EXACTLY ONE WhatsApp message block.
+    Preserves streak & recommended video footers intact if body trimming is needed.
+    """
+    if not text or len(text) <= max_chars:
+        return text
+
+    footer = ""
+    body = text
+    # Preserve video lecture / streak footer if present
+    for marker in ["\n\n━━━━━━━━━━━━━━━━━━━━━\n🎥", "\n\n_🔥 "]:
+        idx = text.find(marker)
+        if idx != -1:
+            body = text[:idx].rstrip()
+            footer = text[idx:]
+            break
+
+    if len(footer) >= max_chars - 120:
+        # Fallback simple clean boundary trim if no clean split or footer itself huge
+        body = text
+        footer = ""
+
+    budget = max_chars - len(footer) - 6
+    if budget < 100:
+        return text[:max_chars - 3].rstrip() + "..."
+
+    trimmed = body[:budget]
+    # Snap back to clean paragraph, line, sentence, or word boundary
+    for sep in ["\n\n", "\n", ". ", " "]:
+        cut = trimmed.rfind(sep)
+        if cut > int(budget * 0.55):
+            trimmed = trimmed[:cut + (1 if sep == ". " else 0)]
+            break
+
+    return trimmed.rstrip() + "…" + footer
+
+async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url: bool = False, is_quota_notice: bool = False, allow_notice_buffer: bool = False):
+    """Sends a response strictly as ONE SINGLE WhatsApp message block (<= 4080 chars). Enforces 900-cap gatekeeper."""
     message_text = format_whatsapp_text(message_text)
     if not message_text:
+        return False
+
+    single_block = _fit_single_whatsapp_block(message_text, max_chars=4080)
+    use_buffer = bool(is_quota_notice or allow_notice_buffer)
+    if not await can_dispatch_meta_message(to_number, allow_notice_buffer=use_buffer):
         return False
 
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
@@ -2011,55 +2055,43 @@ async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url
         "Content-Type": "application/json"
     }
 
-    # Meta WhatsApp text messages cap at 4096 chars. Use 4000 chars to keep answers in 1 single message whenever possible.
-    chunks = split_into_whatsapp_chunks(message_text, max_chars=4000)
-
-    all_success = True
-    for chunk in chunks:
-        if not await can_dispatch_meta_message(to_number, allow_notice_buffer=is_quota_notice):
-            all_success = False
-            break
-        has_url = bool(preview_url or "http://" in chunk or "https://" in chunk)
-        payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": to_number,
-            "type": "text",
-            "text": {
-                "preview_url": has_url,
-                "body": chunk
-            }
+    has_url = bool(preview_url or "http://" in single_block or "https://" in single_block)
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": "text",
+        "text": {
+            "preview_url": has_url,
+            "body": single_block
         }
-        status_ok = False
-        res = None
+    }
+    status_ok = False
+    res = None
+    try:
+        res = await shared_http_client.post(url, headers=headers, json=payload)
+        status_ok = (res.status_code == 200)
+    except Exception:
         try:
-            res = await shared_http_client.post(url, headers=headers, json=payload)
-            status_ok = (res.status_code == 200)
+            async with httpx.AsyncClient(timeout=20.0) as fallback_client:
+                res = await fallback_client.post(url, headers=headers, json=payload)
+                status_ok = (res.status_code == 200)
         except Exception:
-            try:
-                async with httpx.AsyncClient(timeout=20.0) as fallback_client:
-                    res = await fallback_client.post(url, headers=headers, json=payload)
-                    status_ok = (res.status_code == 200)
-            except Exception:
-                status_ok = False
-        if status_ok:
-            await record_meta_outbound_message_delivered()
-        else:
-            all_success = False
-        status_code = res.status_code if res is not None else 'ERR'
-        resp_text = getattr(res, 'text', '') if res is not None else ''
-        print(f"Meta Graph API Send Status {status_code}: {resp_text}")
-        
-    if all_success:
+            status_ok = False
+    if status_ok:
+        await record_meta_outbound_message_delivered()
         try:
-            asyncio.create_task(log_user_chat_message(to_number, "assistant", message_text, msg_type="text"))
+            asyncio.create_task(log_user_chat_message(to_number, "assistant", single_block, msg_type="text"))
         except Exception:
             pass
+    status_code = res.status_code if res is not None else 'ERR'
+    resp_text = getattr(res, 'text', '') if res is not None else ''
+    print(f"Meta Graph API Send Status {status_code}: {resp_text}")
 
-    return all_success
+    return status_ok
 
 async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_text: str, options: list):
-    """Sends an Interactive List Message (max 10 options) with fail-safe character limit handling and plain text fallback."""
+    """Sends an Interactive List Message (max 10 options) strictly as 1 SINGLE block (falls back to single text block if > 1020 chars)."""
     if not await can_dispatch_meta_message(to_number):
         return False
     body_text = format_whatsapp_text(body_text)
@@ -2073,12 +2105,18 @@ async def send_whatsapp_interactive_list(to_number: str, body_text: str, button_
     }
 
     # Meta WhatsApp Cloud API limits interactive body text strictly to 1024 characters.
+    # NEVER split into 2 blocks — deliver as 1 formatted single text block instead!
     if len(body_text) > 1020:
-        await send_whatsapp_cloud_msg(to_number, body_text)
-        if not options:
-            return True
-        short_prompt = "👉 *Please choose from the options below:*"
-        return await send_whatsapp_interactive_list(to_number, short_prompt, button_text, options)
+        opt_lines = []
+        for opt in options[:10]:
+            title = opt.get("title", opt.get("id", "")) if isinstance(opt, dict) else str(opt)
+            desc = opt.get("description", "") if isinstance(opt, dict) else ""
+            if desc and title.startswith("Option "):
+                opt_lines.append(f"• *{title}:* {desc}")
+            else:
+                opt_lines.append(f"• *{title}*")
+        single_fallback = f"{body_text}\n\n" + "\n".join(opt_lines) + "\n\n_(Reply with your choice above)_"
+        return await send_whatsapp_cloud_msg(to_number, single_fallback)
 
     rows = []
     for opt in options[:10]: # Max 10 options per list
@@ -2166,16 +2204,12 @@ async def send_whatsapp_interactive_button(to_number: str, body_text: str, butto
         "Content-Type": "application/json"
     }
 
-    # Meta WhatsApp Cloud API limits interactive body text strictly to 1024 characters.
-    # If the message exceeds 1024 characters:
-    # 1. Send the full comprehensive text via standard chunked cloud message first.
-    # 2. Send the buttons with a short prompt (e.g. "👉 Choose an option below:") so buttons are still displayed!
+    # Meta interactive body text caps at 1024 chars — NEVER send 2 messages; deliver cleanly in 1 single text block!
     if len(body_text) > 1020:
-        await send_whatsapp_cloud_msg(to_number, body_text)
         if not buttons:
-            return True
-        short_prompt = "👉 *Quick Actions:*"
-        return await send_whatsapp_interactive_button(to_number, short_prompt, buttons)
+            return await send_whatsapp_cloud_msg(to_number, body_text)
+        btn_lines = " • ".join(f"*{b.get('id', b.get('title', ''))}*" for b in buttons[:3])
+        return await send_whatsapp_cloud_msg(to_number, f"{body_text}\n\n👉 *Commands:* {btn_lines}")
 
     action_buttons = []
     for btn in buttons[:3]:
@@ -2251,9 +2285,7 @@ async def send_whatsapp_cta_url_button(to_number: str, body_text: str, button_la
     }
 
     if len(body_text) > 1020:
-        await send_whatsapp_cloud_msg(to_number, body_text)
-        short_prompt = "👉 *Tap the button below to proceed:*"
-        return await send_whatsapp_cta_url_button(to_number, short_prompt, button_label, url_target)
+        return await send_whatsapp_cloud_msg(to_number, f"{body_text}\n\n👉 *{button_label}:* {url_target}")
 
     payload = {
         "messaging_product": "whatsapp",
@@ -2383,9 +2415,14 @@ async def send_whatsapp_typing_indicator(to_number: str):
     pass
 
 async def mark_message_as_read(message_id: str):
-    """Marks incoming message as read and activates WhatsApp native floating typing indicator bubble (<50ms)"""
+    """Marks incoming message as read and activates WhatsApp native floating typing indicator bubble (<50ms). Skipped if global quota exhausted."""
     if not message_id or not WHATSAPP_TOKEN:
         return
+    try:
+        if not await can_dispatch_meta_message("typing_check", allow_notice_buffer=True):
+            return
+    except Exception:
+        pass
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN.strip()}",
@@ -5961,16 +5998,43 @@ async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list
 
     try:
         json_raw = await call_openrouter_llm(SYSTEM_INTERACTIVE_QUIZ_PROMPT, user_prompt, max_tokens=2200)
-        quiz_questions = extract_json_from_llm(json_raw)
-        
-        if not isinstance(quiz_questions, list) or len(quiz_questions) == 0:
-            raise ValueError(f"LLM did not return a valid list of questions. Raw output: {json_raw[:200]}")
+        raw_questions = extract_json_from_llm(json_raw)
+
+        # Normalize & validate parsed questions so malformed items never crash or misgrade
+        quiz_questions = []
+        if isinstance(raw_questions, list):
+            for item in raw_questions:
+                if not isinstance(item, dict):
+                    continue
+                vig = str(item.get("vignette", "")).strip()
+                oa = str(item.get("option_a", "")).strip()
+                ob = str(item.get("option_b", "")).strip()
+                oc = str(item.get("option_c", "")).strip()
+                od = str(item.get("option_d", "")).strip()
+                if vig and (oa and ob and oc and od):
+                    raw_corr = str(item.get("correct_option", "A")).upper().strip()
+                    corr_m = re.search(r'\b([A-D])\b', raw_corr)
+                    clean_corr = corr_m.group(1) if corr_m else (raw_corr[0] if raw_corr and raw_corr[0] in "ABCD" else "A")
+                    quiz_questions.append({
+                        "vignette": vig,
+                        "option_a": oa,
+                        "option_b": ob,
+                        "option_c": oc,
+                        "option_d": od,
+                        "correct_option": clean_corr,
+                        "explanation": str(item.get("explanation", "")).strip(),
+                        "book_source": str(item.get("book_source", "Textbook")).strip() or "Textbook",
+                    })
+
+        if not quiz_questions:
+            raise ValueError(f"LLM did not return valid MCQ objects. Raw output: {json_raw[:200]}")
 
         quiz_state = {
             "topic": topic,
             "questions": quiz_questions,
             "current_idx": 0,
-            "score": 0
+            "score": 0,
+            "started_at": time.time(),
         }
         if users_col is not None:
             await users_col.update_one(
@@ -5982,19 +6046,58 @@ async def start_interactive_quiz(sender_phone: str, topic: str, search_res: list
 
     except Exception as e:
         print(f"❌ Error starting interactive quiz: {e}")
-        await send_whatsapp_cloud_msg(sender_phone, "Sorry, I had trouble creating the interactive practice questions. Please tap *📝 Practice MCQs* again!")
+        await send_whatsapp_cloud_msg(sender_phone, "Sorry, I had trouble creating the practice questions. Type */quiz* or */quiz [topic]* to try again!")
 
-async def send_quiz_question(sender_phone: str, quiz_state: dict):
-    """Sends the current question with a WhatsApp Interactive List dropdown for options A, B, C, D"""
+def _build_quiz_body_and_options(q: dict, q_num: int, total: int, prefix_note: str = "") -> tuple[str, list]:
+    """Builds a single-block quiz prompt (with optional feedback prefix) and interactive option list."""
+    vignette = str(q.get("vignette", "")).strip()
+    opt_a = str(q.get("option_a", "")).strip()
+    opt_b = str(q.get("option_b", "")).strip()
+    opt_c = str(q.get("option_c", "")).strip()
+    opt_d = str(q.get("option_d", "")).strip()
+
+    q_block = (
+        f"🏥 *Q{q_num}/{total}*\n"
+        f"{vignette}\n\n"
+        f"A) {opt_a}\n"
+        f"B) {opt_b}\n"
+        f"C) {opt_c}\n"
+        f"D) {opt_d}"
+    )
+
+    body = f"{prefix_note}\n\n━━━━━━━━━━━━━━━━━━━━━\n{q_block}" if prefix_note else q_block
+
+    # If combined feedback + next question exceeds Meta's 1020-char interactive body ceiling,
+    # smart-trim ONLY the prefix rationale so the entire feedback + next question stays in 1 Interactive List block!
+    if prefix_note and len(body) > 1000:
+        avail = 1000 - len(q_block) - len("\n\n━━━━━━━━━━━━━━━━━━━━━\n")
+        if avail >= 90:
+            trimmed_prefix = prefix_note[:avail - 1].rstrip() + "…"
+            body = f"{trimmed_prefix}\n\n━━━━━━━━━━━━━━━━━━━━━\n{q_block}"
+        else:
+            # Even prefix alone didn't leave space; interactive wrapper will cleanly render as 1 plain-text block
+            pass
+
+    options_list = [
+        {"id": f"Q{q_num}_A", "title": "Option A", "description": opt_a[:72]},
+        {"id": f"Q{q_num}_B", "title": "Option B", "description": opt_b[:72]},
+        {"id": f"Q{q_num}_C", "title": "Option C", "description": opt_c[:72]},
+        {"id": f"Q{q_num}_D", "title": "Option D", "description": opt_d[:72]},
+        {"id": "EXIT_QUIZ", "title": "🛑 Exit Quiz", "description": "Stop quiz & return to normal chat"},
+    ]
+    return body, options_list
+
+async def send_quiz_question(sender_phone: str, quiz_state: dict, prefix_note: str = ""):
+    """Sends the current question (or final score) strictly as 1 SINGLE WhatsApp block."""
     questions = quiz_state.get("questions", [])
     idx = quiz_state.get("current_idx", 0)
     total = len(questions)
-    
+
     if idx >= total:
         score = quiz_state.get("score", 0)
         topic = quiz_state.get("topic", "Medical Quiz")
         percentage = int((score / total) * 100) if total > 0 else 0
-        
+
         result_msg = (
             f"🎉 *QUIZ COMPLETE!*\n\n"
             f"📌 *Topic:* {topic}\n"
@@ -6003,157 +6106,172 @@ async def send_quiz_question(sender_phone: str, quiz_state: dict):
         if percentage >= 80:
             result_msg += "🌟 Outstanding performance! You have mastered this concept."
         elif percentage >= 60:
-            result_msg += "👍 Good effort! Review the citations to sharpen your knowledge."
+            result_msg += "👍 Good effort! Review any missed concepts to sharpen your score."
         else:
-            result_msg += "📖 Keep practicing! Ask Ranviar to explain the topic again to strengthen your core concepts."
+            result_msg += "📖 Keep practicing! Ask Ranviar to break down any tough concept again."
 
-        result_msg += "\n\n💬 _Help us improve Ranviar! Share quick anonymous feedback: https://forms.gle/dNr7SV5EUiqiFySx5_"
-
-        await send_whatsapp_cloud_msg(sender_phone, result_msg)
-        await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
+        combined_final = f"{prefix_note}\n\n━━━━━━━━━━━━━━━━━━━━━\n{result_msg}" if prefix_note else result_msg
+        await send_whatsapp_cloud_msg(sender_phone, combined_final)
+        if users_col is not None:
+            await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
         return
 
     q = questions[idx]
     q_num = idx + 1
-    vignette = q.get("vignette", "")
+    body, options_list = _build_quiz_body_and_options(q, q_num, total, prefix_note=prefix_note)
 
-    question_text = (
-        f"🏥 *Ranviar MBBS Exam Quiz* (Q{q_num}/{total})\n\n"
-        f"{vignette}\n\n"
-        f"A) {q.get('option_a')}\n"
-        f"B) {q.get('option_b')}\n"
-        f"C) {q.get('option_c')}\n"
-        f"D) {q.get('option_d')}"
-    )
-
-    options_list = [
-        {
-            "id": f"Q{q_num}_A",
-            "title": "Option A",
-            "description": q.get('option_a', '')[:72]
-        },
-        {
-            "id": f"Q{q_num}_B",
-            "title": "Option B",
-            "description": q.get('option_b', '')[:72]
-        },
-        {
-            "id": f"Q{q_num}_C",
-            "title": "Option C",
-            "description": q.get('option_c', '')[:72]
-        },
-        {
-            "id": f"Q{q_num}_D",
-            "title": "Option D",
-            "description": q.get('option_d', '')[:72]
-        },
-        {
-            "id": "EXIT_QUIZ",
-            "title": "🛑 Exit Quiz",
-            "description": "Stop this practice quiz and return to normal chat"
-        }
-    ]
-
-    await send_whatsapp_interactive_list(
-        sender_phone,
-        question_text,
-        "Select Option",
-        options_list
-    )
+    # Single-block Interactive List (or automatic 1-block plain-text fallback if >1020 chars)
+    if len(body) > 1020:
+        plain_body = f"{body}\n\n👉 *Reply with A, B, C, or D* (or *EXIT* to stop)"
+        await send_whatsapp_cloud_msg(sender_phone, plain_body)
+    else:
+        await send_whatsapp_interactive_list(sender_phone, body, "Select Option", options_list)
 
 async def handle_quiz_answer(sender_phone: str, selected_option: str, user_doc: dict):
-    """Processes the student's selected option (A, B, C, or D), provides textbook rationale, and advances to next question"""
+    """Processes a quiz answer atomically, handles all edge cases (double-taps, stale quizzes, quota exhaustion), and replies in 1 SINGLE block."""
     opt_upper = selected_option.strip().upper()
     active_quiz = user_doc.get("active_quiz") if user_doc else None
+    q_match = re.search(r'Q(\d+)_([A-D])', opt_upper)
 
-    # Handle explicit quiz exit
-    if opt_upper in ["EXIT_QUIZ", "EXIT", "STOP", "QUIT", "CANCEL", "/EXIT", "STOP QUIZ", "EXIT QUIZ", "END QUIZ"]:
+    # 1. Explicit exit
+    if active_quiz and opt_upper in ["EXIT_QUIZ", "EXIT", "STOP", "QUIT", "CANCEL", "/EXIT", "STOP QUIZ", "EXIT QUIZ", "END QUIZ"]:
         if users_col is not None:
             await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
         await send_whatsapp_cloud_msg(
             sender_phone,
-            "🛑 *Practice Quiz Ended.*\n\nFeel free to ask any medical question or explore another topic whenever you're ready! 🧠⚡"
+            "🛑 *Practice Quiz Ended.*\n\nAsk any medical question or type */quiz* anytime! 🧠⚡"
         )
         return True
 
-    q_match = re.search(r'Q(\d+)_([A-D])', opt_upper)
-
-    # If student taps an MCQ option dropdown after the quiz is finished/cleared
+    # 2. Tapping an old Q#_X interactive button after quiz already ended/cleared
     if not active_quiz:
         if q_match:
-            await send_whatsapp_cloud_msg(
-                sender_phone,
-                "⚠️ This quiz session has already ended! To start a new practice quiz, tap '📝 Practice MCQs' under any medical answer!"
-            )
+            if await can_dispatch_meta_message(sender_phone):
+                await send_whatsapp_cloud_msg(
+                    sender_phone,
+                    "⚠️ That quiz session has ended! Type */quiz* or */quiz [topic]* to start a new one."
+                )
             return True
         return False
 
-    # Check if the input is a valid MCQ choice (Q#_A or raw A, B, C, D, 1, 2, 3, 4, Option A)
-    # If the user typed a new question (e.g. "What causes acute pancreatitis?"), AUTO-EXIT the quiz cleanly
-    valid_raw_choices = {"A": "A", "B": "B", "C": "C", "D": "D", "OPTION A": "A", "OPTION B": "B", "OPTION C": "C", "OPTION D": "D", "1": "A", "2": "B", "3": "C", "4": "D"}
-    
+    # 3. Auto-expire forgotten quizzes older than 6 hours if student just sent plain text (e.g. "1" or "A")
+    started_at = float(active_quiz.get("started_at") or 0)
+    if not q_match and started_at > 0 and (time.time() - started_at) > 21600:
+        if users_col is not None:
+            await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
+        print(f"⏱️ [QUIZ EXPIRED] Stale quiz (>6h) cleared silently for {sender_phone}")
+        return False
+
+    valid_raw_choices = {
+        "A": "A", "B": "B", "C": "C", "D": "D",
+        "OPTION A": "A", "OPTION B": "B", "OPTION C": "C", "OPTION D": "D",
+        "1": "A", "2": "B", "3": "C", "4": "D",
+    }
+
+    questions = active_quiz.get("questions", [])
+    idx = int(active_quiz.get("current_idx", 0))
+    score = int(active_quiz.get("score", 0))
+    total = len(questions)
+
     choice = None
     if q_match:
         tapped_q_num = int(q_match.group(1))
         choice = q_match.group(2)
-        current_q_num = active_quiz.get("current_idx", 0) + 1
-        
+        current_q_num = idx + 1
+
+        if idx >= total:
+            if users_col is not None:
+                await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
+            if await can_dispatch_meta_message(sender_phone):
+                await send_whatsapp_cloud_msg(
+                    sender_phone,
+                    "⚠️ That quiz session has ended! Type */quiz* or */quiz [topic]* to start a new one."
+                )
+            return True
+
+        # Re-tapped an earlier question (e.g. Q1 when on Q3) -> resend current question in 1 block without grading or skipping!
         if tapped_q_num != current_q_num:
-            await send_whatsapp_cloud_msg(
-                sender_phone,
-                f"⚠️ You have already answered Question {tapped_q_num}! Please select your answer for Question {current_q_num} below."
-            )
+            if await can_dispatch_meta_message(sender_phone):
+                await send_quiz_question(
+                    sender_phone,
+                    active_quiz,
+                    prefix_note=f"⚠️ You already answered Q{tapped_q_num}. Here is your current question:"
+                )
             return True
     elif opt_upper in valid_raw_choices:
         choice = valid_raw_choices[opt_upper]
     else:
-        # Non-option message: Student is moving on or asking a new question -> auto-exit quiz and let message process normally!
+        # Non-option message (e.g. new question or voice note) -> exit quiz silently & answer their question normally
         if users_col is not None:
             await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
-        print(f"ℹ️ User {sender_phone} sent non-MCQ input during quiz: '{selected_option}'. Auto-exiting quiz session.")
+        print(f"ℹ️ User {sender_phone} sent non-MCQ input during quiz: '{selected_option[:40]}'. Auto-exiting quiz session.")
         return False
 
-    questions = active_quiz.get("questions", [])
-    idx = active_quiz.get("current_idx", 0)
-    score = active_quiz.get("score", 0)
-
-    if idx >= len(questions):
-        if q_match:
-            await send_whatsapp_cloud_msg(
-                sender_phone,
-                "⚠️ This quiz session has already ended! To start a new practice quiz, tap '📝 Practice MCQs' under any medical answer!"
-            )
-            return True
+    if idx >= total:
+        if users_col is not None:
+            await users_col.update_one({"user_id": sender_phone}, {"$unset": {"active_quiz": ""}})
         return False
+
+    # 4. Global Quota Pre-Check BEFORE advancing DB state so student never loses their quiz place if global cap is hit mid-quiz!
+    if not await can_dispatch_meta_message(sender_phone):
+        wat_now = datetime.utcnow() + timedelta(hours=1)
+        today_str = wat_now.strftime("%Y-%m-%d")
+        monthly_count = await get_meta_monthly_outbound_count(wat_now.strftime("%Y-%m"))
+        if monthly_count < META_MONTHLY_FREE_MESSAGES_CAP and users_col is not None:
+            # Daily rollover cap reached mid-quiz -> notify once without advancing current_idx
+            if user_doc.get("last_limit_alert_date") != today_str:
+                await users_col.update_one(
+                    {"user_id": sender_phone},
+                    {"$set": {"last_limit_alert_date": today_str}}
+                )
+                await send_whatsapp_cloud_msg(
+                    sender_phone,
+                    f"⏳ *Daily Study Quota Reached*\n\nYour quiz is safely saved at *Q{idx + 1}/{total}*! Daily quota resets at midnight (WAT), or type */quiz* tomorrow.",
+                    is_quota_notice=True
+                )
+        return True
 
     q = questions[idx]
-    correct = q.get("correct_option", "A").upper().strip()
-    explanation = q.get("explanation", "")
-    book_source = q.get("book_source", "Textbook")
+    raw_corr = str(q.get("correct_option", "A")).upper().strip()
+    corr_m = re.search(r'\b([A-D])\b', raw_corr)
+    correct = corr_m.group(1) if corr_m else (raw_corr[0] if raw_corr and raw_corr[0] in "ABCD" else "A")
+    explanation = str(q.get("explanation", "")).strip()
+    book_source = str(q.get("book_source", "Textbook")).strip() or "Textbook"
 
     is_correct = (choice == correct)
+    new_score = score + 1 if is_correct else score
+
+    # 5. Atomic Compare-and-Set update prevents double-tap race condition from grading Q# twice
+    next_quiz = dict(active_quiz)
+    next_quiz["current_idx"] = idx + 1
+    next_quiz["score"] = new_score
+
+    if users_col is not None:
+        race_check = await users_col.find_one_and_update(
+            {"user_id": sender_phone, "active_quiz.current_idx": idx},
+            {"$set": {"active_quiz.current_idx": idx + 1, "active_quiz.score": new_score}}
+        )
+        if race_check is None:
+            print(f"🔁 [QUIZ DOUBLE-TAP IGNORED] {sender_phone} already advanced past idx={idx}")
+            return True
+
     if is_correct:
-        score += 1
         feedback_header = f"✅ *CORRECT!* (Option {correct})"
     else:
-        feedback_header = f"❌ *INCORRECT!* (Your Choice: {choice} | Correct Answer: Option {correct})"
+        feedback_header = f"❌ *INCORRECT!* (Your choice: {choice} | Correct: *{correct}*)"
 
-    feedback_msg = (
-        f"{feedback_header}\n\n"
-        f"📖 *Textbook Rationale ({book_source}):*\n{explanation}"
-    )
+    # Build concise feedback prefix to merge with next question / final score inside ONE single block!
+    concise_rationale = explanation
+    if idx + 1 < total and len(concise_rationale) > 260:
+        cut_rat = concise_rationale[:258]
+        dot_pos = cut_rat.rfind(". ")
+        if dot_pos > 120:
+            concise_rationale = cut_rat[:dot_pos + 1]
+        else:
+            concise_rationale = cut_rat.rstrip() + "…"
 
-    await send_whatsapp_cloud_msg(sender_phone, feedback_msg)
-
-    active_quiz["current_idx"] = idx + 1
-    active_quiz["score"] = score
-
-    await users_col.update_one(
-        {"user_id": sender_phone},
-        {"$set": {"active_quiz": active_quiz}}
-    )
-
-    await send_quiz_question(sender_phone, active_quiz)
+    feedback_prefix = f"{feedback_header}\n📖 _{concise_rationale}_" if concise_rationale else feedback_header
+    await send_quiz_question(sender_phone, next_quiz, prefix_note=feedback_prefix)
     return True
 
 # User-level sequential lock to prevent race conditions on simultaneous messages from the same user (defined above at line 127)
@@ -6756,8 +6874,9 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
                         await complete_onboarding(sender_phone)
                     return
 
-        # Handle active interactive quiz answer if student is answering an MCQ
-        if user_doc and "active_quiz" in user_doc:
+        # Handle active interactive quiz answer OR stale Q#_X list tap from an ended quiz
+        is_quiz_option_tap = bool(re.search(r'^Q\d+_[A-D]$', user_msg.strip().upper()))
+        if (user_doc and "active_quiz" in user_doc) or is_quiz_option_tap:
             handled = await handle_quiz_answer(sender_phone, user_msg, user_doc)
             if handled:
                 return
@@ -6779,9 +6898,11 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
         
         is_quiz_trigger = (
             msg_clean_for_quiz.startswith("GENERATE_QUIZ") or
+            msg_lower_quiz == "/quiz" or
+            msg_lower_quiz.startswith("/quiz ") or
             msg_lower_quiz in [
                 "📝 practice mcqs", "practice mcqs", "practice mcq", "start quiz", "test me", 
-                "quiz on this", "quiz me on this", "quiz me", "mcqs", "practice questions", "generate mcqs"
+                "quiz on this", "quiz me on this", "quiz me", "mcqs", "practice questions", "generate mcqs", "quiz"
             ]
         )
 
@@ -6789,6 +6910,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
             quiz_topic = ""
             if msg_clean_for_quiz.startswith("GENERATE_QUIZ:"):
                 quiz_topic = msg_clean_for_quiz.replace("GENERATE_QUIZ:", "").strip()
+            elif msg_lower_quiz.startswith("/quiz "):
+                quiz_topic = msg_clean_for_quiz[6:].strip()
             
             # If quiz_topic is missing, vague, or a button label, retrieve from user_doc["last_medical_topic"]
             if (not quiz_topic or 
