@@ -117,6 +117,15 @@ DEV_TESTER_PHONES: set = {
     if p.strip()
 }
 
+# ── Master Offline / Shutdown Switch ──────────────────────────────────────────
+# Set to True to bring Ranviar down completely.
+# When True:
+# - Incoming WhatsApp webhooks are dropped immediately with HTTP 200 (zero background tasks, zero outbound messages)
+# - Outbound message dispatchers strictly block all sends to Meta Graph API
+# - Keep-alive self-ping and commands sync are disabled so Render dyno naturally idles
+# - Root / and /health report status: "offline"
+RANVIAR_OFFLINE = os.getenv("RANVIAR_OFFLINE", "true").strip().lower() in ("true", "1", "yes")
+
 def is_dev_tester(phone: str) -> bool:
     """Returns True if this phone number is an authorised dev tester."""
     clean = phone.strip().lstrip("+").replace(" ", "")
@@ -431,8 +440,11 @@ async def record_meta_outbound_message_delivered():
 async def can_dispatch_meta_message(to_number: str = "", allow_notice_buffer: bool = False) -> bool:
     """
     Central gatekeeper: Checked before EVERY SINGLE HTTP call / chunk sent to Meta Graph API.
-    Unconditionally halts ALL outbound messages at 900/month and enforces dynamic daily rollover cap.
+    Unconditionally halts ALL outbound messages when RANVIAR_OFFLINE is True, at 900/month, and enforces dynamic daily rollover cap.
     """
+    if RANVIAR_OFFLINE:
+        print(f"🛑 [OFFLINE] Ranviar is brought down. Outbound message to {to_number} blocked.")
+        return False
     wat_now = datetime.utcnow() + timedelta(hours=1)
     current_month = wat_now.strftime("%Y-%m")
     monthly_count = await get_meta_monthly_outbound_count(current_month)
@@ -845,8 +857,11 @@ async def upgrade_curriculum_for_all_users():
 @app.on_event("startup")
 async def startup_event():
     # Launch keep-alive self-ping immediately on startup to prevent Render free-tier cold starts
-    asyncio.create_task(_self_ping_keep_alive())
-    print('🏓 [KEEP-ALIVE] Self-ping task started (every 3 minutes)')
+    if not RANVIAR_OFFLINE:
+        asyncio.create_task(_self_ping_keep_alive())
+        print('🏓 [KEEP-ALIVE] Self-ping task started (every 3 minutes)')
+    else:
+        print('🛑 [OFFLINE] Ranviar is offline. Keep-alive self-ping suppressed.')
     try:
         await qdrant.create_payload_index(
             collection_name=COLLECTION_NAME,
@@ -882,7 +897,10 @@ async def startup_event():
     # asyncio.create_task(start_inactivity_reminder_loop())
 
     # Synchronize native WhatsApp chat commands with Meta Cloud API
-    asyncio.create_task(register_whatsapp_chat_commands())
+    if not RANVIAR_OFFLINE:
+        asyncio.create_task(register_whatsapp_chat_commands())
+    else:
+        print('🛑 [OFFLINE] Ranviar is offline. WhatsApp command sync suppressed.')
 
 class LRUTopicCache:
     """High-speed in-memory 24-hour LRU cache for authoritative textbook explanations (~4KB per topic, max 1000 topics = ~4MB RAM)."""
@@ -2040,6 +2058,9 @@ def _fit_single_whatsapp_block(text: str, max_chars: int = 4080) -> str:
 
 async def send_whatsapp_cloud_msg(to_number: str, message_text: str, preview_url: bool = False, is_quota_notice: bool = False, allow_notice_buffer: bool = False):
     """Sends a response strictly as ONE SINGLE WhatsApp message block (<= 4080 chars). Enforces 900-cap gatekeeper."""
+    if RANVIAR_OFFLINE:
+        print(f"🛑 [OFFLINE] Outbound message suppressed to {to_number}")
+        return False
     message_text = format_whatsapp_text(message_text)
     if not message_text:
         return False
@@ -4701,6 +4722,9 @@ async def get_curated_youtube_lecture(query: str) -> dict | None:
 
 async def send_whatsapp_video_cta_card(to_number: str, video_info: dict):
     """Sends a high-resolution video thumbnail card with a 1-tap interactive CTA button that opens YouTube"""
+    if RANVIAR_OFFLINE:
+        print(f"🛑 [OFFLINE] Outbound video card suppressed to {to_number}")
+        return
     if not video_info or not video_info.get("url") or not WHATSAPP_TOKEN:
         return
     
@@ -7496,7 +7520,8 @@ async def _process_whatsapp_message_internal(sender_phone: str, user_msg: str, i
 @app.head("/")
 def root():
     return {
-        "status": "online",
+        "status": "offline" if RANVIAR_OFFLINE else "online",
+        "offline": RANVIAR_OFFLINE,
         "system": "Ranviar Official WhatsApp Cloud API Backend v2.0",
         "phone_number_id": PHONE_NUMBER_ID,
         "openrouter_configured": bool(OPENROUTER_API_KEY),
@@ -7509,7 +7534,8 @@ async def health_check():
     """Health check endpoint — used by UptimeRobot and the self-ping keep-alive task."""
     mongo_ok = users_col is not None
     return {
-        "status": "healthy",
+        "status": "offline" if RANVIAR_OFFLINE else "healthy",
+        "offline": RANVIAR_OFFLINE,
         "mongo": "connected" if mongo_ok else "disconnected",
         "dedup_cache_size": len(_PROCESSED_MSG_IDS),
         "ts": int(time.time())
@@ -7521,6 +7547,9 @@ async def _self_ping_keep_alive():
     Keeps Render's free-tier dyno from sleeping between messages,
     which would cause a 45–60 second cold-start delay on the next webhook.
     """
+    if RANVIAR_OFFLINE:
+        print("🛑 [OFFLINE] Self-ping keep-alive cancelled: Ranviar is offline.")
+        return
     await asyncio.sleep(15)  # wait for server to fully start first
     consecutive_failures = 0
     while True:
@@ -7722,6 +7751,9 @@ async def verify_webhook(request: Request):
 @app.post("/webhook")
 async def handle_whatsapp_webhook(request: Request):
     """Incoming WhatsApp Message Webhook Endpoint from Meta with HMAC verification & multi-message batching."""
+    if RANVIAR_OFFLINE:
+        print("🛑 [OFFLINE] Ranviar is offline. Incoming webhook dropped with HTTP 200 acknowledgment (zero outbound messages).")
+        return Response(content=json.dumps({"status": "offline", "message": "Ranviar is offline"}), media_type="application/json", status_code=200)
     try:
         raw_body = await request.body()
 
