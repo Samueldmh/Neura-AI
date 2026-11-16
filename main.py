@@ -124,7 +124,7 @@ DEV_TESTER_PHONES: set = {
 # - Outbound message dispatchers strictly block all sends to Meta Graph API
 # - Keep-alive self-ping and commands sync are disabled so Render dyno naturally idles
 # - Root / and /health report status: "offline"
-RANVIAR_OFFLINE = os.getenv("RANVIAR_OFFLINE", "true").strip().lower() in ("true", "1", "yes")
+RANVIAR_OFFLINE = os.getenv("RANVIAR_OFFLINE", "false").strip().lower() in ("true", "1", "yes")
 
 def is_dev_tester(phone: str) -> bool:
     """Returns True if this phone number is an authorised dev tester."""
