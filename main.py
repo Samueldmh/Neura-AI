@@ -99,6 +99,7 @@ MODAL_ENDPOINT = os.getenv("MODAL_ENDPOINT", "")
 # Official Meta WhatsApp Cloud API credentials
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAM3F01f3nYBSKwpMPZAU2Nhgdvr7b4481UQ2sCTosr3Hu6UIL3U5BTBiN8I5932PfnEx6GzDWiUfwMYiFok4eZCaMrLPNhhMvnAQ27fVsxxqpxIvES3SYhSi6speeab3FaBq8anZCoPVXS2f9LXA7b7ZA2kWrZBRA8zmBv03cBe2yTR3OWAAhgEh0lEk3ULqfAZDZD")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "1150180661520951")
+WABA_ID = os.getenv("WABA_ID", "1026463386768058")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "neura_ai_webhook_secret_2026")
 META_APP_SECRET = os.getenv("META_APP_SECRET", os.getenv("APP_SECRET", ""))
 
@@ -384,8 +385,72 @@ def get_effective_daily_global_cap(monthly_count: int, daily_count: int, wat_now
         return 0
     return max(1, math.ceil(remaining_at_start_of_day / remaining_days))
 
+_LAST_META_SYNC_TS = 0
+_CACHED_META_MONTHLY_COUNT = 0
+_CACHED_META_DAILY_COUNT = 0
+
+async def sync_authoritative_meta_outbound_count(force: bool = False) -> tuple[int, int]:
+    """
+    Directly queries Meta Graph API v21.0 analytics endpoint for the authoritative number of delivered
+    messages recorded by Meta's billing engine for the current calendar month and today.
+    Updates MongoDB meta_billing collection so local tracking is permanently 100% synchronized with Meta.
+    Caches for 5 minutes (300s) to keep latency minimal.
+    """
+    global _LAST_META_SYNC_TS, _CACHED_META_MONTHLY_COUNT, _CACHED_META_DAILY_COUNT
+    now = time.time()
+    if not force and (now - _LAST_META_SYNC_TS < 300) and _CACHED_META_MONTHLY_COUNT > 0:
+        return _CACHED_META_MONTHLY_COUNT, _CACHED_META_DAILY_COUNT
+
+    try:
+        dt_now = datetime.now(timezone.utc)
+        current_month = dt_now.strftime("%Y-%m")
+        wat_now = dt_now + timedelta(hours=1)
+        today_str = wat_now.strftime("%Y-%m-%d")
+
+        start_of_month = datetime(dt_now.year, dt_now.month, 1, 0, 0, 0, tzinfo=timezone.utc)
+        start_ts = int(start_of_month.timestamp())
+        end_ts = int(dt_now.timestamp())
+
+        url = f"https://graph.facebook.com/v21.0/{WABA_ID}?fields=analytics.start({start_ts}).end({end_ts}).granularity(DAY)&access_token={WHATSAPP_TOKEN.strip()}"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                points = data.get("analytics", {}).get("data_points", [])
+                meta_monthly_delivered = sum(p.get("delivered", 0) for p in points)
+
+                today_delivered = 0
+                for p in points:
+                    p_start = datetime.fromtimestamp(p["start"], timezone.utc) + timedelta(hours=1)
+                    if p_start.strftime("%Y-%m-%d") == today_str:
+                        today_delivered = p.get("delivered", 0)
+
+                _CACHED_META_MONTHLY_COUNT = meta_monthly_delivered
+                _CACHED_META_DAILY_COUNT = today_delivered
+                _LAST_META_SYNC_TS = now
+
+                # Persist to MongoDB so all dynos share the authoritative Meta count
+                if meta_billing_col is not None:
+                    await meta_billing_col.update_one(
+                        {"month": current_month},
+                        {
+                            "$max": {"outbound_messages_count": meta_monthly_delivered},
+                            "$set": {f"daily_breakdown.{today_str}": today_delivered, "last_meta_sync": int(now)}
+                        },
+                        upsert=True
+                    )
+                print(f"📊 [META BILLING SYNC] Authoritative count from Meta Graph API: Month={meta_monthly_delivered}, Today={today_delivered}")
+                return meta_monthly_delivered, today_delivered
+    except Exception as e:
+        print(f"⚠️ [META BILLING SYNC] Failed to sync with Meta Graph API: {e}")
+
+    return _CACHED_META_MONTHLY_COUNT, _CACHED_META_DAILY_COUNT
+
 async def get_meta_monthly_outbound_count(current_month: str = None) -> int:
-    """Retrieves the exact total outbound WhatsApp messages delivered this month from MongoDB."""
+    """Retrieves the exact total outbound WhatsApp messages delivered this month from Meta Graph API / MongoDB."""
+    meta_m, _ = await sync_authoritative_meta_outbound_count()
+    if meta_m > 0:
+        return meta_m
     if meta_billing_col is None:
         return 0
     if not current_month:
@@ -400,6 +465,9 @@ async def get_meta_monthly_outbound_count(current_month: str = None) -> int:
 
 async def get_meta_daily_outbound_count(today_str: str = None) -> int:
     """Retrieves today's total outbound WhatsApp messages delivered across all students."""
+    _, meta_d = await sync_authoritative_meta_outbound_count()
+    if meta_d > 0:
+        return meta_d
     if meta_billing_col is None:
         return 0
     wat_now = datetime.utcnow() + timedelta(hours=1)
@@ -892,6 +960,9 @@ async def startup_event():
         
     # Clean up legacy title naming in database
     asyncio.create_task(cleanup_legacy_textbook_titles())
+
+    # Sync authoritative Meta Graph API billing analytics on startup
+    asyncio.create_task(sync_authoritative_meta_outbound_count(force=True))
     
     # Automated streak reminders disabled to protect Meta 1,000 free-tier limit and guarantee $0 bill
     # asyncio.create_task(start_inactivity_reminder_loop())
